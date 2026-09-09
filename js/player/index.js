@@ -1,150 +1,150 @@
-import Animation from '../base/animation';
-import { SCREEN_WIDTH, SCREEN_HEIGHT } from '../render';
+import Sprite from '../base/sprite';
 import Bullet from './bullet';
+import {
+  PLAYER_RADIUS, PLAYER_SPEED, PLAYER_MAX_HP,
+  PLAYER_ATK, PLAYER_DEF, PLAYER_ATTACK_RANGE, PLAYER_ATTACK_CD,
+  PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
+  PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK, LUCK_XP_BONUS,
+  BULLET_RANGE_BUFFER, xpForLevel,
+  ARENA_W, ARENA_H,
+} from '../consts';
 
-// 玩家相关常量设置
-const PLAYER_IMG_SRC = 'images/hero.png';
-const PLAYER_WIDTH = 80;
-const PLAYER_HEIGHT = 80;
-const EXPLO_IMG_PREFIX = 'images/explosion';
-const PLAYER_SHOOT_INTERVAL = 20;
-
-export default class Player extends Animation {
+export default class Player extends Sprite {
   constructor() {
-    super(PLAYER_IMG_SRC, PLAYER_WIDTH, PLAYER_HEIGHT);
-
-    // 初始化坐标
-    this.init();
-
-    // 初始化事件监听
-    this.initEvent();
+    super(null, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2, ARENA_W / 2, ARENA_H / 2);
+    this.radius = PLAYER_RADIUS;        // 碰撞半径（像素）
+    this.hp = PLAYER_MAX_HP;            // 当前生命
+    this.maxHp = PLAYER_MAX_HP;         // 生命上限（升级项：生命上限）
+    this.speed = PLAYER_SPEED;          // 移动速度（升级项：移动速度）
+    this.attack = PLAYER_ATK;           // 攻击力，子弹伤害（升级项：攻击力）
+    this.defence = PLAYER_DEF;          // 防御力，减伤（升级项：防御力）
+    this.attackRange = PLAYER_ATTACK_RANGE; // 索敌距离，子弹飞距离=此值+缓冲（升级项：攻击距离）
+    this.attackCd = PLAYER_ATTACK_CD;   // 基础攻击间隔（毫秒），实际间隔 = 此值 ÷ 攻速
+    this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项：攻击速度，每次+0.2）
+    this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项：暴击率）
+    this.critMult = PLAYER_CRIT_MULT;   // 暴击伤害倍数
+    this.luck = PLAYER_LUCK;            // 幸运值，每点+2%经验获取（升级项：幸运值）
+    this.bulletCount = 1;               // 每轮子弹数（宝箱：子弹数+1）
+    this.pierce = 0;                    // 子弹可穿透敌人数（宝箱：子弹穿透+1）
+    this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
+    this.companions = 0;                // 跟班数量（宝箱：跟班+1）
+    this.lastAttack = 0;                // 上次攻击时间戳（内部用）
+    this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
+    this.dirX = 0;                      // 朝向X（跟随子弹方向）
+    this.dirY = -1;                     // 朝向Y（跟随子弹方向）
+    this.xp = 0;                        // 当前经验
+    this.level = 1;                     // 等级
+    this.kills = 0;                     // 击杀数
   }
 
-  init() {
-    // 玩家默认处于屏幕底部居中位置
-    this.x = SCREEN_WIDTH / 2 - this.width / 2;
-    this.y = SCREEN_HEIGHT - this.height - 30;
+  update(dt, databus) {
+    const dir = databus.joystick ? databus.joystick.getDirection() : { x: 0, y: 0 };
+    let moveX = 0;
+    let moveY = 0;
+    if (dir.x !== 0 || dir.y !== 0) {
+      moveX = dir.x;
+      moveY = dir.y;
+      this.x += dir.x * this.speed * dt;
+      this.y += dir.y * this.speed * dt;
+      this.x = Math.max(this.radius, Math.min(ARENA_W - this.radius, this.x));
+      this.y = Math.max(this.radius, Math.min(ARENA_H - this.radius, this.y));
+    }
 
-    // 用于在手指移动的时候标识手指是否已经在飞机上了
-    this.touched = false;
-
-    this.isActive = true;
-    this.visible = true;
-
-    // 设置爆炸动画
-    this.initExplosionAnimation();
-  }
-
-  // 预定义爆炸的帧动画
-  initExplosionAnimation() {
-    const EXPLO_FRAME_COUNT = 19;
-    const frames = Array.from(
-      { length: EXPLO_FRAME_COUNT },
-      (_, i) => `${EXPLO_IMG_PREFIX}${i + 1}.png`
-    );
-    this.initFrames(frames);
-  }
-
-  /**
-   * 判断手指是否在飞机上
-   * @param {Number} x: 手指的X轴坐标
-   * @param {Number} y: 手指的Y轴坐标
-   * @return {Boolean}: 用于标识手指是否在飞机上的布尔值
-   */
-  checkIsFingerOnAir(x, y) {
-    const deviation = 30;
-    return (
-      x >= this.x - deviation &&
-      y >= this.y - deviation &&
-      x <= this.x + this.width + deviation &&
-      y <= this.y + this.height + deviation
-    );
-  }
-
-  /**
-   * 根据手指的位置设置飞机的位置
-   * 保证手指处于飞机中间
-   * 同时限定飞机的活动范围限制在屏幕中
-   */
-  setAirPosAcrossFingerPosZ(x, y) {
-    const disX = Math.max(
-      0,
-      Math.min(x - this.width / 2, SCREEN_WIDTH - this.width)
-    );
-    const disY = Math.max(
-      0,
-      Math.min(y - this.height / 2, SCREEN_HEIGHT - this.height)
-    );
-
-    this.x = disX;
-    this.y = disY;
-  }
-
-  /**
-   * 玩家响应手指的触摸事件
-   * 改变战机的位置
-   */
-  initEvent() {
-    wx.onTouchStart((e) => {
-      const { clientX: x, clientY: y } = e.touches[0];
-
-      if (GameGlobal.databus.isGameOver) {
-        return;
+    const now = Date.now();
+    if (now - this.lastAttack > this.attackCd / this.atkSpeed) {
+      let nearest = null;
+      let minDist = this.attackRange;
+      for (const e of databus.enemys) {
+        if (e.isDead) continue;
+        const dx = e.x - this.x;
+        const dy = e.y - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = e;
+        }
       }
-      if (this.checkIsFingerOnAir(x, y)) {
-        this.touched = true;
-        this.setAirPosAcrossFingerPosZ(x, y);
+      if (nearest) {
+        const dx = nearest.x - this.x;
+        const dy = nearest.y - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        this.dirX = dx / dist;
+        this.dirY = dy / dist;
+        this.shoot(databus, this.dirX, this.dirY);
+      } else {
+        if (moveX !== 0 || moveY !== 0) {
+          this.dirX = moveX;
+          this.dirY = moveY;
+        }
+        this.shoot(databus, this.dirX, this.dirY);
       }
-    });
-
-    wx.onTouchMove((e) => {
-      const { clientX: x, clientY: y } = e.touches[0];
-
-      if (GameGlobal.databus.isGameOver) {
-        return;
-      }
-      if (this.touched) {
-        this.setAirPosAcrossFingerPosZ(x, y);
-      }
-    });
-
-    wx.onTouchEnd((e) => {
-      this.touched = false;
-    });
-
-    wx.onTouchCancel((e) => {
-      this.touched = false;
-    });
+    }
   }
 
-  /**
-   * 玩家射击操作
-   * 射击时机由外部决定
-   */
-  shoot() {
-    const bullet = GameGlobal.databus.pool.getItemByClass('bullet', Bullet);
-    bullet.init(this.x + this.width / 2 - bullet.width / 2, this.y - 10, 10);
-    GameGlobal.databus.bullets.push(bullet);
-    GameGlobal.musicManager.playShoot(); // 播放射击音效
+  shoot(databus, dx, dy) {
+    this.lastAttack = Date.now();
+    const baseAngle = Math.atan2(dy, dx);
+    const spread = 0.18;
+    for (let i = 0; i < this.bulletCount; i++) {
+      const angle = baseAngle + (i - (this.bulletCount - 1) / 2) * spread;
+      const bullet = databus.pool.getItemByClass('bullet', Bullet);
+      bullet.init(this.x, this.y, Math.cos(angle), Math.sin(angle), this.attack);
+      bullet.maxRange = this.attackRange + BULLET_RANGE_BUFFER;
+      bullet.pierceLeft = this.pierce;
+      databus.bullets.push(bullet);
+    }
   }
 
-  update() {
-    if (GameGlobal.databus.isGameOver) {
+  takeDamage(amount, now) {
+    if (now < this.invincibleUntil) return;
+    this.invincibleUntil = now + PLAYER_INVINCIBLE;
+    if (this.shield > 0) {
+      this.shield--;
       return;
     }
+    const dmg = Math.max(1, amount - this.defence);
+    this.hp -= dmg;
+  }
 
-    // 每20帧让玩家射击一次
-    if (GameGlobal.databus.frame % PLAYER_SHOOT_INTERVAL === 0) {
-      this.shoot(); // 玩家射击
+  addXp(amount, databus) {
+    this.xp += Math.floor(amount * (1 + this.luck * LUCK_XP_BONUS));
+    const needed = xpForLevel(this.level);
+    if (this.xp >= needed) {
+      this.xp -= needed;
+      this.level++;
+      databus.isPaused = true;
+      databus.upgradeScreen.show(databus);
     }
   }
 
-  destroy() {
-    this.isActive = false;
-    this.playAnimation();
-    GameGlobal.musicManager.playExplosion(); // 播放爆炸音效
-    wx.vibrateShort({
-      type: 'medium'
-    }); // 震动
+  draw(ctx) {
+    const blink = Date.now() < this.invincibleUntil && Math.floor(Date.now() / 80) % 2;
+    ctx.fillStyle = blink ? 'rgba(52,152,219,0.4)' : '#3498db';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (this.shield > 0) {
+      const pulse = 0.3 + 0.3 * Math.sin(Date.now() / 160);
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = pulse * 0.5;
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x + this.dirX * this.radius * 1.5, this.y + this.dirY * this.radius * 1.5);
+    ctx.stroke();
   }
 }

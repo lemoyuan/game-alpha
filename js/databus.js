@@ -1,64 +1,64 @@
 import Pool from './base/pool';
+import Companion from './player/companion';
 
 let instance;
 
-/**
- * 全局状态管理器
- * 负责管理游戏的状态，包括帧数、分数、子弹、敌人和动画等
- */
 export default class DataBus {
-  // 直接在类中定义实例属性
-  enemys = []; // 存储敌人
-  bullets = []; // 存储子弹
-  animations = []; // 存储动画
-  frame = 0; // 当前帧数
-  score = 0; // 当前分数
-  isGameOver = false; // 游戏是否结束
-  pool = new Pool(); // 初始化对象池
-
   constructor() {
-    // 确保单例模式
     if (instance) return instance;
-
     instance = this;
+    this.reset();
   }
 
-  // 重置游戏状态
   reset() {
-    this.frame = 0; // 当前帧数
-    this.score = 0; // 当前分数
-    this.bullets = []; // 存储子弹
-    this.enemys = []; // 存储敌人
-    this.animations = []; // 存储动画
-    this.isGameOver = false; // 游戏是否结束
+    this.pool = new Pool();
+    this.player = null;
+    this.enemys = [];
+    this.bullets = [];
+    this.xpGems = [];
+    this.chests = [];
+    this.companions = [];
+    this.frame = 0;
+    this.isGameOver = false;
+    this.isPaused = false;
+    this.camera = null;
+    this.arena = null;
+    this.joystick = null;
+    this.spawner = null;
+    this.hud = null;
+    this.upgradeScreen = null;
   }
 
-  // 游戏结束
-  gameOver() {
-    this.isGameOver = true;
-  }
-
-  /**
-   * 回收敌人，进入对象池
-   * 此后不进入帧循环
-   * @param {Object} enemy - 要回收的敌人对象
-   */
-  removeEnemy(enemy) {
-    const temp = this.enemys.splice(this.enemys.indexOf(enemy), 1);
-    if (temp) {
-      this.pool.recover('enemy', enemy); // 回收敌人到对象池
+  update(dt) {
+    for (const b of this.bullets) b.update(dt, this);
+    for (const e of this.enemys) e.update(dt, this);
+    for (const g of this.xpGems) g.update(dt, this);
+    for (const c of this.chests) c.update(dt, this);
+    if (this.player) {
+      while (this.companions.length < this.player.companions) {
+        const comp = new Companion(this.companions.length);
+        comp.x = this.player.x; // 在角色脚下出生，避免从地图角落飞过来
+        comp.y = this.player.y;
+        this.companions.push(comp);
+      }
+      for (const comp of this.companions) comp.update(dt, this);
+      this.player.update(dt, this);
     }
   }
 
-  /**
-   * 回收子弹，进入对象池
-   * 此后不进入帧循环
-   * @param {Object} bullet - 要回收的子弹对象
-   */
-  removeBullets(bullet) {
-    const temp = this.bullets.splice(this.bullets.indexOf(bullet), 1);
-    if (temp) {
-      this.pool.recover('bullet', bullet); // 回收子弹到对象池
-    }
+  removeEnemy(index) {
+    this.enemys.splice(index, 1);
+  }
+
+  removeBullet(index) {
+    this.bullets.splice(index, 1);
+  }
+
+  removeXpGem(index) {
+    this.xpGems.splice(index, 1);
+  }
+
+  removeChest(index) {
+    this.chests.splice(index, 1);
   }
 }

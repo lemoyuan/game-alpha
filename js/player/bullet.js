@@ -1,46 +1,81 @@
 import Sprite from '../base/sprite';
-
-const BULLET_IMG_SRC = 'images/bullet.png';
-const BULLET_WIDTH = 16;
-const BULLET_HEIGHT = 30;
+import { BULLET_SPEED, BULLET_RADIUS, BULLET_RANGE_BUFFER } from '../consts';
 
 export default class Bullet extends Sprite {
   constructor() {
-    super(BULLET_IMG_SRC, BULLET_WIDTH, BULLET_HEIGHT);
+    super(null, BULLET_RADIUS * 2, BULLET_RADIUS * 2, 0, 0);
+    this.radius = BULLET_RADIUS;
+    this.dx = 0;
+    this.dy = 0;
+    this.speed = BULLET_SPEED;
+    this.damage = 10;
+    this.maxRange = BULLET_RANGE_BUFFER;
+    this.startX = 0;
+    this.startY = 0;
+    this.pierceLeft = 0;
+    this.hitList = [];
+    this.isDestroyed = false;
   }
 
-  init(x, y, speed) {
+  init(x, y, dx, dy, damage) {
     this.x = x;
     this.y = y;
-    this.speed = speed;
-    this.isActive = true;
-    this.visible = true;
+    this.startX = x;
+    this.startY = y;
+    this.dx = dx;
+    this.dy = dy;
+    this.damage = damage;
+    this.radius = BULLET_RADIUS;
+    this.pierceLeft = 0;
+    this.hitList = [];
+    this.isDestroyed = false;
   }
 
-  // 每一帧更新子弹位置
-  update() {
-    if (GameGlobal.databus.isGameOver) {
-      return;
+  update(dt, databus) {
+    this.x += this.dx * this.speed * dt;
+    this.y += this.dy * this.speed * dt;
+
+    const distSq = (this.x - this.startX) ** 2 + (this.y - this.startY) ** 2;
+    if (distSq > this.maxRange * this.maxRange) {
+      this.isDestroyed = true;
     }
-  
-    this.y -= this.speed;
 
-    // 超出屏幕外销毁
-    if (this.y < -this.height) {
-      this.destroy();
+    if (this.x < -50 || this.x > 2050 || this.y < -50 || this.y > 2050) {
+      this.isDestroyed = true;
+    }
+
+    if (!this.isDestroyed) {
+      for (const e of databus.enemys) {
+        if (e.isDead) continue;
+        if (this.hitList.indexOf(e) !== -1) continue;
+        const dx = e.x - this.x;
+        const dy = e.y - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < this.radius + e.radius) {
+          let dmg = this.damage;
+          const player = databus.player;
+          if (player && Math.random() < player.critRate) {
+            dmg = Math.floor(dmg * player.critMult);
+          }
+          e.hp -= dmg;
+          if (e.hp <= 0) {
+            e.isDead = true;
+          }
+          this.hitList.push(e);
+          this.pierceLeft--;
+          if (this.pierceLeft < 0) {
+            this.isDestroyed = true;
+          }
+          break;
+        }
+      }
     }
   }
 
-  destroy() {
-    this.isActive = false;
-    // 子弹没有销毁动画，直接移除
-    this.remove();
-  }
-
-  remove() {
-    this.isActive = false;
-    this.visible = false;
-    // 回收子弹对象
-    GameGlobal.databus.removeBullets(this);
+  draw(ctx) {
+    ctx.fillStyle = '#f1c40f';
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
   }
 }

@@ -1,134 +1,177 @@
-import './render'; // 初始化Canvas
-import Player from './player/index'; // 导入玩家类
-import Enemy from './npc/enemy'; // 导入敌机类
-import BackGround from './runtime/background'; // 导入背景类
-import GameInfo from './runtime/gameinfo'; // 导入游戏UI类
-import Music from './runtime/music'; // 导入音乐类
-import DataBus from './databus'; // 导入数据类，用于管理游戏状态和数据
+import { ctx, canvasWidth, canvasHeight } from './render';
+import DataBus from './databus';
+import Player from './player/index';
+import Arena from './arena/index';
+import Camera from './camera/index';
+import Joystick from './ui/joystick';
+import Hud from './ui/hud';
+import UpgradeScreen from './ui/upgrade';
+import Spawner from './npc/monster/spawner';
+import XpGem from './npc/xpgem';
+import Chest from './npc/chest';
+import { canvasW, canvasH, ARENA_W, ARENA_H } from './consts';
 
-const ENEMY_GENERATE_INTERVAL = 30;
-const ctx = canvas.getContext('2d'); // 获取canvas的2D绘图上下文;
+const databus = new DataBus();
 
-GameGlobal.databus = new DataBus(); // 全局数据管理，用于管理游戏状态和数据
-GameGlobal.musicManager = new Music(); // 全局音乐管理实例
-
-/**
- * 游戏主函数
- */
 export default class Main {
-  aniId = 0; // 用于存储动画帧的ID
-  bg = new BackGround(); // 创建背景
-  player = new Player(); // 创建玩家
-  gameInfo = new GameInfo(); // 创建游戏UI显示
-
   constructor() {
-    // 当开始游戏被点击时，重新开始游戏
-    this.gameInfo.on('restart', this.start.bind(this));
-
-    // 开始游戏
+    this.raf = null;
+    this.lastTime = 0;
     this.start();
   }
 
-  /**
-   * 开始或重启游戏
-   */
   start() {
-    GameGlobal.databus.reset(); // 重置数据
-    this.player.init(); // 重置玩家状态
-    cancelAnimationFrame(this.aniId); // 清除上一局的动画
-    this.aniId = requestAnimationFrame(this.loop.bind(this)); // 开始新的动画循环
+    databus.reset();
+    databus.player = new Player();
+    databus.camera = new Camera();
+    databus.arena = new Arena();
+    databus.joystick = new Joystick();
+    databus.joystick.init();
+    databus.hud = new Hud();
+    databus.upgradeScreen = new UpgradeScreen();
+    databus.upgradeScreen.init(databus);
+    databus.spawner = new Spawner();
+    databus.isGameOver = false;
+    databus.isPaused = false;
+    this.lastTime = Date.now();
+    this.loop();
   }
 
-  /**
-   * 随着帧数变化的敌机生成逻辑
-   * 帧数取模定义成生成的频率
-   */
-  enemyGenerate() {
-    // 每30帧生成一个敌机
-    if (GameGlobal.databus.frame % ENEMY_GENERATE_INTERVAL === 0) {
-      const enemy = GameGlobal.databus.pool.getItemByClass('enemy', Enemy); // 从对象池获取敌机实例
-      enemy.init(); // 初始化敌机
-      GameGlobal.databus.enemys.push(enemy); // 将敌机添加到敌机数组中
+  loop() {
+    const now = Date.now();
+    const dt = Math.min((now - this.lastTime) / 1000, 0.05);
+    this.lastTime = now;
+
+    if (!databus.isGameOver && !databus.isPaused) {
+      databus.frame++;
+      databus.spawner.update(dt, databus);
+      databus.update(dt);
+      this.checkCollisions();
     }
+
+    this.render();
+    this.raf = requestAnimationFrame(() => this.loop());
   }
 
-  /**
-   * 全局碰撞检测
-   */
-  collisionDetection() {
-    // 检测子弹与敌机的碰撞
-    GameGlobal.databus.bullets.forEach((bullet) => {
-      for (let i = 0, il = GameGlobal.databus.enemys.length; i < il; i++) {
-        const enemy = GameGlobal.databus.enemys[i];
+  checkCollisions() {
+    const { player, enemys, bullets } = databus;
+    if (!player) return;
+    const now = Date.now();
 
-        // 如果敌机存活并且发生了发生碰撞
-        if (enemy.isCollideWith(bullet)) {
-          enemy.destroy(); // 销毁敌机
-          bullet.destroy(); // 销毁子弹
-          GameGlobal.databus.score += 1; // 增加分数
-          break; // 退出循环
+    for (let i = enemys.length - 1; i >= 0; i--) {
+      const e = enemys[i];
+      if (e.isDead) {
+        if (e.type === 'chest') {
+          const chest = databus.pool.getItemByClass('chest', Chest);
+          chest.init(e.x, e.y);
+          databus.chests.push(chest);
+        } else {
+          const gem = databus.pool.getItemByClass('xpgem', XpGem);
+          gem.init(e.x, e.y, e.xpValue);
+          databus.xpGems.push(gem);
+        }
+        player.kills++;
+        databus.removeEnemy(i);
+        continue;
+      }
+      if (player.isCollideWith(e)) {
+        player.takeDamage(e.damage, now);
+        if (player.hp <= 0) {
+          databus.isGameOver = true;
         }
       }
-    });
+    }
 
-    // 检测玩家与敌机的碰撞
-    for (let i = 0, il = GameGlobal.databus.enemys.length; i < il; i++) {
-      const enemy = GameGlobal.databus.enemys[i];
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      if (bullets[i].isDestroyed) {
+        databus.removeBullet(i);
+      }
+    }
 
-      // 如果玩家与敌机发生碰撞
-      if (this.player.isCollideWith(enemy)) {
-        this.player.destroy(); // 销毁玩家飞机
-        GameGlobal.databus.gameOver(); // 游戏结束
+    for (let i = databus.xpGems.length - 1; i >= 0; i--) {
+      if (databus.xpGems[i].collected) {
+        databus.removeXpGem(i);
+      }
+    }
 
-        break; // 退出循环
+    for (let i = databus.chests.length - 1; i >= 0; i--) {
+      if (databus.chests[i].collected) {
+        databus.removeChest(i);
       }
     }
   }
 
-  /**
-   * canvas重绘函数
-   * 每一帧重新绘制所有的需要展示的元素
-   */
   render() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height); // 清空画布
+    ctx.clearRect(0, 0, canvasW, canvasH);
+    ctx.fillStyle = '#0d0d1a';
+    ctx.fillRect(0, 0, canvasW, canvasH);
 
-    this.bg.render(ctx); // 绘制背景
-    this.player.render(ctx); // 绘制玩家飞机
-    GameGlobal.databus.bullets.forEach((item) => item.render(ctx)); // 绘制所有子弹
-    GameGlobal.databus.enemys.forEach((item) => item.render(ctx)); // 绘制所有敌机
-    this.gameInfo.render(ctx); // 绘制游戏UI
-    GameGlobal.databus.animations.forEach((ani) => {
-      if (ani.isPlaying) {
-        ani.aniRender(ctx); // 渲染动画
-      }
-    }); // 绘制所有动画
-  }
-
-  // 游戏逻辑更新主函数
-  update() {
-    GameGlobal.databus.frame++; // 增加帧数
-
-    if (GameGlobal.databus.isGameOver) {
-      return;
+    if (databus.player) {
+      databus.camera.follow(databus.player);
     }
 
-    this.bg.update(); // 更新背景
-    this.player.update(); // 更新玩家
-    // 更新所有子弹
-    GameGlobal.databus.bullets.forEach((item) => item.update());
-    // 更新所有敌机
-    GameGlobal.databus.enemys.forEach((item) => item.update());
+    databus.camera.begin(ctx);
+    databus.arena.draw(ctx);
+    for (const g of databus.xpGems) g.draw(ctx);
+    for (const c of databus.chests) c.draw(ctx);
+    for (const e of databus.enemys) e.draw(ctx);
+    for (const b of databus.bullets) b.draw(ctx);
+    if (databus.player) {
+      for (const comp of databus.companions) comp.draw(ctx);
+      databus.player.draw(ctx);
+    }
+    databus.camera.end(ctx);
 
-    this.enemyGenerate(); // 生成敌机
-    this.collisionDetection(); // 检测碰撞
+    databus.hud.draw(ctx, databus);
+    databus.joystick.draw(ctx);
+
+    if (databus.upgradeScreen.visible) {
+      databus.upgradeScreen.draw(ctx);
+    }
+
+    if (databus.isGameOver) {
+      this.drawGameOver();
+    }
   }
 
-  // 实现游戏帧循环
-  loop() {
-    this.update(); // 更新游戏逻辑
-    this.render(); // 渲染游戏画面
+  drawGameOver() {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, canvasW, canvasH);
 
-    // 请求下一帧动画
-    this.aniId = requestAnimationFrame(this.loop.bind(this));
+    ctx.fillStyle = '#e74c3c';
+    ctx.font = 'bold 36px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', canvasW / 2, canvasH / 2 - 60);
+
+    const p = databus.player;
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px monospace';
+    ctx.fillText(`Level: ${p.level}`, canvasW / 2, canvasH / 2 - 10);
+    ctx.fillText(`Kills: ${p.kills}`, canvasW / 2, canvasH / 2 + 20);
+
+    const mins = Math.floor(databus.spawner.elapsed / 60);
+    const secs = Math.floor(databus.spawner.elapsed % 60);
+    ctx.fillText(`Time: ${mins}:${secs < 10 ? '0' : ''}${secs}`, canvasW / 2, canvasH / 2 + 50);
+
+    ctx.fillStyle = '#3498db';
+    ctx.fillRect(canvasW / 2 - 60, canvasH / 2 + 80, 120, 40);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('RESTART', canvasW / 2, canvasH / 2 + 105);
+
+    if (!this._restartBound) {
+      this._onRestart = (e) => {
+        if (!databus.isGameOver) return;
+        const t = e.touches[0];
+        const x = t.clientX;
+        const y = t.clientY;
+        if (x > canvasW / 2 - 60 && x < canvasW / 2 + 60 &&
+            y > canvasH / 2 + 80 && y < canvasH / 2 + 120) {
+          this.start();
+        }
+      };
+      wx.onTouchStart(this._onRestart);
+      this._restartBound = true;
+    }
   }
 }

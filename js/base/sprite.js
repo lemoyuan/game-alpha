@@ -10,8 +10,11 @@ export default class Sprite extends Emitter {
   constructor(imgSrc = '', width = 0, height = 0, x = 0, y = 0) {
     super();
     
-    this.img = wx.createImage();
-    this.img.src = imgSrc;
+    this.img = null;
+    if (imgSrc) {
+      this.img = wx.createImage();
+      this.img.src = imgSrc;
+    }
 
     this.width = width;
     this.height = height;
