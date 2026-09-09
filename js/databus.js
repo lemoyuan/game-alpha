@@ -15,6 +15,7 @@ export default class DataBus {
     this.player = null;
     this.enemys = [];
     this.bullets = [];
+    this.enemyBullets = [];
     this.xpGems = [];
     this.chests = [];
     this.companions = [];
@@ -31,6 +32,7 @@ export default class DataBus {
 
   update(dt) {
     for (const b of this.bullets) b.update(dt, this);
+    for (const b of this.enemyBullets) b.update(dt, this);
     for (const e of this.enemys) e.update(dt, this);
     for (const g of this.xpGems) g.update(dt, this);
     for (const c of this.chests) c.update(dt, this);
@@ -52,6 +54,10 @@ export default class DataBus {
 
   removeBullet(index) {
     this.bullets.splice(index, 1);
+  }
+
+  removeEnemyBullet(index) {
+    this.enemyBullets.splice(index, 1);
   }
 
   removeXpGem(index) {

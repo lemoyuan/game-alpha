@@ -1,4 +1,5 @@
 import Sprite from '../../base/sprite';
+import EnemyBullet from './enemyBullet';
 import { ARENA_W, ARENA_H } from '../../consts';
 
 // 怪物基类：普通怪/宝箱怪共用，boss 可继承此类扩展
@@ -12,8 +13,15 @@ export default class Enemy extends Sprite {
     this.speed = config.speed;     // 移速
     this.color = config.color;     // 显示颜色
     this.xpValue = config.xp;      // 击杀掉落经验（0 = 不掉经验）
-    this.damage = config.damage;   // 接触玩家的伤害
+    this.damage = config.damage;   // 接触玩家的伤害（远程怪同时是子弹伤害）
     this.isDead = false;
+    // 远程怪专属字段（近战怪为 0，走默认追击逻辑）
+    this.attackRange = config.attackRange || 0;  // 索敌距离，玩家进入后停下射击
+    this.attackCd = config.attackCd || 0;        // 射击间隔（毫秒）
+    this.bulletSpeed = config.bulletSpeed || 0;
+    this.bulletRadius = config.bulletRadius || 4;
+    this.bulletColor = config.bulletColor || '#fff';
+    this.lastAttack = 0;           // 上次射击时间戳（内部用）
   }
 
   init(x, y) {
@@ -21,6 +29,7 @@ export default class Enemy extends Sprite {
     this.y = y;
     this.isDead = false;
     this.hp = this.maxHp;
+    this.lastAttack = 0;
   }
 
   update(dt, databus) {
@@ -29,12 +38,27 @@ export default class Enemy extends Sprite {
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > 0) {
+
+    // 远程怪：玩家在索敌距离内停下射击，超出距离才靠近
+    if (this.attackRange > 0 && dist <= this.attackRange) {
+      const now = Date.now();
+      if (now - this.lastAttack > this.attackCd) {
+        this.lastAttack = now;
+        this.shoot(databus, dx / dist, dy / dist);
+      }
+    } else if (dist > 0) {
       this.x += (dx / dist) * this.speed * dt;
       this.y += (dy / dist) * this.speed * dt;
     }
+
     this.x = Math.max(this.radius, Math.min(ARENA_W - this.radius, this.x));
     this.y = Math.max(this.radius, Math.min(ARENA_H - this.radius, this.y));
+  }
+
+  shoot(databus, nx, ny) {
+    const bullet = databus.pool.getItemByClass('enemyBullet', EnemyBullet);
+    bullet.init(this.x, this.y, nx, ny, this.bulletSpeed, this.damage, this.bulletColor, this.bulletRadius);
+    databus.enemyBullets.push(bullet);
   }
 
   draw(ctx) {

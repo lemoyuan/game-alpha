@@ -88,6 +88,18 @@ export default class Main {
       }
     }
 
+    // 怪物子弹：命中结算在 bullet.update 内完成，这里回收被销毁的子弹
+    for (let i = databus.enemyBullets.length - 1; i >= 0; i--) {
+      if (databus.enemyBullets[i].isDestroyed) {
+        databus.removeEnemyBullet(i);
+      }
+    }
+
+    // 覆盖所有伤害来源（接触/子弹）的死亡判定
+    if (player.hp <= 0) {
+      databus.isGameOver = true;
+    }
+
     for (let i = databus.xpGems.length - 1; i >= 0; i--) {
       if (databus.xpGems[i].collected) {
         databus.removeXpGem(i);
@@ -116,6 +128,7 @@ export default class Main {
     for (const c of databus.chests) c.draw(ctx);
     for (const e of databus.enemys) e.draw(ctx);
     for (const b of databus.bullets) b.draw(ctx);
+    for (const b of databus.enemyBullets) b.draw(ctx);
     if (databus.player) {
       for (const comp of databus.companions) comp.draw(ctx);
       databus.player.draw(ctx);

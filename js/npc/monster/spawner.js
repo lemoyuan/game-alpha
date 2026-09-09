@@ -1,6 +1,6 @@
 import Enemy from './enemy';
 import {
-  MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME,
+  MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   HP_SCALE_TIME, HP_SCALE_MULT,
   CHEST_SPAWN_INTERVAL, CHEST_FIRST_SPAWN,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
@@ -51,7 +51,19 @@ export default class Spawner {
       const types = ['basic'];
       if (this.elapsed > FAST_UNLOCK_TIME) types.push('fast');
       if (this.elapsed > TANK_UNLOCK_TIME) types.push('tank');
-      type = types[Math.floor(Math.random() * types.length)];
+      if (this.elapsed > RANGED_UNLOCK_TIME) types.push('ranged');
+      // 按权重随机选怪：weight 越大出现越频繁
+      let total = 0;
+      for (const t of types) total += MONSTER_TYPES[t].weight;
+      let r = Math.random() * total;
+      for (const t of types) {
+        r -= MONSTER_TYPES[t].weight;
+        if (r <= 0) {
+          type = t;
+          break;
+        }
+      }
+      if (!type) type = types[types.length - 1]; // 浮点兜底
     }
     const config = MONSTER_TYPES[type];
 

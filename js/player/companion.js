@@ -2,7 +2,8 @@ import Sprite from '../base/sprite';
 import Bullet from './bullet';
 import {
   COMPANION_RADIUS, COMPANION_FOLLOW_DIST,
-  COMPANION_BULLET_RADIUS, COMPANION_DAMAGE_RATIO,
+  COMPANION_BULLET_RADIUS, COMPANION_BULLET_COLOR,
+  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO,
   BULLET_RANGE_BUFFER,
 } from '../consts';
 
@@ -29,7 +30,8 @@ export default class Companion extends Sprite {
     this.y += (ty - this.y) * Math.min(1, dt * 8);
 
     const now = Date.now();
-    if (now - this.lastAttack > player.attackCd / player.atkSpeed) {
+    // 跟班攻速固定 1.5 次/秒，不随角色攻速升级变化
+    if (now - this.lastAttack > player.attackCd / COMPANION_ATK_SPEED) {
       let nearest = null;
       let minDist = player.attackRange;
       for (const e of databus.enemys) {
@@ -58,6 +60,7 @@ export default class Companion extends Sprite {
       const bullet = databus.pool.getItemByClass('bullet', Bullet);
       bullet.init(this.x, this.y, dx, dy, Math.max(1, Math.floor(player.attack * COMPANION_DAMAGE_RATIO)));
       bullet.radius = COMPANION_BULLET_RADIUS;
+      bullet.color = COMPANION_BULLET_COLOR;
       bullet.maxRange = player.attackRange + BULLET_RANGE_BUFFER;
       bullet.pierceLeft = player.pierce;
       databus.bullets.push(bullet);

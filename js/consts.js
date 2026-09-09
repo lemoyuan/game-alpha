@@ -19,6 +19,7 @@ export const LUCK_XP_BONUS = 0.02;      // 每点幸运增加的经验获取比�
 
 export const BULLET_SPEED = 600;        // 子弹飞行速度
 export const BULLET_RADIUS = 5;         // 主角子弹半径（跟班子弹见 COMPANION_BULLET_RADIUS）
+export const BULLET_COLOR = '#f1c40f';  // 主角子弹颜色（黄色）
 export const BULLET_DAMAGE = 10;        // （未直接使用，实际伤害取 player.attack）
 export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基础上的缓冲
 
@@ -31,7 +32,9 @@ export const CHEST_RADIUS = 12; // 宝箱拾取半径（宝箱怪刷新参数见
 
 export const COMPANION_RADIUS = 8;           // 跟班碰撞半径
 export const COMPANION_FOLLOW_DIST = 45;     // 跟班环绕距离
+export const COMPANION_ATK_SPEED = 1.5;      // 跟班攻速（次/秒），固定值，不随角色攻速升级变化
 export const COMPANION_BULLET_RADIUS = 3;    // 跟班子弹半径（小于主角）
+export const COMPANION_BULLET_COLOR = '#5dade2'; // 跟班子弹颜色（蓝色，区别于主角子弹）
 export const COMPANION_DAMAGE_RATIO = 0.5;   // 跟班伤害 = 角色攻击力 × 此系数
 
 export const UPGRADES = [

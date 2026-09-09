@@ -1,5 +1,5 @@
 import Sprite from '../base/sprite';
-import { BULLET_SPEED, BULLET_RADIUS, BULLET_RANGE_BUFFER } from '../consts';
+import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER } from '../consts';
 
 export default class Bullet extends Sprite {
   constructor() {
@@ -26,6 +26,7 @@ export default class Bullet extends Sprite {
     this.dy = dy;
     this.damage = damage;
     this.radius = BULLET_RADIUS;
+    this.color = BULLET_COLOR; // 对象池复用必须重置，否则跟班的蓝色会"传染"给主角子弹
     this.pierceLeft = 0;
     this.hitList = [];
     this.isDestroyed = false;
@@ -73,7 +74,7 @@ export default class Bullet extends Sprite {
   }
 
   draw(ctx) {
-    ctx.fillStyle = '#f1c40f';
+    ctx.fillStyle = this.color;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
