@@ -18,6 +18,19 @@ export const MONSTER_TYPES = {
     bulletRadius: 4,
     bulletColor: '#e74c3c',
   }, // 红色远程怪
+  boss1: {
+    // 一号Boss：暗红大圆，不参与常规刷怪池，由 spawner 定时召唤
+    hp: 300, speed: 55, radius: 34, color: '#c0392b', xp: 30, damage: 15,
+    skillCd: 4000,      // 技能循环间隔（毫秒）：冲锋→环形弹幕→召唤 轮流放
+    chargeSpeed: 520,   // 冲锋冲刺速度（角色移速170，需侧移躲避）
+    chargeTime: 700,    // 冲锋持续时间（毫秒）
+    ringCount: 12,      // 环形弹幕发数
+    bulletSpeed: 240,   // 弹幕速度
+    bulletDamage: 8,    // 弹幕伤害（低于接触伤害15）
+    bulletRadius: 6,
+    bulletColor: '#e74c3c',
+    summonCount: 3,     // 每次召唤普通小怪数
+  },
 };
 
 // 刷怪节奏（前期偏慢，随时间逐渐加快）
@@ -29,6 +42,9 @@ export const SPAWN_INTERVAL_MIN = 450;    // 刷新间隔下限（毫秒）
 export const FAST_UNLOCK_TIME = 25;   // 快速怪出现时间
 export const TANK_UNLOCK_TIME = 45;   // 坦克怪出现时间
 export const RANGED_UNLOCK_TIME = 60; // 远程怪出现时间
+
+// Boss 出场（秒）：存活期间停止普通刷小怪，击杀后恢复
+export const BOSS_FIRST_SPAWN_TIME = 120; // 首个 Boss 出现时间
 
 // 难度成长
 export const HP_SCALE_TIME = 90;      // 该秒数后所有怪物血量提升

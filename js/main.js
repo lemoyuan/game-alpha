@@ -95,6 +95,13 @@ export default class Main {
       }
     }
 
+    // 伤害飘字：到期回收
+    for (let i = databus.damageTexts.length - 1; i >= 0; i--) {
+      if (databus.damageTexts[i].isDestroyed) {
+        databus.removeDamageText(i);
+      }
+    }
+
     // 覆盖所有伤害来源（接触/子弹）的死亡判定
     if (player.hp <= 0) {
       databus.isGameOver = true;
@@ -133,6 +140,7 @@ export default class Main {
       for (const comp of databus.companions) comp.draw(ctx);
       databus.player.draw(ctx);
     }
+    for (const t of databus.damageTexts) t.draw(ctx);
     databus.camera.end(ctx);
 
     databus.hud.draw(ctx, databus);

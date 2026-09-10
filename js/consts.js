@@ -25,6 +25,15 @@ export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基�
 
 export const XP_BASE = 10;              // 经验曲线基数
 
+// 伤害飘字（怪物掉血显示）
+export const DAMAGE_TEXT_DURATION = 650;      // 飘字存活时间（毫秒）
+export const DAMAGE_TEXT_RISE = 26;           // 上浮距离（像素）
+export const DAMAGE_TEXT_JITTER = 12;         // 横向随机抖动，避免同帧多发重叠
+export const DAMAGE_TEXT_COLOR = '#ffffff';   // 普通伤害：白色
+export const DAMAGE_TEXT_CRIT_COLOR = '#f1c40f'; // 暴击：黄色高亮
+export const DAMAGE_TEXT_FONT = 13;           // 普通伤害字号
+export const DAMAGE_TEXT_CRIT_FONT = 18;      // 暴击字号（放大更醒目）
+
 // 升级所需经验随等级递增（指数1.3，后期升级压力比1.5小）
 export const xpForLevel = (level) => Math.floor(XP_BASE * Math.pow(level, 1.3));
 
@@ -47,6 +56,15 @@ export const UPGRADES = [
   { key: 'critRate', label: '暴击率',   desc: '+10%',  value: 0.1 },
   { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1 },
 ];
+
+// 每升 1 级自动获得的全属性成长（在三选一升级卡之外额外叠加）
+// key 必须与 Player 的属性名完全一致，否则写入会静默无效
+export const LEVEL_UP_BONUS = {
+  attack: 1,        // 攻击力 +1
+  critRate: 0.02,   // 暴击率 +3%（0~1 小数）
+  attackRange: 5,  // 攻击距离（=索敌距离）+10
+  speed: 5,         // 移速 +5
+};
 
 export const canvasW = canvasWidth;
 export const canvasH = canvasHeight;

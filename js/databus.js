@@ -1,5 +1,6 @@
 import Pool from './base/pool';
 import Companion from './player/companion';
+import DamageText from './fx/damageText';
 
 let instance;
 
@@ -19,6 +20,7 @@ export default class DataBus {
     this.xpGems = [];
     this.chests = [];
     this.companions = [];
+    this.damageTexts = [];
     this.frame = 0;
     this.isGameOver = false;
     this.isPaused = false;
@@ -31,6 +33,8 @@ export default class DataBus {
   }
 
   update(dt) {
+    // 飘字先更新：本帧子弹命中新生成的飘字不会被重复推进
+    for (const t of this.damageTexts) t.update(dt, this);
     for (const b of this.bullets) b.update(dt, this);
     for (const b of this.enemyBullets) b.update(dt, this);
     for (const e of this.enemys) e.update(dt, this);
@@ -66,5 +70,16 @@ export default class DataBus {
 
   removeChest(index) {
     this.chests.splice(index, 1);
+  }
+
+  // 伤害飘字：子弹命中时调用，isCrit 决定黄色高亮+放大
+  addDamageText(x, y, damage, isCrit) {
+    const text = this.pool.getItemByClass('damageText', DamageText);
+    text.init(x, y, damage, isCrit);
+    this.damageTexts.push(text);
+  }
+
+  removeDamageText(index) {
+    this.damageTexts.splice(index, 1);
   }
 }

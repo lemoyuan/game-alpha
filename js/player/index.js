@@ -5,7 +5,7 @@ import {
   PLAYER_ATK, PLAYER_DEF, PLAYER_ATTACK_RANGE, PLAYER_ATTACK_CD,
   PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK, LUCK_XP_BONUS,
-  BULLET_RANGE_BUFFER, xpForLevel,
+  BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
   ARENA_W, ARENA_H,
 } from '../consts';
 
@@ -15,13 +15,13 @@ export default class Player extends Sprite {
     this.radius = PLAYER_RADIUS;        // 碰撞半径（像素）
     this.hp = PLAYER_MAX_HP;            // 当前生命
     this.maxHp = PLAYER_MAX_HP;         // 生命上限（升级项：生命上限）
-    this.speed = PLAYER_SPEED;          // 移动速度（升级项：移动速度）
-    this.attack = PLAYER_ATK;           // 攻击力，子弹伤害（升级项：攻击力）
-    this.defence = PLAYER_DEF;          // 防御力，减伤（升级项：防御力）
-    this.attackRange = PLAYER_ATTACK_RANGE; // 索敌距离，子弹飞距离=此值+缓冲（升级项：攻击距离）
+    this.speed = PLAYER_SPEED;          // 移动速度（升级项 +15%，每级自动 +5）
+    this.attack = PLAYER_ATK;           // 攻击力，子弹伤害（升级项 +3，每级自动 +1）
+    this.defence = PLAYER_DEF;          // 防御力，减伤（升级项 +2，每级自动 +1）
+    this.attackRange = PLAYER_ATTACK_RANGE; // 索敌距离，子弹飞距离=此值+缓冲（升级项 +30，每级自动 +10）
     this.attackCd = PLAYER_ATTACK_CD;   // 基础攻击间隔（毫秒），实际间隔 = 此值 ÷ 攻速
-    this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项：攻击速度，每次+0.2）
-    this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项：暴击率）
+    this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项 +0.3次，每级自动 +0.1）
+    this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项 +10%，每级自动 +3%）
     this.critMult = PLAYER_CRIT_MULT;   // 暴击伤害倍数
     this.luck = PLAYER_LUCK;            // 幸运值，每点+2%经验获取（升级项：幸运值）
     this.bulletCount = 1;               // 每轮子弹数（宝箱：子弹数+1）
@@ -112,8 +112,16 @@ export default class Player extends Sprite {
     if (this.xp >= needed) {
       this.xp -= needed;
       this.level++;
+      this.applyLevelBonus();
       databus.isPaused = true;
       databus.upgradeScreen.show(databus);
+    }
+  }
+
+  // 升级自动全属性成长，在三选一之外额外叠加；保留两位小数避免攻速/暴击出现浮点尾数
+  applyLevelBonus() {
+    for (const key of Object.keys(LEVEL_UP_BONUS)) {
+      this[key] = Math.round((this[key] + LEVEL_UP_BONUS[key]) * 100) / 100;
     }
   }
 

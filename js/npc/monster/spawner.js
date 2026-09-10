@@ -1,19 +1,22 @@
 import Enemy from './enemy';
+import Boss from './boss';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   HP_SCALE_TIME, HP_SCALE_MULT,
   CHEST_SPAWN_INTERVAL, CHEST_FIRST_SPAWN,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
+  BOSS_FIRST_SPAWN_TIME,
 } from './config';
 import { ARENA_W, ARENA_H } from '../../consts';
 
-// 刷怪控制器：普通怪随时间加密，宝箱怪按固定间隔出现
+// 刷怪控制器：普通怪随时间加密，宝箱怪按固定间隔出现，Boss 定时出场
 export default class Spawner {
   constructor() {
     this.timer = 0;
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
     this.chestTimer = 0;
+    this.bossSpawned = false;
   }
 
   reset() {
@@ -21,6 +24,7 @@ export default class Spawner {
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
     this.chestTimer = 0;
+    this.bossSpawned = false;
   }
 
   update(dt, databus) {
@@ -31,7 +35,12 @@ export default class Spawner {
     // 普通怪刷新间隔：开局3秒1只，随时间逐渐压缩到下限0.5秒
     this.interval = Math.max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_START - this.elapsed * SPAWN_INTERVAL_RAMP);
 
-    if (this.timer >= this.interval) {
+    // Boss 存活期间停止刷新普通小怪（Boss 自己召唤的小怪除外）
+    // Boss 死亡后从 enemys 中移除，下面的判定自动恢复刷新；计时清零避免击杀瞬间立刻冒出一只
+    const bossAlive = databus.enemys.some((e) => e.isBoss);
+    if (bossAlive) {
+      this.timer = 0;
+    } else if (this.timer >= this.interval) {
       this.timer = 0;
       this.spawn(databus);
     }
@@ -40,6 +49,34 @@ export default class Spawner {
       this.chestTimer = 0;
       this.spawn(databus, 'chest');
     }
+
+    if (!this.bossSpawned && this.elapsed > BOSS_FIRST_SPAWN_TIME) {
+      this.bossSpawned = true;
+      this.spawnBoss(databus);
+    }
+  }
+
+  // 在玩家周围 minDist~minDist+100px 随机方向刷出，并夹到场地内
+  placeAroundPlayer(databus, radius, minDist) {
+    const player = databus.player;
+    const angle = Math.random() * Math.PI * 2;
+    const dist = minDist + Math.random() * 100;
+    const x = player.x + Math.cos(angle) * dist;
+    const y = player.y + Math.sin(angle) * dist;
+    return {
+      x: Math.max(radius + 10, Math.min(ARENA_W - radius - 10, x)),
+      y: Math.max(radius + 10, Math.min(ARENA_H - radius - 10, y)),
+    };
+  }
+
+  spawnBoss(databus) {
+    if (!databus.player) return;
+    const config = MONSTER_TYPES.boss1;
+    const pos = this.placeAroundPlayer(databus, config.radius, 400);
+    const boss = new Boss('boss1', config);
+    boss.init(pos.x, pos.y);
+    databus.enemys.push(boss);
+    if (databus.hud) databus.hud.showToast('Boss 出现了！', 2500);
   }
 
   spawn(databus, forceType) {
@@ -67,17 +104,10 @@ export default class Spawner {
     }
     const config = MONSTER_TYPES[type];
 
-    // 在玩家周围 400~500px 随机方向刷出
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 400 + Math.random() * 100;
-    let x = player.x + Math.cos(angle) * dist;
-    let y = player.y + Math.sin(angle) * dist;
-
-    x = Math.max(config.radius + 10, Math.min(ARENA_W - config.radius - 10, x));
-    y = Math.max(config.radius + 10, Math.min(ARENA_H - config.radius - 10, y));
+    const pos = this.placeAroundPlayer(databus, config.radius, 400);
 
     const enemy = new Enemy(type, config);
-    enemy.init(x, y);
+    enemy.init(pos.x, pos.y);
 
     if (this.elapsed > HP_SCALE_TIME) {
       enemy.hp = Math.floor(enemy.hp * HP_SCALE_MULT);

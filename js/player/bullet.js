@@ -54,11 +54,14 @@ export default class Bullet extends Sprite {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < this.radius + e.radius) {
           let dmg = this.damage;
+          let isCrit = false;
           const player = databus.player;
           if (player && Math.random() < player.critRate) {
             dmg = Math.floor(dmg * player.critMult);
+            isCrit = true;
           }
           e.hp -= dmg;
+          databus.addDamageText(e.x, e.y - e.radius, dmg, isCrit);
           if (e.hp <= 0) {
             e.isDead = true;
           }

@@ -70,6 +70,24 @@ export default class Hud {
       ctx.fillText(s, p, top + 82 + i * 16);
     });
 
+    // Boss 顶部血条（居中）
+    const boss = databus.enemys.find((e) => e.isBoss);
+    if (boss) {
+      const bw = Math.min(canvasW - 40, 300);
+      const bx = (canvasW - bw) / 2;
+      ctx.fillStyle = '#333';
+      ctx.fillRect(bx, top, bw, 10);
+      ctx.fillStyle = '#c0392b';
+      ctx.fillRect(bx, top, bw * Math.max(0, boss.hp / boss.maxHp), 10);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, top, bw, 10);
+      ctx.fillStyle = '#e74c3c';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOSS', canvasW / 2, top + 22);
+    }
+
     // Chest bonus stats (right)
     ctx.fillStyle = '#f39c12';
     ctx.textAlign = 'right';
