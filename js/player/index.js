@@ -8,6 +8,7 @@ import {
   BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
   ARENA_W, ARENA_H,
 } from '../consts';
+import { settings } from '../storage';
 
 export default class Player extends Sprite {
   constructor() {
@@ -17,11 +18,11 @@ export default class Player extends Sprite {
     this.maxHp = PLAYER_MAX_HP;         // 生命上限（升级项：生命上限）
     this.speed = PLAYER_SPEED;          // 移动速度（升级项 +15%，每级自动 +5）
     this.attack = PLAYER_ATK;           // 攻击力，子弹伤害（升级项 +3，每级自动 +1）
-    this.defence = PLAYER_DEF;          // 防御力，减伤（升级项 +2，每级自动 +1）
-    this.attackRange = PLAYER_ATTACK_RANGE; // 索敌距离，子弹飞距离=此值+缓冲（升级项 +30，每级自动 +10）
+    this.defence = PLAYER_DEF;          // 防御力，减伤（升级项 +2）
+    this.attackRange = PLAYER_ATTACK_RANGE; // 索敌距离，子弹飞距离=此值+缓冲（升级项 +30，每级自动 +5）
     this.attackCd = PLAYER_ATTACK_CD;   // 基础攻击间隔（毫秒），实际间隔 = 此值 ÷ 攻速
-    this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项 +0.3次，每级自动 +0.1）
-    this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项 +10%，每级自动 +3%）
+    this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项 +0.3次）
+    this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项 +10%，每级自动 +2%）
     this.critMult = PLAYER_CRIT_MULT;   // 暴击伤害倍数
     this.luck = PLAYER_LUCK;            // 幸运值，每点+2%经验获取（升级项：幸运值）
     this.bulletCount = 1;               // 每轮子弹数（宝箱：子弹数+1）
@@ -104,6 +105,7 @@ export default class Player extends Sprite {
     }
     const dmg = Math.max(1, amount - this.defence);
     this.hp -= dmg;
+    if (settings.vibrate) wx.vibrateShort({ type: 'light' });
   }
 
   addXp(amount, databus) {

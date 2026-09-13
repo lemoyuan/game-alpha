@@ -2,6 +2,7 @@ import { canvasWidth, canvasHeight } from './render';
 
 export const ARENA_W = 2000;            // 地图宽（像素）
 export const ARENA_H = 2000;            // 地图高（像素）
+export const GAME_TITLE = 'game-alpha'; // 游戏标题（暂定名，首页/分享文案统一读这里）
 export const TILE = 64;                 // 地面网格尺寸
 
 export const PLAYER_RADIUS = 16;        // 角色碰撞半径
@@ -61,8 +62,8 @@ export const UPGRADES = [
 // key 必须与 Player 的属性名完全一致，否则写入会静默无效
 export const LEVEL_UP_BONUS = {
   attack: 1,        // 攻击力 +1
-  critRate: 0.02,   // 暴击率 +3%（0~1 小数）
-  attackRange: 5,  // 攻击距离（=索敌距离）+10
+  critRate: 0.02,   // 暴击率 +2%（0~1 小数）
+  attackRange: 5,   // 攻击距离（=索敌距离）+5
   speed: 5,         // 移速 +5
 };
 

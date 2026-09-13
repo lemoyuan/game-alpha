@@ -8,6 +8,7 @@ import {
   BOSS_FIRST_SPAWN_TIME,
 } from './config';
 import { ARENA_W, ARENA_H } from '../../consts';
+import { markEncountered } from '../../storage';
 
 // 刷怪控制器：普通怪随时间加密，宝箱怪按固定间隔出现，Boss 定时出场
 export default class Spawner {
@@ -76,6 +77,7 @@ export default class Spawner {
     const boss = new Boss('boss1', config);
     boss.init(pos.x, pos.y);
     databus.enemys.push(boss);
+    markEncountered('boss1'); // 遭遇即解锁图鉴，无需击杀
     if (databus.hud) databus.hud.showToast('Boss 出现了！', 2500);
   }
 
@@ -103,6 +105,7 @@ export default class Spawner {
       if (!type) type = types[types.length - 1]; // 浮点兜底
     }
     const config = MONSTER_TYPES[type];
+    markEncountered(type); // 遭遇即解锁图鉴（首次会写一次本地存储）
 
     const pos = this.placeAroundPlayer(databus, config.radius, 400);
 

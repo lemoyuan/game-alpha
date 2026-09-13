@@ -34,6 +34,7 @@ export default class Chest extends Sprite {
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < player.radius + this.radius + 4) {
       this.collected = true;
+      databus.chestsOpened++;
       const key = BONUS_KEYS[Math.floor(Math.random() * BONUS_KEYS.length)];
       player[key]++;
       if (databus.hud) databus.hud.showToast(BONUS_LABELS[key]);

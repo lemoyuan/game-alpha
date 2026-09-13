@@ -11,8 +11,9 @@ export default class Joystick {
     this.touchId = null;
   }
 
-  init() {
+  init(databus) {
     wx.onTouchStart((e) => {
+      if (databus.screen !== 'game') return; // 首页点击不参与摇杆
       if (this.active || this.touchId !== null) return;
       const t = e.touches[0];
       this.active = true;
