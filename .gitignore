@@ -1,0 +1,13 @@
+# 微信开发者工具的本机配置：每个开发者一份，提交后只会互相覆盖，不进仓库
+project.private.config.json
+
+# AI 出图原图 + 预览拼图：抠图流水线的输入（13MB），成品在 images/entity/
+vibe_images/
+
+# 无头验证时 js/ 的临时副本
+.hcheck/
+
+node_modules/
+Thumbs.db
+desktop.ini
+.DS_Store

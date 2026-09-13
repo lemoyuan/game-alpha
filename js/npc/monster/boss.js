@@ -38,6 +38,7 @@ export default class Boss extends Enemy {
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
 
     if (this.charging) {
+      this.angle = Math.atan2(this.chargeDy, this.chargeDx); // 冲锋期间锁定冲刺朝向
       if (now < this.chargeUntil) {
         this.x += this.chargeDx * this.chargeSpeed * dt;
         this.y += this.chargeDy * this.chargeSpeed * dt;
@@ -45,6 +46,7 @@ export default class Boss extends Enemy {
         this.charging = false;
       }
     } else {
+      this.angle = Math.atan2(dy, dx);
       this.x += (dx / dist) * this.speed * dt;
       this.y += (dy / dist) * this.speed * dt;
       if (now >= this.nextSkillAt) {

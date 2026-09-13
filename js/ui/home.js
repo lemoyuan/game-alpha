@@ -1,6 +1,7 @@
 import { canvasW, canvasH, GAME_TITLE } from '../consts';
 import { safeTop } from '../render';
 import { MONSTER_TYPES, CODEX_ORDER } from '../npc/monster/config';
+import { loadImage } from '../base/sprite';
 import { settings, saveSettings, records, formatTime } from '../storage';
 
 const BTN_RADIUS = 14;
@@ -8,7 +9,8 @@ const BTN_RADIUS = 14;
 // 首页：标题 + 开始游戏 + 设置 / 怪物图鉴 / 游戏记录 四个页面（databus.screen === 'home' 时接管触摸）
 export default class HomeScreen {
   constructor() {
-    this.page = 'main'; // main | settings | codex | records
+    this.page = 'main'; // main | settings | codex | codexDetail | records
+    this.codexType = null; // codexDetail 当前查看的怪物 type
     this.tapAreas = []; // 每帧绘制时重建的可点击区域
     this._onStart = null;
   }
@@ -66,14 +68,30 @@ export default class HomeScreen {
     ctx.textBaseline = 'alphabetic';
   }
 
-  header(ctx, title) {
+  header(ctx, title, backTo) {
     const top = 16 + safeTop;
-    this.button(ctx, 14, top, 64, 32, '返回', () => this.goto('main'), 'plain');
+    this.button(ctx, 14, top, 64, 32, '返回', () => this.goto(backTo || 'main'), 'plain');
     ctx.fillStyle = '#f1c40f';
     ctx.font = 'bold 20px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(title, canvasW / 2, top + 24);
     return top + 52;
+  }
+
+  // 中文按字断行：canvas 没有自动换行，图鉴的冷知识是整句
+  wrap(ctx, text, maxW) {
+    const lines = [];
+    let line = '';
+    for (const ch of text) {
+      if (ctx.measureText(line + ch).width > maxW && line) {
+        lines.push(line);
+        line = ch;
+      } else {
+        line += ch;
+      }
+    }
+    if (line) lines.push(line);
+    return lines;
   }
 
   draw(ctx) {
@@ -82,6 +100,7 @@ export default class HomeScreen {
     ctx.fillRect(0, 0, canvasW, canvasH);
     if (this.page === 'settings') this.drawSettings(ctx);
     else if (this.page === 'codex') this.drawCodex(ctx);
+    else if (this.page === 'codexDetail') this.drawCodexDetail(ctx);
     else if (this.page === 'records') this.drawRecords(ctx);
     else this.drawMain(ctx);
   }
@@ -172,6 +191,24 @@ export default class HomeScreen {
     });
   }
 
+  // 图鉴头像：解锁后直接用游戏内贴图（圆形裁切），贴图未加载完回退成识别色圆点
+  avatar(ctx, config, cx, cy, r, unlocked) {
+    const img = unlocked && config.sprite ? loadImage(config.sprite) : null;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = img && img.width && img.height ? '#1f2a36' : (unlocked ? config.color : '#3a4552');
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    if (img && img.width && img.height) ctx.drawImage(img, cx - r, cy - r, r * 2, r * 2);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   drawCodex(ctx) {
     const start = this.header(ctx, '怪物图鉴');
     const w = Math.min(canvasW - 24, 360);
@@ -186,16 +223,11 @@ export default class HomeScreen {
       ctx.fillStyle = unlocked ? '#2c3e50' : '#1f2a36';
       ctx.fill();
 
-      // 外观：与游戏内同色的圆点
-      const cx = x + 14 + 13;
+      // 外观：游戏内贴图（未加载完回退成同色圆点）
+      const r = 16;
+      const cx = x + 14 + r;
       const cy = y + rh / 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 13, 0, Math.PI * 2);
-      ctx.fillStyle = unlocked ? config.color : '#3a4552';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      this.avatar(ctx, config, cx, cy, r, unlocked);
       if (!unlocked) {
         ctx.fillStyle = '#8a95a5';
         ctx.font = 'bold 14px monospace';
@@ -203,20 +235,112 @@ export default class HomeScreen {
         ctx.fillText('?', cx, cy + 5);
       }
 
-      const tx = cx + 24;
+      const tx = cx + r + 8;
       ctx.textAlign = 'left';
       ctx.fillStyle = unlocked ? '#fff' : '#8a95a5';
       ctx.font = 'bold 13px monospace';
-      ctx.fillText(unlocked ? `${config.name}（${entry.type === 'boss1' ? 'Boss' : entry.appear}）` : '未知怪物', tx, y + 20);
-      ctx.fillStyle = unlocked ? '#95a5a6' : '#5f6b78';
+      ctx.fillText(unlocked ? `${config.name}（${entry.type === 'boss1' ? 'Boss' : entry.appear}）` : '未知怪物', tx, y + 19);
       ctx.font = '10px monospace';
       if (unlocked) {
-        ctx.fillText(config.intro, tx, y + 35);
-        ctx.fillText(`血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + 49);
+        ctx.fillStyle = '#7fb3d5';
+        ctx.fillText(config.group, tx, y + 33);
+        ctx.fillStyle = '#95a5a6';
+        ctx.fillText(`血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + 47);
+        // 整行可点：学名与冷知识放在详情卡里
+        ctx.fillStyle = '#7f8c8d';
+        ctx.font = 'bold 15px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText('›', x + w - 12, cy + 5);
+        this.tapAreas.push({ x, y, w, h: rh, action: () => this.openCodex(entry.type) });
       } else {
-        ctx.fillText('尚未遭遇，进游戏里碰碰看', tx, y + 35);
+        ctx.fillStyle = '#5f6b78';
+        ctx.fillText('尚未遭遇，进游戏里碰碰看', tx, y + 33);
       }
     });
+  }
+
+  openCodex(type) {
+    this.codexType = type;
+    this.goto('codexDetail');
+  }
+
+  stepCodex(delta) {
+    const n = CODEX_ORDER.length;
+    const idx = CODEX_ORDER.findIndex((e) => e.type === this.codexType);
+    this.codexType = CODEX_ORDER[(idx + delta + n) % n].type;
+  }
+
+  drawCodexDetail(ctx) {
+    const entry = CODEX_ORDER.find((e) => e.type === this.codexType);
+    if (!entry) {
+      this.goto('codex');
+      return;
+    }
+    const config = MONSTER_TYPES[entry.type];
+    const unlocked = records.encountered.indexOf(entry.type) !== -1;
+    const start = this.header(ctx, unlocked ? '图鉴详情' : '未解锁', 'codex');
+    const w = Math.min(canvasW - 24, 360);
+    const x = (canvasW - w) / 2;
+
+    // 头部卡：游戏内贴图 + 中文名 + 学名 + 分类阶元
+    const headH = 108;
+    const r = 38;
+    this.roundRect(ctx, x, start, w, headH, BTN_RADIUS);
+    ctx.fillStyle = '#2c3e50';
+    ctx.fill();
+    this.avatar(ctx, config, x + 14 + r, start + headH / 2, r, unlocked);
+    if (!unlocked) {
+      ctx.fillStyle = '#8a95a5';
+      ctx.font = 'bold 26px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('?', x + 14 + r, start + headH / 2 + 9);
+    }
+    const tx = x + 28 + r * 2;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 17px monospace';
+    ctx.fillText(unlocked ? config.name : '未知怪物', tx, start + 30);
+    ctx.fillStyle = '#7fb3d5';
+    ctx.font = '11px monospace';
+    ctx.fillText(unlocked ? config.latin : '???', tx, start + 48);
+    ctx.fillStyle = '#95a5a6';
+    ctx.fillText(unlocked ? config.group : '尚未遭遇', tx, start + 64);
+    ctx.fillText(`出现：${entry.type === 'boss1' ? 'Boss 定时出场' : entry.appear}`, tx, start + 80);
+
+    const sections = unlocked
+      ? [
+        { label: '游戏机制', text: config.intro },
+        { label: '冷知识', text: config.fact },
+        {
+          label: '数值',
+          text: `血量 ${config.hp} · 移速 ${config.speed} · 接触伤害 ${config.damage} · 经验 ${config.xp} · 碰撞半径 ${config.radius}`,
+        },
+      ]
+      : [{ label: '说明', text: '进游戏里遭遇一次，这张卡就会自动解锁，不需要额外操作。' }];
+
+    let y = start + headH + 10;
+    const maxW = w - 32;
+    for (const sec of sections) {
+      ctx.font = '12px monospace';
+      const lines = this.wrap(ctx, sec.text, maxW);
+      const h = 26 + lines.length * 17 + 6;
+      this.roundRect(ctx, x, y, w, h, BTN_RADIUS);
+      ctx.fillStyle = '#1f2a36';
+      ctx.fill();
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#f1c40f';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(sec.label, x + 16, y + 18);
+      ctx.fillStyle = '#dfe6e9';
+      ctx.font = '12px monospace';
+      lines.forEach((ln, i) => ctx.fillText(ln, x + 16, y + 38 + i * 17));
+      y += h + 8;
+    }
+
+    const bw = (w - 10) / 2;
+    const by = canvasH - 16 - 40;
+    this.button(ctx, x, by, bw, 40, '上一只', () => this.stepCodex(-1), 'plain');
+    this.button(ctx, x + bw + 10, by, bw, 40, '下一只', () => this.stepCodex(1), 'plain');
   }
 
   drawRecords(ctx) {

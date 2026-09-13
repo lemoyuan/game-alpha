@@ -50,7 +50,12 @@
   },
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": "vibe_images" },
+      { "type": "folder", "value": "tools" },
+      { "type": "folder", "value": ".hcheck" },
+      { "type": "suffix", "value": ".md" }
+    ],
     "include": []
   },
   "isGameTourist": false,

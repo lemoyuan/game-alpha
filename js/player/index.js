@@ -1,7 +1,8 @@
 import Sprite from '../base/sprite';
 import Bullet from './bullet';
 import {
-  PLAYER_RADIUS, PLAYER_SPEED, PLAYER_MAX_HP,
+  PLAYER_RADIUS, PLAYER_SPEED, PLAYER_MAX_HP, PLAYER_SPRITE, PLAYER_SPRITE_SIZE,
+  PLAYER_MUZZLE_LEN, PLAYER_MUZZLE_FLASH,
   PLAYER_ATK, PLAYER_DEF, PLAYER_ATTACK_RANGE, PLAYER_ATTACK_CD,
   PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK, LUCK_XP_BONUS,
@@ -12,7 +13,7 @@ import { settings } from '../storage';
 
 export default class Player extends Sprite {
   constructor() {
-    super(null, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2, ARENA_W / 2, ARENA_H / 2);
+    super(PLAYER_SPRITE, PLAYER_SPRITE_SIZE, PLAYER_SPRITE_SIZE, ARENA_W / 2, ARENA_H / 2);
     this.radius = PLAYER_RADIUS;        // 碰撞半径（像素）
     this.hp = PLAYER_MAX_HP;            // 当前生命
     this.maxHp = PLAYER_MAX_HP;         // 生命上限（升级项：生命上限）
@@ -69,8 +70,11 @@ export default class Player extends Sprite {
         const dx = nearest.x - this.x;
         const dy = nearest.y - this.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        this.dirX = dx / dist;
-        this.dirY = dy / dist;
+        // dist 可能为 0（玩家和怪被夹进同一角落），此时保持上一次朝向，避免除零出 NaN
+        if (dist > 0) {
+          this.dirX = dx / dist;
+          this.dirY = dy / dist;
+        }
         this.shoot(databus, this.dirX, this.dirY);
       } else {
         if (moveX !== 0 || moveY !== 0) {
@@ -85,11 +89,13 @@ export default class Player extends Sprite {
   shoot(databus, dx, dy) {
     this.lastAttack = Date.now();
     const baseAngle = Math.atan2(dy, dx);
+    const mx = this.x + Math.cos(baseAngle) * PLAYER_MUZZLE_LEN;
+    const my = this.y + Math.sin(baseAngle) * PLAYER_MUZZLE_LEN;
     const spread = 0.18;
     for (let i = 0; i < this.bulletCount; i++) {
       const angle = baseAngle + (i - (this.bulletCount - 1) / 2) * spread;
       const bullet = databus.pool.getItemByClass('bullet', Bullet);
-      bullet.init(this.x, this.y, Math.cos(angle), Math.sin(angle), this.attack);
+      bullet.init(mx, my, Math.cos(angle), Math.sin(angle), this.attack);
       bullet.maxRange = this.attackRange + BULLET_RANGE_BUFFER;
       bullet.pierceLeft = this.pierce;
       databus.bullets.push(bullet);
@@ -128,14 +134,26 @@ export default class Player extends Sprite {
   }
 
   draw(ctx) {
-    const blink = Date.now() < this.invincibleUntil && Math.floor(Date.now() / 80) % 2;
-    ctx.fillStyle = blink ? 'rgba(52,152,219,0.4)' : '#3498db';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-    ctx.fill();
+    const now = Date.now();
+    const blink = now < this.invincibleUntil && Math.floor(now / 80) % 2;
+    // 贴图按「枪口朝右（+x）」出图，这里旋转到索敌方向，人物就永远举枪对准目标
+    const angle = Math.atan2(this.dirY, this.dirX);
+    if (!this.drawSprite(ctx, angle, blink ? 0.35 : 1)) {
+      ctx.fillStyle = blink ? 'rgba(52,152,219,0.4)' : '#3498db';
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      // 贴图未加载时用一条白色准星线表达朝向，加载后由枪管本身承担这个信息
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y);
+      ctx.lineTo(this.x + this.dirX * this.radius * 1.5, this.y + this.dirY * this.radius * 1.5);
+      ctx.stroke();
+    }
 
     if (this.shield > 0) {
-      const pulse = 0.3 + 0.3 * Math.sin(Date.now() / 160);
+      const pulse = 0.3 + 0.3 * Math.sin(now / 160);
       ctx.globalAlpha = pulse;
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
@@ -150,11 +168,23 @@ export default class Player extends Sprite {
       ctx.globalAlpha = 1;
     }
 
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(this.x, this.y);
-    ctx.lineTo(this.x + this.dirX * this.radius * 1.5, this.y + this.dirY * this.radius * 1.5);
-    ctx.stroke();
+    const flashAge = now - this.lastAttack;
+    if (flashAge < PLAYER_MUZZLE_FLASH) {
+      const t = 1 - flashAge / PLAYER_MUZZLE_FLASH;
+      const mx = this.x + this.dirX * PLAYER_MUZZLE_LEN;
+      const my = this.y + this.dirY * PLAYER_MUZZLE_LEN;
+      ctx.globalAlpha = t;
+      ctx.fillStyle = 'rgba(255,238,170,0.95)';
+      ctx.beginPath();
+      ctx.arc(mx, my, 2 + 4 * t, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx, my);
+      ctx.lineTo(mx + this.dirX * 7 * t, my + this.dirY * 7 * t);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
 }

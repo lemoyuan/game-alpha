@@ -5,7 +5,11 @@ export const ARENA_H = 2000;            // 地图高（像素）
 export const GAME_TITLE = 'game-alpha'; // 游戏标题（暂定名，首页/分享文案统一读这里）
 export const TILE = 64;                 // 地面网格尺寸
 
+export const PLAYER_SPRITE = 'images/entity/player_idle.png'; // 角色贴图：俯视持枪，按「枪口朝右（+x）」出图，运行时旋转到索敌方向
 export const PLAYER_RADIUS = 16;        // 角色碰撞半径
+export const PLAYER_SPRITE_SIZE = 42;   // 角色贴图显示边长（逻辑像素），与碰撞半径解耦；持枪横向剪影按宽缩放后身体偏小，靠这个值调大小
+export const PLAYER_MUZZLE_LEN = 19;    // 枪口到身体中心的距离：子弹与枪口火光都从这里出发
+export const PLAYER_MUZZLE_FLASH = 90;  // 枪口火光持续毫秒数（代码绘制，不出图）
 export const PLAYER_SPEED = 170;        // 初始移速（升级项：移动速度 +15%）
 export const PLAYER_MAX_HP = 40;       // 初始生命上限（升级项：生命上限 +20）
 export const PLAYER_ATK = 10;           // 初始攻击力，=子弹伤害（升级项：攻击力 +3）

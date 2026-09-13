@@ -1,11 +1,12 @@
 import Sprite from '../../base/sprite';
 import EnemyBullet from './enemyBullet';
 import { ARENA_W, ARENA_H } from '../../consts';
+import { SPRITE_ROTATES } from './config';
 
 // 怪物基类：普通怪/宝箱怪共用，boss 可继承此类扩展
 export default class Enemy extends Sprite {
   constructor(type, config) {
-    super(null, config.radius * 2, config.radius * 2, 0, 0);
+    super(config.sprite, config.radius * 2, config.radius * 2, 0, 0);
     this.type = type;
     this.radius = config.radius;   // 碰撞半径
     this.hp = config.hp;           // 当前血量
@@ -22,6 +23,7 @@ export default class Enemy extends Sprite {
     this.bulletRadius = config.bulletRadius || 4;
     this.bulletColor = config.bulletColor || '#fff';
     this.lastAttack = 0;           // 上次射击时间戳（内部用）
+    this.angle = 0;                // 朝向弧度（指向玩家）；仅当 SPRITE_ROTATES 为 true 时用于旋转贴图
   }
 
   init(x, y) {
@@ -37,7 +39,8 @@ export default class Enemy extends Sprite {
     if (!player) return;
     const dx = player.x - this.x;
     const dy = player.y - this.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    this.angle = Math.atan2(dy, dx);
 
     // 远程怪：玩家在索敌距离内停下射击，超出距离才靠近
     if (this.attackRange > 0 && dist <= this.attackRange) {
@@ -62,20 +65,24 @@ export default class Enemy extends Sprite {
   }
 
   draw(ctx) {
-    if (this.type === 'chest') {
-      // 宝箱怪：金色方块 + 闪烁提示
-      const blink = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 200));
-      ctx.globalAlpha = blink;
-      ctx.fillStyle = this.color;
-      ctx.fillRect(this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2);
-      ctx.fillStyle = '#8b5a00';
-      ctx.fillRect(this.x - this.radius, this.y - 3, this.radius * 2, 6);
-      ctx.globalAlpha = 1;
-    } else {
-      ctx.fillStyle = this.color;
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-      ctx.fill();
+    // 宝箱怪整体闪烁，提示「击杀必掉宝箱」
+    const alpha = this.type === 'chest'
+      ? 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 200))
+      : 1;
+    if (!this.drawSprite(ctx, SPRITE_ROTATES ? this.angle : 0, alpha)) {
+      if (this.type === 'chest') {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2);
+        ctx.fillStyle = '#8b5a00';
+        ctx.fillRect(this.x - this.radius, this.y - 3, this.radius * 2, 6);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // 血条
