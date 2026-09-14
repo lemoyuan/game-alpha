@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>game-alpha UI 预览台</title>
+<style>
+  body { margin: 0; background: #0b0d16; color: #eee; font: 13px/1.5 monospace; display: flex; gap: 16px; padding: 16px; }
+  #stage { position: relative; }
+  canvas { background: #1A1F35; box-shadow: 0 0 0 2px #fff, 0 12px 30px rgba(0,0,0,.6); touch-action: none; }
+  aside { width: 260px; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  button { display: block; width: 100%; margin: 4px 0; padding: 7px 8px; background: #24304F; color: #eee; border: 1px solid #3a4a70; border-radius: 6px; font: 12px monospace; text-align: left; cursor: pointer; }
+  button:hover { background: #31426c; }
+  .grp { margin: 14px 0 4px; color: #8A95A5; font-size: 11px; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="game" width="390" height="844"></canvas></div>
+<div id="bridge" hidden></div>
+<script>
+// 自动化桥：注入脚本跑在 isolated world，只能碰 DOM，所以用 data-cmd 传指令、data-result 回状态
+// 指令格式：nav:settings|sleep:300|shot:settings
+(() => {
+  const el = document.getElementById('bridge');
+  const run = async (steps) => {
+    for (const s of steps) {
+      const i = s.indexOf(':');
+      const kind = s.slice(0, i);
+      const arg = s.slice(i + 1);
+      if (kind === 'nav') {
+        const btn = document.querySelector(`[data-nav="${arg}"]`);
+        if (!btn) throw new Error('no nav ' + arg);
+        btn.click();
+      } else if (kind === 'sleep') {
+        await new Promise((r) => setTimeout(r, Number(arg)));
+      } else if (kind === 'get') {
+        let v = window;
+        for (const k of arg.split('.')) v = v && v[k];
+        el.setAttribute('data-state', `${arg} = ${JSON.stringify(v)}`);
+      } else if (kind === 'shot') {
+        await window.__shot(arg);
+      }
+    }
+  };
+  setInterval(() => {
+    const cmd = el.getAttribute('data-cmd');
+    if (!cmd || cmd === el.getAttribute('data-done')) return;
+    el.setAttribute('data-done', cmd);
+    el.removeAttribute('data-result');
+    run(cmd.split('|'))
+      .then(() => el.setAttribute('data-result', 'ok'))
+      .catch((e) => el.setAttribute('data-result', 'err:' + e.message));
+  }, 60);
+})();
+</script>
+<aside>
+  <h1>UI 预览台（非游戏内容）</h1>
+  <div class="grp">页面</div>
+  <button data-nav="main">首页 main</button>
+  <button data-nav="settings">设置</button>
+  <button data-nav="codex">图鉴列表</button>
+  <button data-nav="codexDetail-boss1">图鉴详情 · 毒王</button>
+  <button data-nav="codexDetail-tank">图鉴详情 · 铁坨</button>
+  <button data-nav="codexDetail-chest">图鉴详情 · 金匣（未解锁）</button>
+  <button data-nav="records">游戏记录</button>
+  <div class="grp">战斗中</div>
+  <button data-nav="game">开始一局（自动跑图）</button>
+  <button data-nav="game3">跳到 3 分钟（带怪海）</button>
+  <button data-nav="boss">召唤 Boss</button>
+  <button data-nav="upgrade">升级三选一</button>
+  <button data-nav="gameover">结算页（新开一局）</button>
+  <button data-nav="die">结束当前这局（带破纪录）</button>
+  <button data-nav="shield">护盾 +3</button>
+  <button data-nav="unlock">解锁全部图鉴</button>
+  <div class="grp">调试</div>
+  <button data-nav="seed">灌入示例存档（战绩 + 解锁）</button>
+  <button data-nav="reset">重置本地存档</button>
+</aside>
+<script>
+// wx stub：用浏览器真实 Canvas 跑游戏代码，只为看 UI，不参与打包
+(() => {
+  const screen = document.getElementById('game');
+  let first = true;
+  const handlers = { start: [], move: [], end: [], cancel: [] };
+  const toLocal = (e) => {
+    const r = screen.getBoundingClientRect();
+    return { clientX: (e.clientX - r.left) * (screen.width / r.width), clientY: (e.clientY - r.top) * (screen.height / r.height), identifier: 1 };
+  };
+  const fire = (kind, e) => {
+    const t = toLocal(e);
+    const ev = { touches: kind === 'end' ? [] : [t], changedTouches: [t], timeStamp: Date.now() };
+    for (const fn of handlers[kind]) fn(ev);
+  };
+  screen.addEventListener('pointerdown', (e) => { screen.setPointerCapture(e.pointerId); fire('start', e); });
+  screen.addEventListener('pointermove', (e) => { if (e.buttons) fire('move', e); });
+  screen.addEventListener('pointerup', (e) => fire('end', e));
+  screen.addEventListener('pointercancel', (e) => fire('cancel', e));
+
+  const info = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 47, bottom: 820 }, pixelRatio: 2 });
+  // 页面 hidden 时浏览器会冻结 rAF，循环会静默停摆（截图就一直停在上一帧）
+  // 所以每帧同时挂 rAF 和 setTimeout，谁先到跑谁，另一个用 done 标记作废
+  const realRaf = globalThis.requestAnimationFrame.bind(globalThis);
+  globalThis.requestAnimationFrame = (fn) => {
+    let done = false;
+    const once = (t) => { if (!done) { done = true; fn(t); } };
+    realRaf(once);
+    setTimeout(() => once(performance.now()), 20);
+    return 0;
+  };
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.wx = {
+    createCanvas: () => { if (first) { first = false; return screen; } return document.createElement('canvas'); },
+    getWindowInfo: info,
+    getSystemInfoSync: info,
+    createImage: () => new Image(),
+    onTouchStart: (fn) => handlers.start.push(fn),
+    onTouchMove: (fn) => handlers.move.push(fn),
+    onTouchEnd: (fn) => handlers.end.push(fn),
+    onTouchCancel: (fn) => handlers.cancel.push(fn),
+    setStorageSync: (k, v) => localStorage.setItem('ga:' + k, JSON.stringify(v)),
+    getStorageSync: (k) => { try { return JSON.parse(localStorage.getItem('ga:' + k)); } catch (e) { return ''; } },
+    vibrateShort: () => {},
+  };
+})();
+</script>
+<script>
+// 预览台自身报错也走桥：注入脚本读不到 console，只能靠 DOM 属性回传
+// 必须在模块脚本之前注册：import 阶段抛错时模块体还没执行
+window.__fail = (msg) => {
+  const el = document.getElementById('bridge');
+  el.setAttribute('data-error', String(msg));
+  let box = document.getElementById('boot-error');
+  if (!box) {
+    box = document.createElement('pre');
+    box.id = 'boot-error';
+    box.style.cssText = 'position:fixed;left:0;right:0;top:0;margin:0;padding:8px;background:#7a1d1d;color:#fff;font:11px/1.4 monospace;white-space:pre-wrap;z-index:9';
+    document.body.appendChild(box);
+  }
+  box.textContent += msg + '\n';
+};
+window.addEventListener('error', (e) => window.__fail((e.message || e.error) + '\n' + ((e.error && e.error.stack) || '')));
+window.addEventListener('unhandledrejection', (e) => window.__fail('promise: ' + e.reason));
+</script>
+<script type="module">
+import Main from './js/main.js';
+import databusInit from './js/databus.js';
+
+const main = new Main();
+const databus = new databusInit();
+window.__game = { main, databus };
+window.databus = databus; // 桥接探针按 databus.xxx 路径读实时状态
+
+// 截图通道：把画布发回预览台存盘，浏览器窗口不可见时也能验收渲染结果
+window.__shot = async (name) => {
+  const data = document.getElementById('game').toDataURL('image/png');
+  const res = await fetch('/save?name=' + encodeURIComponent(name), { method: 'POST', body: data });
+  return res.text();
+};
+window.__nav = (name) => {
+  const btn = document.querySelector(`[data-nav="${name}"]`);
+  if (!btn) return 'no such nav';
+  btn.click();
+  return 'ok';
+};
+
+// 开局后自动按住摇杆往右上跑，方便直接看 HUD 与战斗画面
+let auto = null;
+const stage = document.getElementById('game');
+function holdStick() {
+  if (auto) return;
+  const r = stage.getBoundingClientRect();
+  const at = (x, y) => ({ clientX: r.left + x, clientY: r.top + y, buttons: 1, pointerId: 1 });
+  stage.dispatchEvent(new PointerEvent('pointerdown', at(120, 640)));
+  auto = setInterval(() => stage.dispatchEvent(new PointerEvent('pointermove', at(120 + Math.sin(Date.now() / 900) * 45, 640 - 45))), 60);
+  stage.dispatchEvent(new PointerEvent('pointermove', at(120, 595)));
+}
+
+function spawnAround(n) {
+  const sp = databus.spawner;
+  for (let i = 0; i < n; i++) sp.spawn(databus);
+}
+
+document.querySelectorAll('[data-nav]').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const nav = btn.dataset.nav;
+    if (nav === 'reset') { localStorage.clear(); location.reload(); return; }
+    if (nav === 'unlock') {
+      const { MONSTER_TYPES } = await import('./js/npc/monster/config.js');
+      const { markEncountered } = await import('./js/storage.js');
+      Object.keys(MONSTER_TYPES).forEach((t) => markEncountered(t));
+      main.backToHome();
+      return;
+    }
+    if (nav === 'seed') {
+      const { MONSTER_TYPES } = await import('./js/npc/monster/config.js');
+      const { markEncountered, submitRun } = await import('./js/storage.js');
+      Object.keys(MONSTER_TYPES).forEach((t) => markEncountered(t));
+      [[412, 12, 388, 9], [233, 9, 174, 4], [97, 6, 61, 1], [51, 4, 22, 0], [18, 2, 7, 0]]
+        .forEach(([time, level, kills, chests]) => submitRun({ time, level, kills, chests }));
+      main.backToHome();
+      return;
+    }
+    if (nav === 'main') { main.backToHome(); return; }
+    if (nav === 'settings' || nav === 'codex' || nav === 'records') { main.backToHome(); databus.homeScreen.goto(nav); return; }
+    if (nav.startsWith('codexDetail')) {
+      const type = nav.split('-')[1];
+      main.backToHome();
+      if (type !== 'chest') {
+        const { markEncountered } = await import('./js/storage.js');
+        markEncountered(type);
+      }
+      databus.homeScreen.openCodex(type);
+      return;
+    }
+    if (nav === 'game') { main.startRequested = true; await new Promise((r) => setTimeout(r, 120)); holdStick(); return; }
+    if (nav === 'die') {
+      // 结束「正在打的这一局」：结算面板才会带上真实的破纪录标记
+      if (databus.player) databus.player.hp = 0;
+      databus.isGameOver = true;
+      return;
+    }
+    if (nav === 'game3' || nav === 'boss' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield') {
+      main.startRequested = true;
+      await new Promise((r) => setTimeout(r, 120));
+      holdStick();
+      if (nav === 'game3') {
+        databus.spawner.elapsed = 180;
+        spawnAround(26);
+      }
+      if (nav === 'boss') { databus.spawner.elapsed = 200; databus.spawner.spawnBoss(databus); spawnAround(8); }
+      if (nav === 'shield') { databus.player.shield += 3; spawnAround(8); }
+      if (nav === 'upgrade') { databus.isPaused = true; databus.upgradeScreen.show(databus); }
+      if (nav === 'gameover') { databus.player.hp = 0; databus.isGameOver = true; }
+      return;
+    }
+  });
+});
+</script>
+</body>
+</html>

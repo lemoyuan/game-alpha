@@ -1,3 +1,5 @@
+import { UI } from './theme';
+
 export default class Joystick {
   constructor() {
     this.active = false;
@@ -69,18 +71,35 @@ export default class Joystick {
 
   draw(ctx) {
     if (!this.active) return;
-
-    ctx.globalAlpha = 0.25;
-    ctx.fillStyle = '#fff';
+    ctx.save();
+    // 底盘：半透明深色 + 粗描边 + 外圈白贴纸，战斗中不能挡住怪
+    ctx.globalAlpha = 0.4;
     ctx.beginPath();
     ctx.arc(this.baseX, this.baseY, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = UI.bg;
     ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = UI.ink;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(this.baseX, this.baseY, this.radius + 3, 0, Math.PI * 2);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = UI.sticker;
+    ctx.stroke();
 
-    ctx.globalAlpha = 0.5;
+    // 摇杆头：蓝色帽 + 白外圈 + 深色描边
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.arc(this.knobX, this.knobY, 24.5, 0, Math.PI * 2);
+    ctx.fillStyle = UI.sticker;
+    ctx.fill();
     ctx.beginPath();
     ctx.arc(this.knobX, this.knobY, 22, 0, Math.PI * 2);
+    ctx.fillStyle = UI.blue;
     ctx.fill();
-
-    ctx.globalAlpha = 1;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = UI.ink;
+    ctx.stroke();
+    ctx.restore();
   }
 }

@@ -2,7 +2,7 @@
 
 给 game-alpha（俯视角生存肉鸽）换皮用。当前游戏内 **全部对象都是代码画的纯色圆形/矩形占位**，本清单按代码里真实存在的绘制对象逐条列出，可以直接发给美术，也可以自己照着做。
 
-> 结论：**共 90 张图**（必做 88 张 + 2 张可选），分 P0 实体 / P1 UI / P2 特效 / 平台传播 四类。格式以 **PNG-24（带透明通道）** 为主，只有大面积无透明背景用 JPG。**不要 GIF**。
+> 结论：**共 54 张图**，分 P0 实体 / P2 特效 / 平台传播 三类。格式以 **PNG-24（带透明通道）** 为主，只有大面积无透明背景用 JPG。**不要 GIF**。界面 UI 一律代码绘制（见第三节「厚描边卡通」体系），不需要出图。
 
 ---
 
@@ -21,8 +21,8 @@
 | 朝向 | 主角与**子弹一律头朝右（0°）**；怪物可选「头朝右」或「正面朝上」两种画法 | 主角、子弹始终按 `Math.atan2(vy, vx)` 旋到朝向/飞行方向；怪物是否旋转由 `js/npc/monster/config.js` 的 `SPRITE_ROTATES` 决定 |
 | 动画 | 序列帧横向/网格图集，不用 GIF；帧率 8~12fps | GIF 无半透明且解码慢 |
 | 命名 | 全小写 + 下划线 + ASCII，例 `mob_tank_02.png` | 禁止中文/空格/大写，避免真机路径大小写踩坑 |
-| 目录 | 建议 `images/entity/`、`images/ui/`、`images/fx/`、`images/atlas/` | 与 `js/` 模块划分对齐 |
-| 包体 | 小游戏主包 4MB / 整包上限以官方最新文档为准；本清单 90 张 @2x 估算 < 1MB | 超限时优先转 WebP 或走在线资源 |
+| 目录 | 建议 `images/entity/`、`images/fx/`、`images/atlas/` | 与 `js/` 模块划分对齐；UI 代码绘制，不建 `images/ui/` |
+| 包体 | 小游戏主包 4MB / 整包上限以官方最新文档为准；本清单 54 张 @2x 估算 < 1MB | 超限时优先转 WebP 或走在线资源 |
 
 **风格建议**：深色底（当前背景 `#0d0d1a` / 地面 `#1a1a2e`）+ 高饱和主体色，保留现有配色作为**识别色**（玩家靠颜色分辨怪类型；病原体本身没有颜色可言，所以颜色完全按游戏需要定）：
 
@@ -124,51 +124,65 @@
 
 ---
 
-## 三、P1 界面 UI（36 张，其中 2 张可选）
+## 三、界面 UI：代码绘制的「厚描边卡通」体系（不出图）
 
-### 3.1 HUD（12）
+2026-09-14 定稿并落地：**所有界面 0 张 UI 图**，全部由 `js/ui/theme.js` 用 Canvas 2D 画出来。
+理由：这套画法只要平涂 + 粗描边 + 硬投影，省包体、省贴图加载，且和 `images/entity/` 里的怪是同一套卡通语言。
+本节取代原「P1 界面 UI 36 张」清单（血条框、卡片底、入口图标、开关、首页背景全部作废）。视觉参考只剩 `vibe_images/ui_*_b_*.png` 七张概念稿，它们不打包、不参与运行。
 
-| 文件 | 内容 | 逻辑尺寸 | @2x | 格式 | 数量 |
-|---|---|---|---|---|---|
-| `hud_hp_frame.png` | 血条底框（当前 180×18） | 180×18 | 360×36 | PNG | 1 |
-| `hud_hp_fill.png` | 血条填充（**可横向拉伸**的 9-patch 小图即可） | 32×18 | 64×36 | PNG | 1 |
-| `hud_xp_frame.png` | 经验条底框（180×10） | 180×10 | 360×20 | PNG | 1 |
-| `hud_xp_fill.png` | 经验条填充 | 32×10 | 64×20 | PNG | 1 |
-| `hud_boss_frame.png` | 顶部 Boss 血条底（≤300×10，居中） | 300×10 | 600×20 | PNG | 1 |
-| `hud_boss_fill.png` | 顶部 Boss 血条填充 | 32×10 | 64×20 | PNG | 1 |
-| `icon_heart.png` | 生命图标 | 24×24 | 48×48 | PNG | 1 |
-| `icon_gem.png` | 经验图标 | 24×24 | 48×48 | PNG | 1 |
-| `icon_clock.png` | 生存计时图标 | 24×24 | 48×48 | PNG | 1 |
-| `icon_skull.png` | 击杀图标 | 24×24 | 48×48 | PNG | 1 |
-| `icon_chest.png` | 开箱图标 | 24×24 | 48×48 | PNG | 1 |
-| `ui_panel_bg.png` | 通用半透明面板底（**9-patch**，HUD/弹窗/结算共用） | 128×128 | 256×256 | PNG | 1 |
+### 3.1 设计令牌（改风格只改 `js/ui/theme.js`，不要在 `js/ui/*.js` 里手写色值）
 
-### 3.2 升级三选一（14）
+| 令牌 | 值 | 用途 |
+|---|---|---|
+| `UI.bg` | `#1A1F35` | 界面底色（深海军蓝） |
+| `UI.panelDeep` | `#24304F` | 深色面板：未解锁 / 次要块 |
+| `UI.ink` | `#1C2843` | 所有描边与硬投影颜色 |
+| `UI.sticker` | `#FFFFFF` | 贴纸外框（画在描边外侧一圈白） |
+| `UI.cream` | `#F7F3E8` | 主面板 / 主卡片色 |
+| `UI.blue` `UI.red` `UI.gold` `UI.mint` `UI.violet` | `#3FA9F5` `#E74C3C` `#F5B041` `#2ECC71` `#9B59B6` | 与怪物识别色同一组，只做这五色的强调 |
+| `UI.textOnLight` / `UI.textOnDark` / `UI.muted` | `#1C2843` / `#F7F3E8` / `#8A95A5` | 正文按底色二选一 |
+| `UI.dim` / `UI.shadow` / `UI.highlight` / `UI.hudPanel` | 半透明 | 全屏遮罩 / 硬投影 / 顶部高光带 / 战斗内底板 |
 
-卡片实际尺寸由屏幕宽度算出（375 宽下约 **110×143**），按 128×168 出图再缩放。
+尺寸与字号：`R_CARD 16`、`R_BTN 14`、`LINE 3`、`BORDER 2.5`、`SHADOW_Y 4`、`FONT monospace`；
+字号只用 `FS` 六档 —— `title 26 / h1 20 / h2 16 / body 13 / small 11 / tiny 10`。
 
-| 文件 | 内容 | @2x | 数量 |
-|---|---|---|---|
-| `upgrade_card.png` | 卡片底 | 256×336 | 1 |
-| `upgrade_card_sel.png` | 选中态（当前是黄描边 + 放大动画） | 256×336 | 1 |
-| `upgrade_rarity_common.png` `..._rare.png` `..._epic.png` | 稀有度边框（对应 TODO「宝箱种类设计」的分级） | 256×336 | 3 |
-| `stat_icon_maxHp.png` `stat_icon_speed.png` `stat_icon_attack.png` `stat_icon_defence.png` `stat_icon_atkSpeed.png` `stat_icon_attackRange.png` `stat_icon_critRate.png` `stat_icon_luck.png` | **8 个升级项图标，文件名必须与 `UPGRADES` 的 key 一一对应**（代码按 key 拼图标路径） | 64×64 | 8 |
-| `title_levelup.png` | 「LEVEL UP!」艺术字（**可选**，暂用系统字体） | 320×96 | 1 |
+### 3.2 画法顺序（每个贴纸块都一样）
 
-### 3.3 首页（10）
+硬投影 → 白色贴纸外框 → 平涂填充 → 深色粗描边 → 顶部高光带。
+**禁止**：渐变、`shadowBlur` 发光（低端机直接掉帧）。字体只用系统等宽，不嵌字库。
 
-| 文件 | 内容 | 逻辑尺寸 | @2x | 格式 | 数量 |
-|---|---|---|---|---|---|
-| `home_bg.jpg` | 首页全屏背景（竖屏） | 375×667 | 750×1334 | JPG | 1 |
-| `title_logo.png` | 游戏标题字（**可选**：名字仍是暂定 `game-alpha`，定稿前建议先用文字绘制，别浪费一张） | 300×80 | 600×160 | PNG | 1 |
-| `ui_btn_primary.png` | 主按钮底（9-patch，绿色开始游戏） | 96×48 | 192×96 | PNG | 1 |
-| `ui_btn_ghost.png` | 次按钮底（9-patch，设置/图鉴/记录） | 96×48 | 192×96 | PNG | 1 |
-| `icon_settings.png` `icon_codex.png` `icon_records.png` `icon_back.png` | 四个入口图标（禁用态由代码降 alpha） | 40×40 | 80×80 | PNG | 4 |
-| `ui_switch_track.png` `ui_switch_thumb.png` | 设置页开关底 + 圆点 | 88×44 / 44×44 | 176×88 / 88×88 | PNG | 2 |
+### 3.3 图元（`js/ui/theme.js` 导出）
 
-> 首页怪物图鉴的圆形头像**直接复用 `mob_*.png` / `boss1_idle_01.png`**，不需要额外出图。
+| 图元 | 作用 |
+|---|---|
+| `sticker(ctx,x,y,w,h,o)` | 一切面板/按钮/卡片的地基，`o` 控制 fill/r/line/border/shadow/top |
+| `button(ctx,areas,o)` | 注册点击区 + 绘制，命中判定与外观永远一致；`o.stack` 图标在上、文字在下 |
+| `iconButton` | 正方形纯图标钮（页头返回） |
+| `bar` | 进度条（血 / 经验 / Boss） |
+| `chip` | 药丸徽章：数字、小节标签、摘要 |
+| `badge` | 圆形图标徽章：HUD 与卡片里复用最多的元素 |
+| `toggle` | 设置页开关，含禁用态 |
+| `dish` | 培养皿底盘：图鉴头像 / 展示位 |
+| `ribbon` | 卡片角标（升级卡「已选」） |
+| `label` / `labelMid` / `stickerLabel` | 普通文本 / 居中文本 / 描边标题字 |
+| `wrapLines` | 中文按字断行（canvas 没有自动换行） |
+| `icon(ctx,name,cx,cy,s,{color})` | 代码绘制图标 |
 
-**P1 小计：36 张**
+图标名（新增图标往 `icon()` 里加，不要在界面文件里手画）：
+`heart boot gun shield bolt target star clover bullet pierce buddy hourglass skull chest gear book trophy lock arrowLeft arrowRight replay home virus drop bubble phone note headphones globe chart medal`。
+
+### 3.4 各页约定
+
+- **首页**：紫色 `virus` 徽章 + 贴纸标题 + 薄荷绿主按钮 + 三枚 cream 图标钮（`stack`）+ 三枚摘要 `chip`。
+- **子页页头**：左侧 38px `arrowLeft` 图标钮，标题 `stickerLabel` 居中，内容从 `top + 54` 起。
+- **设置**：cream 行卡 + 图标徽章 + `toggle`；未接入项整卡转 `panelDeep` 且关掉顶部高光。
+- **图鉴列表 / 详情**：行卡用 `dish` 裁圆复用 `mob_*.png`；未解锁 = `panelDeep` + `lock` 图标；详情三节用 `chip` 当小节标签（机制=蓝、冷知识=金、数值=绿）。
+- **游戏记录**：2×2 徽章卡（`hourglass medal skull chest`）+ 半透明战绩行。
+- **战斗 HUD**：心形徽章 + 血条、等级 `chip` + 经验条、右上计时/击杀两枚 `chip`、左右两列半透明属性面板、Boss 条居中。**结算时 HUD 不再绘制**，避免和结算标题打架。
+- **升级三选一**：`UI.dim` 遮罩 + 金色 `LEVEL UP!` + 三张 cream 卡；卡的图标与配色读 `UPGRADES` 里的 `icon` / `tint` 字段（tint 是 `UI` 的键名，`consts.js` 不依赖 UI 层）。
+- **结算**：红色 `GAME OVER` + cream 卡（主数字=生存时长，三枚 `chip`，历史最佳行 + 金色「新纪录」`chip`）+ 两枚按钮；按钮布局仍只有 `gameOverButtons()` 一个来源。
+
+验收方式：`node tools/preview.mjs` 起预览台，侧栏按钮直达每个界面；不可见窗口也能通过 `/save` 通道把画布截图存到 `.preview/shots/`。
 
 ---
 
@@ -197,6 +211,7 @@
 
 ## 六、明确不需要出图的部分（省工）
 
+- **界面 UI 全套**：面板、按钮、徽章、开关、进度条、图标、首页背景装饰，全部按第三节用 `js/ui/theme.js` 的图元画，一张图都不用。
 - **伤害飘字**：系统字体 + 代码上浮淡出，已实现（`js/fx/damageText.js`）。除非要做像素字体风格，否则不用出图。
 - **中文字体**：不要嵌字体文件（中文字库 5~15MB，包体直接爆）。全部用系统字体。
 - **怪物头顶血条 / 摇杆圆盘 / 地面网格线 / 升级卡片文字 / 结算文字**：均为程序绘制，保留即可。
@@ -224,12 +239,12 @@
 | 分类 | 张数 | 必做 | 说明 |
 |---|---|---|---|
 | P0 游戏实体 | 36 | 36 | 换皮最小集，做完游戏就"不像占位图"了 |
-| P1 界面 UI | 36 | 34 | 2 张可选（升级艺术字、标题 logo） |
 | P2 特效 | 16 | 16 | 可后置，先用旧 explosion 序列顶上 |
 | 平台传播 | 2 | 2 | 头像 + 分享卡 |
-| **合计** | **90** | **88** | 其中含动画帧；按逻辑素材约 60 项 |
+| ~~P1 界面 UI~~ | 0 | 0 | 已改由 `js/ui/theme.js` 代码绘制，见第三节，不出图 |
+| **合计** | **54** | **54** | 其中含动画帧；按逻辑素材约 30 项 |
 
-交付时建议合并成 **4~5 张图集**（`atlas_entity.png` 1024×1024、`atlas_ui.png` 1024×1024、`atlas_fx.png` 512×512 等）+ 一份帧/位置 JSON，减少真机贴图加载次数。
+交付时建议合并成 **3~4 张图集**（`atlas_entity.png` 1024×1024、`atlas_fx.png` 512×512 等）+ 一份帧/位置 JSON，减少真机贴图加载次数。UI 走代码绘制后不再有 `atlas_ui.png`。
 
 ---
 

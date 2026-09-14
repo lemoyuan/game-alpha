@@ -54,6 +54,7 @@
       { "type": "folder", "value": "vibe_images" },
       { "type": "folder", "value": "tools" },
       { "type": "folder", "value": ".hcheck" },
+      { "type": "folder", "value": ".preview" },
       { "type": "suffix", "value": ".md" }
     ],
     "include": []

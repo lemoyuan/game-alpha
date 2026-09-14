@@ -1,6 +1,11 @@
 import { canvasW, xpForLevel } from '../consts';
 import { safeTop } from '../render';
+import { MONSTER_TYPES } from '../npc/monster/config';
+import { UI, FS, R_BTN, sticker, bar, badge, chip, icon, label, labelMid } from './theme';
 
+const P = 12; // HUD 与屏幕边缘的安全间距
+
+// 战斗 HUD：全部走 ui/theme.js 的贴纸图元，信息量与换皮前完全一致，只是收进面板
 export default class Hud {
   constructor() {
     this.toastText = '';
@@ -12,124 +17,98 @@ export default class Hud {
     this.toastUntil = Date.now() + duration;
   }
 
+  // 半透明底板：不画白边和硬投影，避免战斗中每帧多堆两层填充
+  panel(ctx, x, y, w, h) {
+    sticker(ctx, x, y, w, h, { fill: UI.hudPanel, r: R_BTN, border: false, shadow: false, line: 2, top: false });
+  }
+
   draw(ctx, databus) {
     const player = databus.player;
     if (!player) return;
 
-    const p = 12;
-    const top = p + safeTop; // 避开刘海/状态栏
+    const top = P + safeTop;
 
-    // HP bar
-    ctx.fillStyle = '#333';
-    ctx.fillRect(p, top, 180, 18);
-    ctx.fillStyle = player.hp > player.maxHp * 0.3 ? '#e74c3c' : '#c0392b';
-    ctx.fillRect(p, top, 180 * Math.max(0, player.hp / player.maxHp), 18);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(p, top, 180, 18);
-    ctx.fillStyle = '#fff';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(`${Math.ceil(player.hp)}/${player.maxHp}`, p + 90, top + 14);
-
-    // XP bar
-    const xpNeeded = xpForLevel(player.level);
-    ctx.fillStyle = '#333';
-    ctx.fillRect(p, top + 24, 180, 10);
-    ctx.fillStyle = '#3498db';
-    ctx.fillRect(p, top + 24, 180 * Math.min(1, player.xp / xpNeeded), 10);
-    ctx.strokeStyle = '#fff';
-    ctx.strokeRect(p, top + 24, 180, 10);
-
-    // EXP numbers
-    ctx.fillStyle = '#7fb3d5';
-    ctx.font = '11px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(`EXP:${player.xp}/${xpNeeded}`, p, top + 46);
-
-    // Level
-    ctx.fillStyle = '#f1c40f';
-    ctx.font = 'bold 14px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(`Lv.${player.level}`, p, top + 64);
-
-    // Stats: one attribute per line (left)
-    ctx.fillStyle = '#aaa';
-    ctx.font = '11px monospace';
-    ctx.textAlign = 'left';
-    const stats = [
-      `攻击:${player.attack}`,
-      `攻速:${player.atkSpeed}次/秒`,
-      `射程:${player.attackRange}`,
-      `暴击:${Math.round(player.critRate * 100)}%`,
-      `移速:${Math.floor(player.speed)}`,
-      `幸运:${player.luck}`,
-      `防御:${player.defence}`,
-    ];
-    stats.forEach((s, i) => {
-      ctx.fillText(s, p, top + 82 + i * 16);
+    // 生命：心形徽章 + 贴纸血条，数值压在条子正中
+    const barX = P + 30;
+    const barW = 148;
+    badge(ctx, P + 13, top + 13, 13, 'heart', { color: UI.red, shadow: false });
+    bar(ctx, barX, top + 4, barW, 18, player.hp / player.maxHp, UI.red);
+    labelMid(ctx, `${Math.ceil(player.hp)}/${player.maxHp}`, barX + barW / 2, top + 14, {
+      size: FS.tiny, bold: true, color: UI.textOnDark,
     });
 
-    // Boss 顶部血条（居中）
+    // 经验：等级药丸 + 细条，剩余空间放经验数值
+    const xpNeeded = xpForLevel(player.level);
+    chip(ctx, P, top + 26, 26, 16, `L${player.level}`, { color: UI.gold, size: FS.tiny });
+    bar(ctx, barX, top + 28, barW, 8, player.xp / xpNeeded, UI.blue, { r: 4 });
+    label(ctx, `${player.xp}/${xpNeeded}`, barX + barW + 8, top + 40, { size: FS.tiny, color: UI.muted });
+
+    // 计时与击杀：右上角两枚药丸
+    const mins = Math.floor(databus.spawner.elapsed / 60);
+    const secs = Math.floor(databus.spawner.elapsed % 60);
+    const rw = 84;
+    const rx = canvasW - P - rw;
+    chip(ctx, rx, top, rw, 26, `${mins}:${secs < 10 ? '0' : ''}${secs}`, { color: UI.cream, size: FS.body });
+    chip(ctx, rx, top + 32, rw, 22, `击杀 ${player.kills}`, { color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny });
+
+    // Boss 顶部血条（居中，压在两列属性之上）
     const boss = databus.enemys.find((e) => e.isBoss);
     if (boss) {
       const bw = Math.min(canvasW - 40, 300);
       const bx = (canvasW - bw) / 2;
-      ctx.fillStyle = '#333';
-      ctx.fillRect(bx, top, bw, 10);
-      ctx.fillStyle = '#c0392b';
-      ctx.fillRect(bx, top, bw * Math.max(0, boss.hp / boss.maxHp), 10);
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(bx, top, bw, 10);
-      ctx.fillStyle = '#e74c3c';
-      ctx.font = 'bold 10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('BOSS', canvasW / 2, top + 22);
+      const by = top + 58;
+      bar(ctx, bx, by, bw, 14, boss.hp / boss.maxHp, UI.red, { r: 7 });
+      labelMid(ctx, `BOSS ${MONSTER_TYPES[boss.type] ? MONSTER_TYPES[boss.type].name : ''}`, bx + bw / 2, by + 8, {
+        size: FS.tiny, bold: true, color: UI.textOnDark,
+      });
     }
 
-    // Chest bonus stats (right)
-    ctx.fillStyle = '#f39c12';
-    ctx.textAlign = 'right';
-    const bonusStats = [
-      `子弹数:${player.bulletCount}`,
-      `穿透:${player.pierce}`,
-      `护盾:${player.shield}`,
-      `跟班:${player.companions}`,
-    ];
-    bonusStats.forEach((s, i) => {
-      ctx.fillText(s, canvasW - p, top + 82 + i * 16);
-    });
-
-    // Timer
-    const mins = Math.floor(databus.spawner.elapsed / 60);
-    const secs = Math.floor(databus.spawner.elapsed % 60);
-    ctx.fillStyle = '#fff';
-    ctx.font = '14px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(`${mins}:${secs < 10 ? '0' : ''}${secs}`, canvasW - p, top + 14);
-
-    // Kills
-    ctx.fillText(`Kills: ${player.kills}`, canvasW - p, top + 34);
+    this.drawStats(ctx, player, top + (boss ? 84 : 52));
 
     // Toast
     const now = Date.now();
     if (now < this.toastUntil) {
       const remaining = (this.toastUntil - now) / 1000;
       ctx.globalAlpha = Math.min(1, remaining * 2);
-      const tw = 200;
+      const tw = 210;
       const tx = canvasW / 2 - tw / 2;
       const ty = 90 + safeTop;
-      ctx.fillStyle = 'rgba(0,0,0,0.7)';
-      ctx.fillRect(tx, ty, tw, 36);
-      ctx.strokeStyle = '#f39c12';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(tx, ty, tw, 36);
-      ctx.fillStyle = '#f39c12';
-      ctx.font = 'bold 14px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(this.toastText, canvasW / 2, ty + 23);
+      sticker(ctx, tx, ty, tw, 34, { fill: UI.cream, r: R_BTN });
+      labelMid(ctx, this.toastText, canvasW / 2, ty + 18, { size: FS.body, bold: true, color: UI.textOnLight });
       ctx.globalAlpha = 1;
     }
+  }
+
+  // 左右两列属性：图标 + 数值，收进半透明底板，读法与换皮前一致
+  drawStats(ctx, player, y) {
+    const rows = [
+      [
+        { icon: 'gun', label: '攻击', value: player.attack },
+        { icon: 'bolt', label: '攻速', value: `${player.atkSpeed}/秒` },
+        { icon: 'target', label: '射程', value: player.attackRange },
+        { icon: 'star', label: '暴击', value: `${Math.round(player.critRate * 100)}%` },
+        { icon: 'boot', label: '移速', value: Math.floor(player.speed) },
+        { icon: 'clover', label: '幸运', value: player.luck },
+        { icon: 'shield', label: '防御', value: player.defence },
+      ],
+      [
+        { icon: 'bullet', label: '子弹数', value: player.bulletCount, color: UI.gold },
+        { icon: 'pierce', label: '穿透', value: player.pierce, color: UI.gold },
+        { icon: 'bubble', label: '护盾', value: player.shield, color: UI.gold },
+        { icon: 'buddy', label: '跟班', value: player.companions, color: UI.gold },
+      ],
+    ];
+    const w = 100;
+    const rh = 17;
+    rows.forEach((col, ci) => {
+      const x = ci === 0 ? P : canvasW - P - w;
+      this.panel(ctx, x, y, w, col.length * rh + 8);
+      col.forEach((row, i) => {
+        const ry = y + 8 + i * rh;
+        icon(ctx, row.icon, x + 14, ry + 6, 14, { color: row.color || UI.blue });
+        label(ctx, row.label, x + 27, ry + 11, { size: FS.tiny, color: UI.muted });
+        label(ctx, `${row.value}`, x + w - 8, ry + 11, { size: FS.tiny, bold: true, color: UI.textOnDark, align: 'right' });
+      });
+    });
   }
 }

@@ -3,25 +3,12 @@
 // 检查项：贴图是否全部加载绘制、旋转是否生效、ctx 参数是否出现 NaN、循环是否抛错
 import fs from 'fs';
 import path from 'path';
+import { prepareCopy, fileUrl } from './prepare_copy.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const ENT = path.join(ROOT, 'images', 'entity');
 const SRC = path.join(ROOT, 'js');
 const COPY = path.join(ROOT, '.hcheck', 'js');
-
-function buildCopy(dir) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) buildCopy(p);
-    else if (e.name.endsWith('.js')) {
-      const code = fs.readFileSync(p, 'utf8').replace(
-        /(from\s+')(\.[^']+?)(')/g,
-        (m, a, spec, c) => (spec.endsWith('.js') ? m : `${a}${spec}.js${c}`)
-      );
-      fs.writeFileSync(p, code);
-    }
-  }
-}
 
 function pngSize(file) {
   try {
@@ -149,18 +136,11 @@ function touch(x, y, id) {
   return { touches: [{ clientX: x, clientY: y, identifier: id }], changedTouches: [{ clientX: x, clientY: y, identifier: id }], timeStamp: now };
 }
 
-fs.rmSync(path.join(ROOT, '.hcheck'), { recursive: true, force: true });
-fs.mkdirSync(path.join(ROOT, '.hcheck'), { recursive: true });
-fs.cpSync(SRC, COPY, { recursive: true });
-buildCopy(COPY);
+prepareCopy(SRC, COPY);
 
-const mainMod = await import(pathToFileUrl(path.join(COPY, 'main.js')));
-const databusMod = await import(pathToFileUrl(path.join(COPY, 'databus.js')));
+const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
+const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
 const databus = new databusMod.default();
-
-function pathToFileUrl(p) {
-  return 'file:///' + p.replace(/\\/g, '/');
-}
 
 const main = new mainMod.default();
 main.startRequested = true;

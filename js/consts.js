@@ -51,15 +51,16 @@ export const COMPANION_BULLET_RADIUS = 3;    // 跟班子弹半径（小于主�
 export const COMPANION_BULLET_COLOR = '#5dade2'; // 跟班子弹颜色（蓝色，区别于主角子弹）
 export const COMPANION_DAMAGE_RATIO = 0.5;   // 跟班伤害 = 角色攻击力 × 此系数
 
+// icon 取 js/ui/theme.js 的图标名，tint 取 UI 的色键（在 upgrade.js 里查表，consts 不依赖 UI 层）
 export const UPGRADES = [
-  { key: 'maxHp',    label: '生命上限', desc: '+10',  value: 10 },
-  { key: 'speed',    label: '移动速度', desc: '+15%', value: 0.15, mult: true },
-  { key: 'attack',   label: '攻击力',   desc: '+3',   value: 3 },
-  { key: 'defence',  label: '防御力',   desc: '+2',   value: 2 },
-  { key: 'atkSpeed', label: '攻击速度', desc: '+0.3次', value: 0.3 }, // 加法叠加：1.0 → 1.3 → 1.6 次/秒
-  { key: 'attackRange', label: '攻击距离', desc: '+30',  value: 30 },
-  { key: 'critRate', label: '暴击率',   desc: '+10%',  value: 0.1 },
-  { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1 },
+  { key: 'maxHp',    label: '生命上限', desc: '+10',  value: 10, icon: 'heart', tint: 'red' },
+  { key: 'speed',    label: '移动速度', desc: '+15%', value: 0.15, mult: true, icon: 'boot', tint: 'blue' },
+  { key: 'attack',   label: '攻击力',   desc: '+3',   value: 3, icon: 'gun', tint: 'red' },
+  { key: 'defence',  label: '防御力',   desc: '+2',   value: 2, icon: 'shield', tint: 'blue' },
+  { key: 'atkSpeed', label: '攻击速度', desc: '+0.3次', value: 0.3, icon: 'bolt', tint: 'gold' }, // 加法叠加：1.0 → 1.3 → 1.6 次/秒
+  { key: 'attackRange', label: '攻击距离', desc: '+30',  value: 30, icon: 'target', tint: 'violet' },
+  { key: 'critRate', label: '暴击率',   desc: '+10%',  value: 0.1, icon: 'star', tint: 'gold' },
+  { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1, icon: 'clover', tint: 'mint' },
 ];
 
 // 每升 1 级自动获得的全属性成长（在三选一升级卡之外额外叠加）

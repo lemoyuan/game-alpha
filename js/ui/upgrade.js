@@ -1,7 +1,7 @@
 import { canvasW, canvasH, UPGRADES } from '../consts';
+import { UI, FS, R_CARD, sticker, badge, chip, label, labelMid, ribbon, stickerLabel } from './theme';
 
 const SELECT_ANIM_MS = 450;  // 选中卡片的放大强调动画时长（毫秒）
-const CARD_RADIUS = 16;      // 卡片圆角半径（像素）
 
 export default class UpgradeScreen {
   constructor() {
@@ -67,16 +67,6 @@ export default class UpgradeScreen {
     this.selectAnim = { index, start: Date.now() };
   }
 
-  // 圆角矩形路径（arcTo 实现，兼容性比 ctx.roundRect 好）
-  roundRectPath(ctx, x, y, w, h, r) {
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
-
   draw(ctx) {
     if (!this.visible) return;
     const now = Date.now();
@@ -93,18 +83,13 @@ export default class UpgradeScreen {
     const fade = this.selectAnim ? 1 - t : 1;
 
     // 背景遮罩：动画期间整体淡出
-    ctx.fillStyle = `rgba(0,0,0,${0.75 * fade})`;
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = UI.dim;
     ctx.fillRect(0, 0, canvasW, canvasH);
 
-    ctx.globalAlpha = fade;
-    ctx.fillStyle = '#f1c40f';
-    ctx.font = 'bold 24px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('LEVEL UP!', canvasW / 2, canvasH * 0.12);
-
-    ctx.fillStyle = '#fff';
-    ctx.font = '14px monospace';
-    ctx.fillText('Choose an upgrade', canvasW / 2, canvasH * 0.12 + 35);
+    const hy = canvasH * 0.16; // 低于顶部 HUD，高于卡片（0.22）
+    stickerLabel(ctx, 'LEVEL UP!', canvasW / 2, hy, { size: FS.title, color: UI.gold });
+    label(ctx, '选择一项强化', canvasW / 2, hy + 26, { size: FS.body, color: UI.textOnDark, align: 'center' });
     ctx.globalAlpha = 1;
 
     const { cardW, cardH, gap, startY } = this.layout();
@@ -147,29 +132,15 @@ export default class UpgradeScreen {
   }
 
   drawCard(ctx, opt, x, y, w, h, index, highlight) {
-    ctx.beginPath();
-    this.roundRectPath(ctx, x, y, w, h, CARD_RADIUS);
-    ctx.fillStyle = highlight ? '#34495e' : '#2c3e50';
-    ctx.fill();
-    ctx.strokeStyle = highlight ? '#f1c40f' : '#3498db';
-    ctx.lineWidth = highlight ? 3 : 2;
-    ctx.stroke();
-
-    const titleFont = Math.max(12, Math.round(w * 0.12));
-    const descFont = Math.max(14, Math.round(w * 0.15));
+    const tint = UI[opt.tint] || UI.blue; // tint 是 consts.js 里写的 UI 色键
     const cx = x + w / 2;
-
-    ctx.fillStyle = '#ecf0f1';
-    ctx.font = `bold ${titleFont}px monospace`;
-    ctx.textAlign = 'center';
-    ctx.fillText(opt.label, cx, y + h * 0.4);
-
-    ctx.fillStyle = '#2ecc71';
-    ctx.font = `bold ${descFont}px monospace`;
-    ctx.fillText(opt.desc, cx, y + h * 0.62);
-
-    ctx.fillStyle = '#95a5a6';
-    ctx.font = '12px monospace';
-    ctx.fillText(`[${index + 1}]`, cx, y + h - 20);
+    sticker(ctx, x, y, w, h, { fill: UI.cream, r: R_CARD });
+    badge(ctx, cx, y + h * 0.25, w * 0.2, opt.icon, { color: tint });
+    labelMid(ctx, opt.label, cx, y + h * 0.5, { size: FS.body, bold: true, color: UI.textOnLight });
+    labelMid(ctx, opt.desc, cx, y + h * 0.7, { size: FS.h1, bold: true, color: tint });
+    chip(ctx, cx - 13, y + h - 32, 26, 21, `${index + 1}`, {
+      color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny, shadow: false,
+    });
+    if (highlight) ribbon(ctx, x + w - 44, y + 2, 88, 40, '已选', { clipX: x, clipY: y, clipW: w, clipH: h });
   }
 }

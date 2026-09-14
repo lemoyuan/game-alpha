@@ -7,6 +7,7 @@ import Joystick from './ui/joystick';
 import Hud from './ui/hud';
 import UpgradeScreen from './ui/upgrade';
 import HomeScreen from './ui/home';
+import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } from './ui/theme';
 import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import Chest from './npc/chest';
@@ -205,7 +206,7 @@ export default class Main {
     for (const t of databus.damageTexts) t.draw(ctx);
     databus.camera.end(ctx);
 
-    databus.hud.draw(ctx, databus);
+    if (!databus.isGameOver) databus.hud.draw(ctx, databus); // 结算面板接管屏幕上半部，血条属性条不再叠在上面
     databus.joystick.draw(ctx);
 
     if (databus.upgradeScreen.visible) {
@@ -223,10 +224,10 @@ export default class Main {
     const bh = 44;
     const gap = 12;
     const bx = (canvasW - bw) / 2;
-    const by = Math.round(canvasH * 0.56);
+    const by = Math.round(canvasH * 0.6);
     return [
-      { label: '再来一局', x: bx, y: by, w: bw, h: bh, action: () => { this.startRequested = true; } },
-      { label: '返回首页', x: bx, y: by + bh + gap, w: bw, h: bh, action: () => { this.homeRequested = true; } },
+      { label: '再来一局', icon: 'replay', color: UI.mint, x: bx, y: by, w: bw, h: bh, action: () => { this.startRequested = true; } },
+      { label: '返回首页', icon: 'home', color: UI.cream, x: bx, y: by + bh + gap, w: bw, h: bh, action: () => { this.homeRequested = true; } },
     ];
   }
 
@@ -244,49 +245,43 @@ export default class Main {
 
   drawGameOver() {
     const player = databus.player;
-    ctx.fillStyle = 'rgba(0,0,0,0.78)';
+    ctx.fillStyle = UI.dim;
     ctx.fillRect(0, 0, canvasW, canvasH);
 
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#e74c3c';
-    ctx.font = 'bold 32px monospace';
-    ctx.fillText('GAME OVER', canvasW / 2, canvasH * 0.26);
+    stickerLabel(ctx, 'GAME OVER', canvasW / 2, canvasH * 0.22, { size: 30, color: UI.red });
 
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText(
-      `生存 ${formatTime(databus.spawner.elapsed)} · Lv.${player.level} · 击杀 ${player.kills} · 宝箱 ${databus.chestsOpened}`,
-      canvasW / 2, canvasH * 0.26 + 34
-    );
+    const w = Math.min(canvasW - 48, 320);
+    const x = (canvasW - w) / 2;
+    const y = Math.round(canvasH * 0.26);
+    const h = 196;
+    sticker(ctx, x, y, w, h, { fill: UI.cream, r: R_CARD });
 
+    // 本局：生存时长做主数字，等级/击杀/宝箱压成三枚药丸
+    labelMid(ctx, formatTime(databus.spawner.elapsed), x + w / 2, y + 44, {
+      size: FS.title, bold: true, color: UI.textOnLight,
+    });
+    const chips = [`Lv.${player.level}`, `击杀 ${player.kills}`, `宝箱 ${databus.chestsOpened}`];
+    const cw = (w - 32 - 16) / 3;
+    chips.forEach((text, i) => {
+      chip(ctx, x + 16 + (cw + 8) * i, y + 62, cw, 24, text, { color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny });
+    });
+
+    label(ctx, '历史最佳', x + 16, y + 112, { size: FS.small, bold: true, color: UI.textOnLight });
     const marks = this.lastMarks || {};
     const bests = [
       { label: '最长生存', value: formatTime(records.bestTime), isNew: marks.time },
       { label: '最高等级', value: `Lv.${records.bestLevel}`, isNew: marks.level },
       { label: '最多击杀', value: `${records.bestKills}`, isNew: marks.kills },
     ];
-    ctx.font = '12px monospace';
     bests.forEach((b, i) => {
-      const y = canvasH * 0.26 + 62 + i * 18;
-      ctx.fillStyle = '#888';
-      ctx.fillText(`${b.label} ${b.value}`, canvasW / 2 - 20, y);
+      const ry = y + 134 + i * 22;
+      label(ctx, b.label, x + 16, ry, { size: FS.small, color: UI.muted });
+      label(ctx, b.value, x + w - (b.isNew ? 62 : 16), ry, { size: FS.small, bold: true, color: UI.textOnLight, align: 'right' });
       if (b.isNew) {
-        ctx.fillStyle = '#f1c40f';
-        ctx.textAlign = 'left';
-        ctx.fillText('新纪录', canvasW / 2 + 56, y);
-        ctx.textAlign = 'center';
+        chip(ctx, x + w - 56, ry - 15, 40, 19, '新纪录', { color: UI.gold, size: FS.tiny });
       }
     });
 
-    for (const b of this.gameOverButtons()) {
-      ctx.fillStyle = '#27ae60';
-      ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 16px monospace';
-      ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 6);
-    }
+    for (const b of this.gameOverButtons()) button(ctx, [], { ...b, text: b.label });
   }
 }
