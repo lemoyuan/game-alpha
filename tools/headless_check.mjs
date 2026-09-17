@@ -90,8 +90,17 @@ const touchHandlers = { start: [], move: [], end: [], cancel: [] };
 const store = new Map();
 const winInfo = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 47 }, pixelRatio: 2 });
 
+let firstCanvas = true;
+
 globalThis.wx = {
-  createCanvas: () => canvas,
+  // 与真机一致：首次 createCanvas 返回屏幕画布，之后返回离屏画布（地面贴图靠它）
+  createCanvas: () => {
+    if (firstCanvas) {
+      firstCanvas = false;
+      return canvas;
+    }
+    return { width: 0, height: 0, getContext: () => makeCtx(), toDataURL: () => '' };
+  },
   getWindowInfo: winInfo,
   getSystemInfoSync: winInfo,
   createImage: () => {

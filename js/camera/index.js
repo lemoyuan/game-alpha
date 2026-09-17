@@ -13,7 +13,8 @@ export default class Camera {
 
   begin(ctx) {
     ctx.save();
-    ctx.translate(-this.x, -this.y);
+    // 取整平移：小数平移会让平铺贴图边缘被重采样钳位出一条亮线，角色贴图也跟着发糊
+    ctx.translate(-Math.round(this.x), -Math.round(this.y));
   }
 
   end(ctx) {

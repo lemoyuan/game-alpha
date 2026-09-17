@@ -389,15 +389,23 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       line(0, h * 0.5, 0, h);
       break;
     case 'bullet':
+      // 竖立整弹：圆弧弹头 + 弹壳 + 外扩底缘。旧的横躺画法在 14px 行高里只有 4px 高，
+      // 读成一条短横线，还和 pierce 的横向箭头撞方向；竖构图才吃得住行高
       solid(() => {
         ctx.beginPath();
-        ctx.moveTo(-h * 0.85, -h * 0.3);
-        ctx.lineTo(h * 0.15, -h * 0.3);
-        ctx.quadraticCurveTo(h * 0.95, 0, h * 0.15, h * 0.3);
-        ctx.lineTo(-h * 0.85, h * 0.3);
+        ctx.moveTo(-h * 0.42, -h * 0.05);
+        ctx.quadraticCurveTo(-h * 0.42, -h * 0.55, 0, -h * 0.95);
+        ctx.quadraticCurveTo(h * 0.42, -h * 0.55, h * 0.42, -h * 0.05);
+        ctx.lineTo(h * 0.42, h * 0.62);
+        ctx.lineTo(h * 0.56, h * 0.62);
+        ctx.lineTo(h * 0.56, h * 0.95);
+        ctx.lineTo(-h * 0.56, h * 0.95);
+        ctx.lineTo(-h * 0.56, h * 0.62);
+        ctx.lineTo(-h * 0.42, h * 0.62);
         ctx.closePath();
       });
-      line(-h * 0.45, -h * 0.3, -h * 0.45, h * 0.3);
+      line(-h * 0.42, -h * 0.05, h * 0.42, -h * 0.05); // 弹头与弹壳分界
+      line(-h * 0.42, h * 0.62, h * 0.42, h * 0.62);   // 弹壳与底缘分界
       break;
     case 'pierce':
       line(-h * 0.95, 0, h * 0.95, 0);

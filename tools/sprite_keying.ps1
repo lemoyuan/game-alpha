@@ -180,7 +180,7 @@ public static class SpriteKit {
     int rows = (files.Count + cols - 1) / cols;
     var sheet = new Bitmap(cols * cell, rows * (cell + 22), PixelFormat.Format32bppArgb);
     using (var g = Graphics.FromImage(sheet)) {
-      g.Clear(Color.FromArgb(0x1a, 0x1a, 0x2e)); // arena background from js/arena/index.js
+      g.Clear(Color.FromArgb(0x2a, 0x3a, 0x3a)); // GROUND.base in js/consts.js, so contrast is judged on the real floor
       g.TextRenderingHint = TextRenderingHint.AntiAlias;
       using (var font = new Font("Arial", 11f))
       using (var brush = new SolidBrush(Color.FromArgb(170, 170, 170))) {
@@ -206,6 +206,8 @@ public static class SpriteKit {
 Add-Type -TypeDefinition $code -ReferencedAssemblies System.Drawing
 
 # logical sizes come from PLAYER_SPRITE_SIZE and MONSTER_TYPES radii in js/
+# The three boss_* entries below have no gameplay yet (2026-09-17 concept art), so their
+# logical size is a provisional radius*2 guess; sync it once the fight is designed.
 $jobs = @(
   @{ prefix = 'player_idle'; logical = 42 },
   @{ prefix = 'mob_basic';   logical = 28 },
@@ -213,7 +215,11 @@ $jobs = @(
   @{ prefix = 'mob_tank';    logical = 44 },
   @{ prefix = 'mob_ranged';  logical = 26 },
   @{ prefix = 'mob_chest';   logical = 32 },
-  @{ prefix = 'boss1';       logical = 68 }
+  @{ prefix = 'boss1';       logical = 68 },
+  @{ prefix = 'boss_giantcell';   logical = 68 },
+  @{ prefix = 'boss_endospore'; logical = 88 },
+  @{ prefix = 'boss_botulinum'; logical = 76 },
+  @{ prefix = 'boss_biofilm';   logical = 96 }
 )
 
 if (-not (Test-Path $Dst)) { New-Item -ItemType Directory -Path $Dst -Force | Out-Null }

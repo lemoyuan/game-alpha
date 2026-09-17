@@ -39,6 +39,19 @@
         el.setAttribute('data-state', `${arg} = ${JSON.stringify(v)}`);
       } else if (kind === 'shot') {
         await window.__shot(arg);
+      } else if (kind === 'tile') {
+        // 与游戏同一份模块实例：拿到已生成的地面离屏画布，2×2 平铺导出看接缝
+        const m = await import('./js/arena/ground.js');
+        const src = m.getGroundTile();
+        const c = document.createElement('canvas');
+        c.width = src.width * 2;
+        c.height = src.height * 2;
+        const g = c.getContext('2d');
+        g.drawImage(src, 0, 0);
+        g.drawImage(src, src.width, 0);
+        g.drawImage(src, 0, src.height);
+        g.drawImage(src, src.width, src.height);
+        await window.__shotCanvas(c, arg);
       }
     }
   };
@@ -154,6 +167,11 @@ window.databus = databus; // 桥接探针按 databus.xxx 路径读实时状态
 window.__shot = async (name) => {
   const data = document.getElementById('game').toDataURL('image/png');
   const res = await fetch('/save?name=' + encodeURIComponent(name), { method: 'POST', body: data });
+  return res.text();
+};
+// 离屏画布（地面贴图这类）也走同一条通道导出，用来检查平铺接缝
+window.__shotCanvas = async (cv, name) => {
+  const res = await fetch('/save?name=' + encodeURIComponent(name), { method: 'POST', body: cv.toDataURL('image/png') });
   return res.text();
 };
 window.__nav = (name) => {

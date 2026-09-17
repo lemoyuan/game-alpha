@@ -5,6 +5,24 @@ export const ARENA_H = 2000;            // 地图高（像素）
 export const GAME_TITLE = 'game-alpha'; // 游戏标题（暂定名，首页/分享文案统一读这里）
 export const TILE = 64;                 // 地面网格尺寸
 
+// 地面「菌毯」：程序绘制到离屏画布后反复平铺，画法见 js/arena/ground.js
+// 不用 AI 贴图：生成图带水印，且四边对不上，2000×2000 地图平铺会露接缝
+export const GROUND = {
+  repeat: 8,          // 一块贴图覆盖 8×8 个 TILE 网格（TILE=64 → 一块 512 逻辑像素，比屏幕还宽，看不出重复）
+  scale: 2,           // 离屏贴图按 2 倍分辨率绘制，缩到真机 @2x 不糊；改 1 省内存会变糊
+  seed: 20260914,     // 固定随机种子：每次运行地面一样，方便对比调参
+  base: '#2A3A3A',    // 底色：深青绿菌毯；怪物识别色多是绿和青，底色往蓝偏一点能同时拉开明度和色相
+  tones: ['#243434', '#314342', '#203030', '#374A46', '#29393A'], // 斑块色：彼此只差一档，做出起伏但不抢识别色
+  outline: '#182728', // 斑块描边：比底色再暗一档的墨青，只负责分块，不能和怪物外描边抢线
+  outlined: 0.55,     // 勾边斑块占比：1 = 每块都描边（像彩色玻璃），0 = 全靠色块明暗分界
+  line: 2,            // 描边宽度（逻辑像素）；改粗地面显脏，改细会压不过斑块色
+  patches: 46,        // 每块贴图内的斑块数量：越大越密，超过 60 会盖不住底色
+  minR: 0.05,         // 斑块最小半径（× 贴图边长）
+  maxR: 0.15,         // 斑块最大半径（× 贴图边长）：和 minR 差距越大，大小错落越自然
+  speckles: 120,      // 每块贴图内的斑点数量：原来是 220，深底上太密会看成满地掉落物，减半
+  speckle: '#42595C', // 斑点颜色：只比底色亮一档的暗青；旧的奶油白在深底上会看成经验宝石
+};
+
 export const PLAYER_SPRITE = 'images/entity/player_idle.png'; // 角色贴图：俯视持枪，按「枪口朝右（+x）」出图，运行时旋转到索敌方向
 export const PLAYER_RADIUS = 16;        // 角色碰撞半径
 export const PLAYER_SPRITE_SIZE = 42;   // 角色贴图显示边长（逻辑像素），与碰撞半径解耦；持枪横向剪影按宽缩放后身体偏小，靠这个值调大小
@@ -24,7 +42,7 @@ export const LUCK_XP_BONUS = 0.02;      // 每点幸运增加的经验获取比�
 
 export const BULLET_SPEED = 600;        // 子弹飞行速度
 export const BULLET_RADIUS = 5;         // 主角子弹半径（跟班子弹见 COMPANION_BULLET_RADIUS）
-export const BULLET_COLOR = '#fff';  // 主角子弹颜色（黄色）
+export const BULLET_COLOR = '#F5B041';  // 主角子弹颜色：与 HUD 子弹图标同色（theme.js 的 UI.gold），白点在深地面上读不出方向
 export const BULLET_DAMAGE = 10;        // （未直接使用，实际伤害取 player.attack）
 export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基础上的缓冲
 

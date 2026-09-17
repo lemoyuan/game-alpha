@@ -193,7 +193,7 @@ export default class Main {
     }
 
     databus.camera.begin(ctx);
-    databus.arena.draw(ctx);
+    databus.arena.draw(ctx, databus.camera);
     for (const g of databus.xpGems) g.draw(ctx);
     for (const c of databus.chests) c.draw(ctx);
     for (const e of databus.enemys) e.draw(ctx);
