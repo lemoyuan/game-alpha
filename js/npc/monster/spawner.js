@@ -1,14 +1,21 @@
 import Enemy from './enemy';
 import Boss from './boss';
+import BossSeaFire from './bossSeaFire';
+import BossFilm from './bossFilm';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   HP_SCALE_TIME, HP_SCALE_MULT,
   CHEST_SPAWN_INTERVAL, CHEST_FIRST_SPAWN,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
-  BOSS_FIRST_SPAWN_TIME,
+  BOSS_SPAWN_INTERVAL_MULT,
+  BOSS_SCHEDULE, BOSS_RESPAWN_GAP,
 } from './config';
-import { ARENA_W, ARENA_H } from '../../consts';
+import { clampToCoast } from '../../arena/coast';
 import { markEncountered } from '../../storage';
+
+// 类型 → Boss 类。映射只能放这里，不能放进 config：boss.js 会 import config，
+// config 反过来 import 类就成环，ES Module 下会解析出 undefined class
+const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm };
 
 // 刷怪控制器：普通怪随时间加密，宝箱怪按固定间隔出现，Boss 定时出场
 export default class Spawner {
@@ -17,7 +24,8 @@ export default class Spawner {
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
     this.chestTimer = 0;
-    this.bossSpawned = false;
+    this.bossIndex = 0; // BOSS_SCHEDULE 读到第几条，出场即自增
+    this.bossRest = 0;  // 场上没有 Boss 时累计的毫秒数：Boss 之间的冷却
   }
 
   reset() {
@@ -25,7 +33,8 @@ export default class Spawner {
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
     this.chestTimer = 0;
-    this.bossSpawned = false;
+    this.bossIndex = 0;
+    this.bossRest = 0;
   }
 
   update(dt, databus) {
@@ -36,12 +45,11 @@ export default class Spawner {
     // 普通怪刷新间隔：开局3秒1只，随时间逐渐压缩到下限0.5秒
     this.interval = Math.max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_START - this.elapsed * SPAWN_INTERVAL_RAMP);
 
-    // Boss 存活期间停止刷新普通小怪（Boss 自己召唤的小怪除外）
-    // Boss 死亡后从 enemys 中移除，下面的判定自动恢复刷新；计时清零避免击杀瞬间立刻冒出一只
+    // Boss 存活期间普通刷怪降速不降停：间隔乘 BOSS_SPAWN_INTERVAL_MULT（2 = 密度减半）。
+    // 不能停刷——Boss 血量 ×10 后一场要两分钟起步，停刷等于这段时间全图零新怪、玩家 build 成长暂停
     const bossAlive = databus.enemys.some((e) => e.isBoss);
-    if (bossAlive) {
-      this.timer = 0;
-    } else if (this.timer >= this.interval) {
+    const gate = this.interval * (bossAlive ? BOSS_SPAWN_INTERVAL_MULT : 1);
+    if (this.timer >= gate) {
       this.timer = 0;
       this.spawn(databus);
     }
@@ -51,34 +59,40 @@ export default class Spawner {
       this.spawn(databus, 'chest');
     }
 
-    if (!this.bossSpawned && this.elapsed > BOSS_FIRST_SPAWN_TIME) {
-      this.bossSpawned = true;
-      this.spawnBoss(databus);
+    // Boss 出场表逐条走：到点 + 场上没 Boss 且已冷却够久才刷下一只
+    // bossRest 少了不行：玩家提前秒杀 Boss 时 elapsed 早已越过下一个出场时间，
+    // 没有这道冷却，海火会在毒王尸体消失的同一帧贴脸刷出来
+    const next = BOSS_SCHEDULE[this.bossIndex];
+    this.bossRest = bossAlive ? 0 : this.bossRest + dt * 1000;
+    if (next && this.bossRest > BOSS_RESPAWN_GAP && this.elapsed > next.time) {
+      this.bossIndex++;
+      this.spawnBoss(databus, next);
     }
   }
 
-  // 在玩家周围 minDist~minDist+100px 随机方向刷出，并夹到场地内
+  // 在玩家周围 minDist~minDist+100px 随机方向刷出，并夹回海岸线内
   placeAroundPlayer(databus, radius, minDist) {
     const player = databus.player;
     const angle = Math.random() * Math.PI * 2;
     const dist = minDist + Math.random() * 100;
-    const x = player.x + Math.cos(angle) * dist;
-    const y = player.y + Math.sin(angle) * dist;
-    return {
-      x: Math.max(radius + 10, Math.min(ARENA_W - radius - 10, x)),
-      y: Math.max(radius + 10, Math.min(ARENA_H - radius - 10, y)),
+    const pos = {
+      x: player.x + Math.cos(angle) * dist,
+      y: player.y + Math.sin(angle) * dist,
     };
+    clampToCoast(pos, radius + 10);
+    return pos;
   }
 
-  spawnBoss(databus) {
+  spawnBoss(databus, entry = BOSS_SCHEDULE[0]) {
     if (!databus.player) return;
-    const config = MONSTER_TYPES.boss1;
+    const config = MONSTER_TYPES[entry.type];
+    const BossClass = BOSS_CLASS[entry.type] || Boss;
     const pos = this.placeAroundPlayer(databus, config.radius, 400);
-    const boss = new Boss('boss1', config);
+    const boss = new BossClass(entry.type, config);
     boss.init(pos.x, pos.y);
     databus.enemys.push(boss);
-    markEncountered('boss1'); // 遭遇即解锁图鉴，无需击杀
-    if (databus.hud) databus.hud.showToast('Boss 出现了！', 2500);
+    markEncountered(entry.type); // 遭遇即解锁图鉴，无需击杀
+    if (databus.hud) databus.hud.showToast(entry.toast, 2500);
   }
 
   spawn(databus, forceType) {

@@ -206,20 +206,22 @@ public static class SpriteKit {
 Add-Type -TypeDefinition $code -ReferencedAssemblies System.Drawing
 
 # logical sizes come from PLAYER_SPRITE_SIZE and MONSTER_TYPES radii in js/
-# The three boss_* entries below have no gameplay yet (2026-09-17 concept art), so their
-# logical size is a provisional radius*2 guess; sync it once the fight is designed.
+# The three concept bosses at the bottom (endospore/botulinum/biofilm) have no gameplay yet
+# (2026-09-17 concept art), so their logical size is a provisional radius*2 guess;
+# sync it once the fight is designed.
 $jobs = @(
   @{ prefix = 'player_idle'; logical = 42 },
+  @{ prefix = 'companion';   logical = 22 }, # display size = COMPANION_SPRITE_SIZE in js/consts.js (hit radius stays 8)
   @{ prefix = 'mob_basic';   logical = 28 },
   @{ prefix = 'mob_fast';    logical = 20 },
   @{ prefix = 'mob_tank';    logical = 44 },
   @{ prefix = 'mob_ranged';  logical = 26 },
   @{ prefix = 'mob_chest';   logical = 32 },
   @{ prefix = 'boss1';       logical = 68 },
-  @{ prefix = 'boss_giantcell';   logical = 68 },
+  @{ prefix = 'boss_giantcell';   logical = 76 }, # Haihuo: canvas is 8px larger than the hit box so the pseudopods can reach out
   @{ prefix = 'boss_endospore'; logical = 88 },
   @{ prefix = 'boss_botulinum'; logical = 76 },
-  @{ prefix = 'boss_biofilm';   logical = 96 }
+  @{ prefix = 'boss_biofilm';   logical = 96 }  # Mowang: real in-game spriteSize; radius 38 plus a 10px slime skirt
 )
 
 if (-not (Test-Path $Dst)) { New-Item -ItemType Directory -Path $Dst -Force | Out-Null }

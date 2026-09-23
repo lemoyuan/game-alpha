@@ -75,7 +75,12 @@ export default class UpgradeScreen {
     if (this.selectAnim && now - this.selectAnim.start >= SELECT_ANIM_MS) {
       this.selectAnim = null;
       this.visible = false;
-      if (this._databus) this._databus.isPaused = false;
+      if (this._databus) {
+        this._databus.isPaused = false;
+        // 一颗 Boss 宝石（300~600 经验）够跨好几级，而 addXp 每次只结一级：
+        // 面板关掉后把剩下的溢出经验接着结算成下一张卡，否则经验条会永远停在 "590/170" 这种填不满的样子
+        this._databus.player.addXp(0, this._databus);
+      }
       return;
     }
 

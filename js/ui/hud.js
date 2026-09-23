@@ -61,6 +61,12 @@ export default class Hud {
       labelMid(ctx, `BOSS ${MONSTER_TYPES[boss.type] ? MONSTER_TYPES[boss.type].name : ''}`, bx + bw / 2, by + 8, {
         size: FS.tiny, bold: true, color: UI.textOnDark,
       });
+      // 膜量子条（只有膜王带 filmMax）：膜最关键的时刻正是你扭头去看菌群的时候，
+      // 本体上那层壳这时候在屏幕外，所以血条下面必须再有一条。
+      // 高度不能再矮：bar() 两侧各 inset 2.5px，h<6 的时候平涂区会算成负数，只剩一圈描边
+      if (boss.filmMax) {
+        bar(ctx, bx, by + 16, bw, 8, Math.max(0, boss.film / boss.filmMax), UI.cream, { r: 4 });
+      }
     }
 
     this.drawStats(ctx, player, top + (boss ? 84 : 52));
@@ -87,7 +93,8 @@ export default class Hud {
         { icon: 'bolt', label: '攻速', value: `${player.atkSpeed}/秒` },
         { icon: 'target', label: '射程', value: player.attackRange },
         { icon: 'star', label: '暴击', value: `${Math.round(player.critRate * 100)}%` },
-        { icon: 'boot', label: '移速', value: Math.floor(player.speed) },
+        // 读实际生效值：踩进黏液时这个数字会自己掉下去，离开后再涨回来（升级加的是 player.speed，不受影响）
+        { icon: 'boot', label: '移速', value: Math.floor(player.effectiveSpeed()) },
         { icon: 'clover', label: '幸运', value: player.luck },
         { icon: 'shield', label: '防御', value: player.defence },
       ],

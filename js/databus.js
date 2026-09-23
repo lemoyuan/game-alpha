@@ -27,6 +27,8 @@ export default class DataBus {
     this.enemys = [];
     this.bullets = [];
     this.enemyBullets = [];
+    this.lasers = [];   // 海火的旋转光束：原点是活的 Boss，不进实体池以外的任何列表
+    this.zones = [];    // 地面危害池（海火赤潮 / 膜王黏液）：坐标一次写定，只等寿命走完；两种实体都按 update/draw/isDestroyed 走，不再加列表
     this.xpGems = [];
     this.chests = [];
     this.companions = [];
@@ -43,6 +45,10 @@ export default class DataBus {
     for (const b of this.bullets) b.update(dt, this);
     for (const b of this.enemyBullets) b.update(dt, this);
     for (const e of this.enemys) e.update(dt, this);
+    // 必须排在 enemys 之后：光束每帧从 owner.spin 重算端点，读上一帧的自转角会让眼和光脱开
+    // （1.05 弧度/秒 × 0.05 秒 = 3°，在 470px 末端差出 25px）
+    for (const l of this.lasers) l.update(dt, this);
+    for (const z of this.zones) z.update(dt, this);
     for (const g of this.xpGems) g.update(dt, this);
     for (const c of this.chests) c.update(dt, this);
     if (this.player) {
@@ -67,6 +73,14 @@ export default class DataBus {
 
   removeEnemyBullet(index) {
     this.enemyBullets.splice(index, 1);
+  }
+
+  removeLaser(index) {
+    this.lasers.splice(index, 1);
+  }
+
+  removeZone(index) {
+    this.zones.splice(index, 1);
   }
 
   removeXpGem(index) {

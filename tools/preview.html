@@ -73,6 +73,8 @@
   <button data-nav="settings">设置</button>
   <button data-nav="codex">图鉴列表</button>
   <button data-nav="codexDetail-boss1">图鉴详情 · 毒王</button>
+  <button data-nav="codexDetail-boss2">图鉴详情 · 海火</button>
+  <button data-nav="codexDetail-boss3">图鉴详情 · 膜王</button>
   <button data-nav="codexDetail-tank">图鉴详情 · 铁坨</button>
   <button data-nav="codexDetail-chest">图鉴详情 · 金匣（未解锁）</button>
   <button data-nav="records">游戏记录</button>
@@ -80,6 +82,8 @@
   <button data-nav="game">开始一局（自动跑图）</button>
   <button data-nav="game3">跳到 3 分钟（带怪海）</button>
   <button data-nav="boss">召唤 Boss</button>
+  <button data-nav="boss2">召唤二号 Boss（海火）</button>
+  <button data-nav="boss3">召唤三号 Boss（膜王）</button>
   <button data-nav="upgrade">升级三选一</button>
   <button data-nav="gameover">结算页（新开一局）</button>
   <button data-nav="die">结束当前这局（带破纪录）</button>
@@ -181,6 +185,66 @@ window.__nav = (name) => {
   return 'ok';
 };
 
+/**
+ * 手动推进一帧，用于定点看技能画面和测伤害节奏。
+ * 后台标签页的定时器会被 Chrome 节流到约 1 次/秒，而 main.loop 的 dt 封顶 0.05 秒
+ * → 页面不可见时游戏是十几倍慢动作，按墙上时间等待的注入脚本永远等不到要看的画面。
+ *
+ * 做法是给 Date.now 叠一个虚拟偏移，每泵一次前进 ms（主循环的 dt 就是 ms），再跑一帧。
+ * 偏移比"直接挪 main.lastTime"诚实：无敌帧、受击节流这些都读 Date.now，
+ * 墙上时间在连泵之间几乎不动，会把一整轮扫射压缩成同一瞬间，测出来的伤害次数全是错的。
+ * 临时把 requestAnimationFrame 换成空函数只是为了不让这一帧再申请下一帧——
+ * 自动链在调用前已经 armed，不受影响；否则每泵一次就多出一条循环链。
+ */
+let clockOffset = 0;
+const realNow = Date.now.bind(Date);
+Date.now = () => realNow() + clockOffset;
+window.__pump = (ms = 16.7) => {
+  const m = window.__game.main;
+  clockOffset += ms;
+  const saved = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+  window.__pumping = true;
+  try {
+    m.loop();
+  } finally {
+    window.__pumping = false;
+    globalThis.requestAnimationFrame = saved;
+  }
+};
+
+/**
+ * __freeze() 让自动循环空转（只对齐 lastTime，不跑逻辑），时间轴交给注入脚本独占。
+ * 不冻结的话，两次注入之间浏览器自己那圈 rAF 还在偷偷走帧：Boss 被普攻打掉血、
+ * 经验宝石攒够触发升级、弹窗盖住要看的画面，定点截图和伤害计数全被打乱。
+ * 能替换实例上的 loop 是因为 main.js 用 requestAnimationFrame(() => this.loop()) 重挂帧，
+ * 查表发生在回调里而不是挂帧时，所以自动链下一帧就会走到新的 loop。
+ * __unfreeze() 交还给自动循环，页面恢复正常游玩。
+ */
+window.__freeze = () => {
+  const m = window.__game.main;
+  if (m.__autoLoop) return 'already frozen';
+  m.__autoLoop = m.loop.bind(m);
+  m.loop = () => {
+    if (window.__pumping) {
+      m.__autoLoop();
+      return;
+    }
+    m.lastTime = Date.now();
+    // 空转也得自己续帧：main.js 是在 loop() 末尾才挂下一帧的，
+    // 这里直接 return 会让自动链断在第一帧上，__unfreeze() 之后页面再也跑不起来
+    requestAnimationFrame(() => m.loop());
+  };
+  return 'frozen';
+};
+window.__unfreeze = () => {
+  const m = window.__game.main;
+  if (!m.__autoLoop) return 'already running';
+  m.loop = m.__autoLoop;
+  delete m.__autoLoop;
+  return 'running';
+};
+
 // 开局后自动按住摇杆往右上跑，方便直接看 HUD 与战斗画面
 let auto = null;
 const stage = document.getElementById('game');
@@ -196,6 +260,15 @@ function holdStick() {
 function spawnAround(n) {
   const sp = databus.spawner;
   for (let i = 0; i < n; i++) sp.spawn(databus);
+}
+
+// 开局：置标志后立刻泵一帧把它消费掉，别等墙上时间。
+// __freeze() 之后自动链不会跑，靠 setTimeout 等的按钮会在 start() 的 databus.reset()
+// 之前就把 Boss 刷好，开局瞬间又被重置抹掉
+function startRun() {
+  main.startRequested = true;
+  window.__pump(16.7);
+  holdStick();
 }
 
 document.querySelectorAll('[data-nav]').forEach((btn) => {
@@ -230,22 +303,41 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.homeScreen.openCodex(type);
       return;
     }
-    if (nav === 'game') { main.startRequested = true; await new Promise((r) => setTimeout(r, 120)); holdStick(); return; }
+    if (nav === 'game') { startRun(); return; }
     if (nav === 'die') {
       // 结束「正在打的这一局」：结算面板才会带上真实的破纪录标记
       if (databus.player) databus.player.hp = 0;
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield') {
-      main.startRequested = true;
-      await new Promise((r) => setTimeout(r, 120));
-      holdStick();
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield') {
+      startRun();
       if (nav === 'game3') {
         databus.spawner.elapsed = 180;
         spawnAround(26);
       }
-      if (nav === 'boss') { databus.spawner.elapsed = 200; databus.spawner.spawnBoss(databus); spawnAround(8); }
+      // 手动召唤要把出场表指针推到表尾：不然自动调度器过一会儿自己又刷一只叠上来
+      if (nav === 'boss') {
+        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
+        databus.spawner.elapsed = 200;
+        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
+        databus.spawner.spawnBoss(databus);
+        spawnAround(8);
+      }
+      if (nav === 'boss2') {
+        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
+        databus.spawner.elapsed = 250;
+        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
+        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[1]);
+        spawnAround(8);
+      }
+      if (nav === 'boss3') {
+        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
+        databus.spawner.elapsed = 370;
+        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
+        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[2]);
+        spawnAround(8);
+      }
       if (nav === 'shield') { databus.player.shield += 3; spawnAround(8); }
       if (nav === 'upgrade') { databus.isPaused = true; databus.upgradeScreen.show(databus); }
       if (nav === 'gameover') { databus.player.hp = 0; databus.isGameOver = true; }

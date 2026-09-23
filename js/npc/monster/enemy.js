@@ -1,12 +1,14 @@
 import Sprite from '../../base/sprite';
 import EnemyBullet from './enemyBullet';
-import { ARENA_W, ARENA_H } from '../../consts';
+import { clampToCoast } from '../../arena/coast';
 import { SPRITE_ROTATES } from './config';
 
 // 怪物基类：普通怪/宝箱怪共用，boss 可继承此类扩展
 export default class Enemy extends Sprite {
   constructor(type, config) {
-    super(config.sprite, config.radius * 2, config.radius * 2, 0, 0);
+    // 贴图画布边长默认等于碰撞直径；需要「图比碰撞盒大一圈」（如 Boss 的伪足）时由 config.spriteSize 覆盖
+    const size = config.spriteSize || config.radius * 2;
+    super(config.sprite, size, size, 0, 0);
     this.type = type;
     this.radius = config.radius;   // 碰撞半径
     this.hp = config.hp;           // 当前血量
@@ -15,6 +17,7 @@ export default class Enemy extends Sprite {
     this.color = config.color;     // 显示颜色
     this.xpValue = config.xp;      // 击杀掉落经验（0 = 不掉经验）
     this.damage = config.damage;   // 接触玩家的伤害（远程怪同时是子弹伤害）
+    this.isBoss = !!config.boss;   // Boss 标记：HUD 血条、刷怪降速、图鉴文案都读它，来源和图鉴同源所以不会不一致
     this.isDead = false;
     // 远程怪专属字段（近战怪为 0，走默认追击逻辑）
     this.attackRange = config.attackRange || 0;  // 索敌距离，玩家进入后停下射击
@@ -54,8 +57,7 @@ export default class Enemy extends Sprite {
       this.y += (dy / dist) * this.speed * dt;
     }
 
-    this.x = Math.max(this.radius, Math.min(ARENA_W - this.radius, this.x));
-    this.y = Math.max(this.radius, Math.min(ARENA_H - this.radius, this.y));
+    clampToCoast(this, this.radius);
   }
 
   shoot(databus, nx, ny) {
@@ -64,12 +66,25 @@ export default class Enemy extends Sprite {
     databus.enemyBullets.push(bullet);
   }
 
+  // 受击结算的唯一入口：扣血 / 飘字 / 死亡标记。
+  // 减伤类机制（膜王的 EPS 膜）覆写这个方法，不要再去 bullet.js 里加特判
+  takeDamage(dmg, isCrit, databus) {
+    this.hp -= dmg;
+    databus.addDamageText(this.x, this.y - this.radius, dmg, isCrit);
+    if (this.hp <= 0) this.isDead = true;
+  }
+
+  // 贴图画布旋转角：子类可覆写（海火按身体自转角旋转贴图，而不是朝玩家）
+  spriteAngle() {
+    return SPRITE_ROTATES ? this.angle : 0;
+  }
+
   draw(ctx) {
     // 宝箱怪整体闪烁，提示「击杀必掉宝箱」
     const alpha = this.type === 'chest'
       ? 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 200))
       : 1;
-    if (!this.drawSprite(ctx, SPRITE_ROTATES ? this.angle : 0, alpha)) {
+    if (!this.drawSprite(ctx, this.spriteAngle(), alpha)) {
       if (this.type === 'chest') {
         ctx.globalAlpha = alpha;
         ctx.fillStyle = this.color;

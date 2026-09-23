@@ -11,7 +11,7 @@ import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } 
 import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import Chest from './npc/chest';
-import { canvasW, canvasH } from './consts';
+import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
 
 const databus = new DataBus();
@@ -124,6 +124,12 @@ export default class Main {
     for (let i = enemys.length - 1; i >= 0; i--) {
       const e = enemys[i];
       if (e.isDead) {
+        // 被膜王吃回孔口的菌群：不是击杀，不掉经验也不涨击杀数。
+        // 掉了经验就等于奖励玩家"让它回去"，回嵌这个机制会被自己的掉落表拆掉
+        if (e.absorbed) {
+          databus.removeEnemy(i);
+          continue;
+        }
         if (e.type === 'chest') {
           const chest = databus.pool.getItemByClass('chest', Chest);
           chest.init(e.x, e.y);
@@ -158,6 +164,19 @@ export default class Main {
       }
     }
 
+    // 激光与赤潮：伤害都在各自 update 内结算完，这里只做寿命回收
+    for (let i = databus.lasers.length - 1; i >= 0; i--) {
+      if (databus.lasers[i].isDestroyed) {
+        databus.removeLaser(i);
+      }
+    }
+
+    for (let i = databus.zones.length - 1; i >= 0; i--) {
+      if (databus.zones[i].isDestroyed) {
+        databus.removeZone(i);
+      }
+    }
+
     // 伤害飘字：到期回收
     for (let i = databus.damageTexts.length - 1; i >= 0; i--) {
       if (databus.damageTexts[i].isDestroyed) {
@@ -185,7 +204,7 @@ export default class Main {
 
   render() {
     ctx.clearRect(0, 0, canvasW, canvasH);
-    ctx.fillStyle = '#0d0d1a';
+    ctx.fillStyle = ABYSS.far; // 地图外 = 深渊底色，边缘沉水过渡见 js/arena/index.js
     ctx.fillRect(0, 0, canvasW, canvasH);
 
     if (databus.player) {
@@ -194,6 +213,8 @@ export default class Main {
 
     databus.camera.begin(ctx);
     databus.arena.draw(ctx, databus.camera);
+    for (const z of databus.zones) z.draw(ctx); // 赤潮和黏液都是地贴，压在所有实体下面；画在 arena 的裁切之外，黑水上照样亮
+    for (const l of databus.lasers) l.draw(ctx); // 同属地面层：满 5 道光束时五个光根会叠成一团奶白，压在实体之下才不会把 Boss 本体埋掉（玩家本来就画在光之上）
     for (const g of databus.xpGems) g.draw(ctx);
     for (const c of databus.chests) c.draw(ctx);
     for (const e of databus.enemys) e.draw(ctx);

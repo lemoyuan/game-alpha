@@ -23,6 +23,31 @@ export const GROUND = {
   speckle: '#42595C', // 斑点颜色：只比底色亮一档的暗青；旧的奶油白在深底上会看成经验宝石
 };
 
+// 海洋深渊边界：菌毯沿「不规则海岸线」沉入深水，海岸线同时是真实的运动边界
+// 曲线 = 基线内缩 + 三段正弦叠加（海湾+岬角），画法见 js/arena/coast.js 与 js/arena/index.js
+export const ABYSS = {
+  far: '#05080F',           // 深渊底色（main.js 的全屏底色）
+  deep: '#0E1A26',          // 贴岸深水色：分带从这里渐到 far
+  line: '#04070D',          // 海岸描边线：给曲线一个明确的贴纸边缘，替代旧红框；必须比 deep 明显暗才看得出岸在哪
+  foam: '#7FB4B0',          // 浪花线：压在描边内侧，亮度低、只点一条
+  rim: 150,                 // 岸内侧沉水带宽度：菌毯沿曲线逐渐压暗，走位时明暗跟着岸形走
+  outer: 130,               // 岸外侧海床带宽：deep → 深渊底色的分带
+  steps: 5,                 // 内外分带档数：档越多渐变越顺，每档一次描边，5 档是性能甜点
+  coast: {
+    base: 120,              // 海岸线平均内缩距离（离矩形边的距离）
+    waves: [
+      [46, 0.0032, 0.0],    // [振幅, 频率, 相位] 大湾：波长 ~2π/0.0032 ≈ 2000px，一圈正好两三个大海湾
+      [26, 0.0091, 1.3],    // 中岬：~700px 一个，走位借用的凸角主要来自这档
+      [12, 0.0210, 2.9],    // 小弯：~300px，让线不显得"电动"
+    ],                      // 三档振幅合计 84：内缩在 36~204 之间起伏；改大振幅更曲折，超过 100 会咬掉太多可玩区
+  },
+  motes: 40,                // 深渊气泡光点数量：沿海岸法线外漂，确定性布点，不存状态
+  moteRange: 260,           // 气泡离岸漂多远，同时是淡出全程
+  moteSpeed: 14,            // 气泡外漂速度（像素/秒）
+  moteAlpha: 0.22,          // 气泡最大不透明度（离岸越远越淡）
+  mote: '#4A6A7A',          // 气泡颜色：暗青灰，压得比怪物识别色低很多，不抢视线
+};
+
 export const PLAYER_SPRITE = 'images/entity/player_idle.png'; // 角色贴图：俯视持枪，按「枪口朝右（+x）」出图，运行时旋转到索敌方向
 export const PLAYER_RADIUS = 16;        // 角色碰撞半径
 export const PLAYER_SPRITE_SIZE = 42;   // 角色贴图显示边长（逻辑像素），与碰撞半径解耦；持枪横向剪影按宽缩放后身体偏小，靠这个值调大小
@@ -63,6 +88,8 @@ export const xpForLevel = (level) => Math.floor(XP_BASE * Math.pow(level, 1.3));
 export const CHEST_RADIUS = 12; // 宝箱拾取半径（宝箱怪刷新参数见 js/npc/monster/config.js）
 
 export const COMPANION_RADIUS = 8;           // 跟班碰撞半径
+export const COMPANION_SPRITE = 'images/entity/companion.png'; // 跟班贴图：中性粒细胞「小卫士」，正面朝上出图、运行时不旋转（和六只怪同一批语言；一张有脸的图转起来脸就朝天朝地了）
+export const COMPANION_SPRITE_SIZE = 22;     // 跟班贴图显示边长（逻辑像素），比碰撞半径 8 大一圈：伪足伸出去、判定仍收在体内，同海火/膜王的约定
 export const COMPANION_FOLLOW_DIST = 45;     // 跟班环绕距离
 export const COMPANION_ATK_SPEED = 1.5;      // 跟班攻速（次/秒），固定值，不随角色攻速升级变化
 export const COMPANION_BULLET_RADIUS = 3;    // 跟班子弹半径（小于主角）

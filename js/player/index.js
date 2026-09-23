@@ -10,6 +10,7 @@ import {
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
+import { clampToCoast } from '../arena/coast';
 
 export default class Player extends Sprite {
   constructor() {
@@ -32,6 +33,8 @@ export default class Player extends Sprite {
     this.companions = 0;                // 跟班数量（宝箱：跟班+1）
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
     this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
+    this.slowMult = 1;                  // 当前移速倍率（1 = 未被减速），由黏液洼写入 applySlow
+    this.slowLeft = 0;                  // 减速剩余毫秒数：离开黏液后还要拖一会儿才恢复，黏滞感来自这个尾巴
     this.dirX = 0;                      // 朝向X（跟随子弹方向）
     this.dirY = -1;                     // 朝向Y（跟随子弹方向）
     this.xp = 0;                        // 当前经验
@@ -40,16 +43,21 @@ export default class Player extends Sprite {
   }
 
   update(dt, databus) {
+    // 减速按 dt 走：和 Boss 的时间轴同一把尺，升级三选一面板开着时（main.js 跳过 update）自然冻结。
+    // 无敌帧用 Date.now() 是因为它是「伤害源的限流器」，不是持续时间，两者不要照抄彼此
+    this.slowLeft = Math.max(0, this.slowLeft - dt * 1000);
+    if (this.slowLeft === 0) this.slowMult = 1; // 归零必须复位倍率，否则下次只上弱黏液会继承旧的强值
+
     const dir = databus.joystick ? databus.joystick.getDirection() : { x: 0, y: 0 };
     let moveX = 0;
     let moveY = 0;
     if (dir.x !== 0 || dir.y !== 0) {
       moveX = dir.x;
       moveY = dir.y;
-      this.x += dir.x * this.speed * dt;
-      this.y += dir.y * this.speed * dt;
-      this.x = Math.max(this.radius, Math.min(ARENA_W - this.radius, this.x));
-      this.y = Math.max(this.radius, Math.min(ARENA_H - this.radius, this.y));
+      const v = this.effectiveSpeed();
+      this.x += dir.x * v * dt;
+      this.y += dir.y * v * dt;
+      clampToCoast(this, this.radius); // 停在海岸曲线上，凹角能真的卡住
     }
 
     const now = Date.now();
@@ -102,6 +110,18 @@ export default class Player extends Sprite {
     }
   }
 
+  // 黏液减速：重叠的池每帧都会调进来，所以只取最强的一片、绝不相乘，
+  // 否则两片 0.55 叠成 0.3 再叠成 0.17，玩家会被永久钉在场上
+  applySlow(mult, hold) {
+    if (this.slowLeft > 0) this.slowMult = Math.min(this.slowMult, mult);
+    else this.slowMult = mult;
+    this.slowLeft = Math.max(this.slowLeft, hold);
+  }
+
+  effectiveSpeed() {
+    return this.slowLeft > 0 ? this.speed * this.slowMult : this.speed;
+  }
+
   takeDamage(amount, now) {
     if (now < this.invincibleUntil) return;
     this.invincibleUntil = now + PLAYER_INVINCIBLE;
@@ -114,6 +134,8 @@ export default class Player extends Sprite {
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
   }
 
+  // 一次只结一级：面板关掉时 upgrade.js 会再调 addXp(0) 把溢出经验接着结算成下一张卡。
+  // 不要改成 while 循环——那等于一颗宝石白送好几次升级而不给对应的卡
   addXp(amount, databus) {
     this.xp += Math.floor(amount * (1 + this.luck * LUCK_XP_BONUS));
     const needed = xpForLevel(this.level);
@@ -165,6 +187,28 @@ export default class Player extends Sprite {
       ctx.beginPath();
       ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // 被黏液粘住的自查反馈：脚底一层暗膜 + 两滴往下拉丝。
+    // 动画按 slowLeft 走而不是按墙上时钟，减速一到就立刻停，不会留下挂着的假黏液
+    if (this.slowLeft > 0) {
+      const s = Math.min(1, this.slowLeft / 700);
+      const sag = 3 + 5 * s;
+      ctx.globalAlpha = 0.5 * s;
+      ctx.fillStyle = '#9BB08C'; // 象牙绿：黏液本来的颜色，压暗以免和杂兵的青绿识别色混在一起
+      ctx.beginPath();
+      ctx.ellipse(this.x, this.y + this.radius * 0.7, this.radius * 0.95, this.radius * 0.42, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#9BB08C';
+      ctx.lineWidth = 2.5;
+      for (let i = 0; i < 2; i++) {
+        const ox = (i ? 1 : -1) * this.radius * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(this.x + ox, this.y + this.radius * 0.6);
+        ctx.lineTo(this.x + ox * 1.15, this.y + this.radius * 0.6 + sag * (i ? 1 : 0.7));
+        ctx.stroke();
+      }
       ctx.globalAlpha = 1;
     }
 

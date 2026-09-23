@@ -2,6 +2,7 @@ import Sprite from '../base/sprite';
 import Bullet from './bullet';
 import {
   COMPANION_RADIUS, COMPANION_FOLLOW_DIST,
+  COMPANION_SPRITE, COMPANION_SPRITE_SIZE,
   COMPANION_BULLET_RADIUS, COMPANION_BULLET_COLOR,
   COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO,
   BULLET_RANGE_BUFFER,
@@ -9,7 +10,8 @@ import {
 
 export default class Companion extends Sprite {
   constructor(slot = 0) {
-    super(null, COMPANION_RADIUS * 2, COMPANION_RADIUS * 2, 0, 0);
+    // 显示尺寸与碰撞半径解耦：贴图比判定大一圈（伪足伸出去），和 Boss 贴图的约定一致
+    super(COMPANION_SPRITE, COMPANION_SPRITE_SIZE, COMPANION_SPRITE_SIZE, 0, 0);
     this.radius = COMPANION_RADIUS;
     this.slot = slot;
     this.x = 0;
@@ -68,6 +70,9 @@ export default class Companion extends Sprite {
   }
 
   draw(ctx) {
+    // angle 传 0：正面朝上出的图，不旋转（有脸的贴图一转就朝天朝地），射击方向由子弹表达
+    if (this.drawSprite(ctx)) return;
+    // 贴图还没加载完 → 回退到原来的纯色圆占位
     ctx.fillStyle = '#5dade2';
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);

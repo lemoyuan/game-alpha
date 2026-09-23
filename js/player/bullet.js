@@ -61,11 +61,7 @@ export default class Bullet extends Sprite {
             dmg = Math.floor(dmg * player.critMult);
             isCrit = true;
           }
-          e.hp -= dmg;
-          databus.addDamageText(e.x, e.y - e.radius, dmg, isCrit);
-          if (e.hp <= 0) {
-            e.isDead = true;
-          }
+          e.takeDamage(dmg, isCrit, databus);
           this.hitList.push(e);
           this.pierceLeft--;
           if (this.pierceLeft < 0) {

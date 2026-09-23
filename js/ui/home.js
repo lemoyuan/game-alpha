@@ -5,7 +5,7 @@ import { loadImage } from '../base/sprite';
 import { settings, saveSettings, records, formatTime } from '../storage';
 import {
   UI, FS, R_CARD, R_BTN,
-  sticker, button, iconButton, icon, label, stickerLabel, chip, badge, toggle, dish, wrapLines,
+  sticker, button, iconButton, icon, label, stickerLabel, chip, badge, toggle, dish, wrapLines, roundRect,
 } from './theme';
 
 const PAD = 14; // 页面左右安全边距，所有面板宽度都从这里推算
@@ -17,6 +17,7 @@ export default class HomeScreen {
     this.page = 'main'; // main | settings | codex | codexDetail | records
     this.codexType = null; // codexDetail 当前查看的怪物 type
     this.tapAreas = []; // 每帧绘制时重建的可点击区域
+    this.tapFx = null; // 最近一次点中的按钮矩形 + 时间戳，画按压/回弹反馈用
     this._onStart = null;
   }
 
@@ -34,7 +35,10 @@ export default class HomeScreen {
       const a = this.tapAreas[i];
       if (x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h) {
         if (settings.vibrate) wx.vibrateShort({ type: 'light' });
-        a.action();
+        // 动作延 80ms 再跑：立即执行的话页面马上切走，手指看不到按压反馈
+        this.tapFx = { x: a.x, y: a.y, w: a.w, h: a.h, t: Date.now() };
+        const action = a.action;
+        setTimeout(() => action(), 80);
         return;
       }
     }
@@ -42,6 +46,7 @@ export default class HomeScreen {
 
   goto(page) {
     this.page = page;
+    this.tapFx = null; // 回弹环锚在旧页按钮矩形上，切页后留着会飘在空白处
   }
 
   openCodex(type) {
@@ -72,6 +77,34 @@ export default class HomeScreen {
     else if (this.page === 'codexDetail') this.drawCodexDetail(ctx);
     else if (this.page === 'records') this.drawRecords(ctx);
     else this.drawMain(ctx);
+    this.drawTapFx(ctx);
+  }
+
+  // 点击反馈：0~90ms 按压（按钮内压一层半透明墨色），90~260ms 回弹（白色贴纸环外扩淡出）
+  drawTapFx(ctx) {
+    const fx = this.tapFx;
+    if (!fx) return;
+    const dt = Date.now() - fx.t;
+    if (dt > 260) {
+      this.tapFx = null;
+      return;
+    }
+    ctx.save();
+    if (dt < 90) {
+      ctx.globalAlpha = 0.2;
+      roundRect(ctx, fx.x + 3, fx.y + 3, fx.w - 6, fx.h - 6, R_BTN - 3);
+      ctx.fillStyle = UI.ink;
+      ctx.fill();
+    } else {
+      const k = (dt - 90) / 170;
+      const g = 3 + k * 9;
+      ctx.globalAlpha = 1 - k;
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = UI.sticker;
+      roundRect(ctx, fx.x - g, fx.y - g, fx.w + g * 2, fx.h + g * 2, R_BTN + g);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   drawMain(ctx) {
@@ -195,7 +228,7 @@ export default class HomeScreen {
         label(ctx, '尚未遭遇，进游戏里碰碰看', tx, cy + 14, { size: FS.tiny, color: UI.muted });
         return;
       }
-      const role = entry.type === 'boss1' ? 'Boss' : entry.appear;
+      const role = config.boss ? 'Boss' : entry.appear;
       label(ctx, `${config.name}（${role}）`, tx, y + 22, { size: FS.body, bold: true, color: UI.textOnLight });
       label(ctx, config.group, tx, y + 38, { size: FS.tiny, color: UI.blue });
       label(ctx, `血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + 54, {
@@ -227,7 +260,7 @@ export default class HomeScreen {
     label(ctx, unlocked ? config.name : '未知怪物', tx, start + 32, { size: FS.h2, bold: true, color: UI.textOnLight });
     label(ctx, unlocked ? config.latin : '???', tx, start + 50, { size: FS.small, color: UI.blue });
     label(ctx, unlocked ? config.group : '尚未遭遇', tx, start + 68, { size: FS.tiny, color: UI.muted });
-    chip(ctx, tx, start + 78, 118, 22, `出现：${entry.type === 'boss1' ? 'Boss 定时' : entry.appear}`, {
+    chip(ctx, tx, start + 78, 118, 22, `出现：${config.boss ? 'Boss 定时' : entry.appear}`, {
       color: unlocked ? UI.gold : UI.panelDeep, size: FS.tiny,
     });
 
