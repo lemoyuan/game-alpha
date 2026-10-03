@@ -5,7 +5,7 @@ import BossFilm from './bossFilm';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   HP_SCALE_TIME, HP_SCALE_MULT,
-  CHEST_SPAWN_INTERVAL, CHEST_FIRST_SPAWN,
+  CHEST_ROLL_INTERVAL, CHEST_FIRST_ROLL, CHEST_PITY, chestChance,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
   BOSS_SPAWN_INTERVAL_MULT,
   BOSS_SCHEDULE, BOSS_RESPAWN_GAP,
@@ -17,13 +17,14 @@ import { markEncountered } from '../../storage';
 // config 反过来 import 类就成环，ES Module 下会解析出 undefined class
 const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm };
 
-// 刷怪控制器：普通怪随时间加密，宝箱怪按固定间隔出现，Boss 定时出场
+// 刷怪控制器：普通怪随时间加密，宝箱怪按幸运值的概率刷新，Boss 定时出场
 export default class Spawner {
   constructor() {
     this.timer = 0;
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
-    this.chestTimer = 0;
+    this.chestRollT = 0;      // 距上次「掷骰」累计的毫秒，满 CHEST_ROLL_INTERVAL 掷一次
+    this.chestSinceLast = 0;  // 距上次真正刷出金匣累计的毫秒 —— 保底计数器，满 CHEST_PITY 强制刷一只
     this.bossIndex = 0; // BOSS_SCHEDULE 读到第几条，出场即自增
     this.bossRest = 0;  // 场上没有 Boss 时累计的毫秒数：Boss 之间的冷却
   }
@@ -32,7 +33,8 @@ export default class Spawner {
     this.timer = 0;
     this.interval = SPAWN_INTERVAL_START;
     this.elapsed = 0;
-    this.chestTimer = 0;
+    this.chestRollT = 0;
+    this.chestSinceLast = 0;
     this.bossIndex = 0;
     this.bossRest = 0;
   }
@@ -40,7 +42,6 @@ export default class Spawner {
   update(dt, databus) {
     this.elapsed += dt;
     this.timer += dt * 1000;
-    this.chestTimer += dt * 1000;
 
     // 普通怪刷新间隔：开局3秒1只，随时间逐渐压缩到下限0.5秒
     this.interval = Math.max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_START - this.elapsed * SPAWN_INTERVAL_RAMP);
@@ -54,9 +55,23 @@ export default class Spawner {
       this.spawn(databus);
     }
 
-    if (this.elapsed > CHEST_FIRST_SPAWN && this.chestTimer >= CHEST_SPAWN_INTERVAL) {
-      this.chestTimer = 0;
-      this.spawn(databus, 'chest');
+    // 宝箱怪：按幸运概率刷新，每秒掷一次骰，60 秒没中就强制刷一只（保底）
+    // ★掷骰挂在自己那条 1 秒计时器上，绝不挂到上面的普通刷怪事件里：
+    //   普通怪间隔会从 2500 毫秒压到 450，按事件掷骰等于幸运随时间自动变强 4.4 倍，概率曲线当场作废
+    // ★也绝不放进 Boss 降速门：Boss 战期间密度会砍一半，而那恰恰是最需要金匣兑现的时段，
+    //   等于让幸运在整局最关键的 30 秒里失效
+    if (this.elapsed > CHEST_FIRST_ROLL) {
+      this.chestRollT += dt * 1000;
+      this.chestSinceLast += dt * 1000;
+      const p = chestChance(databus.player ? databus.player.luck : 0);
+      while (this.chestRollT >= CHEST_ROLL_INTERVAL) {
+        this.chestRollT -= CHEST_ROLL_INTERVAL; // ★减不是清零：一帧跨两次掷骰时不能白丢一次
+        if (Math.random() < p || this.chestSinceLast >= CHEST_PITY) {
+          this.chestSinceLast = 0;
+          this.spawn(databus, 'chest');
+          break; // 已经刷出，本帧剩下的骰没有意义
+        }
+      }
     }
 
     // Boss 出场表逐条走：到点 + 场上没 Boss 且已冷却够久才刷下一只

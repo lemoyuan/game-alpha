@@ -382,7 +382,7 @@ export default class BossFilm extends Enemy {
   /**
    * 受击结算：全项目唯一一个带减伤的覆写。
    * ★侵蚀必须按【原始伤害】算，和减伤解耦：否则减伤会把侵蚀也一起减掉，膜永远破不开（软锁）。
-   *   破满膜固定需要 filmMax ÷ filmBurn = 1000 点原始伤害，与玩家 build 无关。
+   *   破满膜固定需要 filmMax ÷ filmBurn = 2000 点原始伤害，与玩家 build 无关。
    * 减伤比例按膜厚线性折算（不是"有膜就满额"）：1 点膜也吃 68% 减伤是在撒谎，
    * 而且会让 filmRecover 那条自分泌底线变成一堵墙。
    */

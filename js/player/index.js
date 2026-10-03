@@ -5,7 +5,7 @@ import {
   PLAYER_MUZZLE_LEN, PLAYER_MUZZLE_FLASH,
   PLAYER_ATK, PLAYER_DEF, PLAYER_ATTACK_RANGE, PLAYER_ATTACK_CD,
   PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
-  PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK, LUCK_XP_BONUS,
+  PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK,
   BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
   POISON_TICK,
@@ -29,7 +29,7 @@ export default class Player extends Sprite {
     this.atkSpeed = 1;                  // 攻速 = 每秒射击次数，1.0 = 1秒1发（升级项 +0.3次）
     this.critRate = PLAYER_CRIT_RATE;   // 暴击率 0~1（升级项 +10%，每级自动 +2%）
     this.critMult = PLAYER_CRIT_MULT;   // 暴击伤害倍数
-    this.luck = PLAYER_LUCK;            // 幸运值，每点+2%经验获取（升级项：幸运值）
+    this.luck = PLAYER_LUCK;            // 幸运值，每点提高金匣刷新概率（升级项：幸运值；曲线在 config.js 的 chestChance）
     this.bulletCount = 1;               // 每轮子弹数（宝箱：子弹数+1）
     this.pierce = 0;                    // 子弹可穿透敌人数（宝箱：子弹穿透+1）
     this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
@@ -169,7 +169,7 @@ export default class Player extends Sprite {
   // 一次只结一级：面板关掉时 upgrade.js 会再调 addXp(0) 把溢出经验接着结算成下一张卡。
   // 不要改成 while 循环——那等于一颗宝石白送好几次升级而不给对应的卡
   addXp(amount, databus) {
-    this.xp += Math.floor(amount * (1 + this.luck * LUCK_XP_BONUS));
+    this.xp += amount;
     const needed = xpForLevel(this.level);
     if (this.xp >= needed) {
       this.xp -= needed;

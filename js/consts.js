@@ -63,8 +63,7 @@ export const PLAYER_INVINCIBLE = 1000;   // 受击后无敌时间（毫秒）
 export const POISON_TICK = 500;         // 中毒每跳一次伤害的间隔（毫秒）。★故意不复用上面那条无敌帧：无敌帧是「一次撞击」的限流器，毒素是挂在身上的状态，走那条路就会被别的伤害源白吃掉结算（赤潮池原来正是这么变成摆设的）
 export const PLAYER_CRIT_RATE = 0;   // 初始暴击率（升级项：暴击率 +10%）
 export const PLAYER_CRIT_MULT = 1.5;      // 暴击伤害倍数
-export const PLAYER_LUCK = 0;           // 初始幸运值（升级项：幸运值 +1）
-export const LUCK_XP_BONUS = 0.02;      // 每点幸运增加的经验获取比例
+export const PLAYER_LUCK = 0;           // 初始幸运值（升级项：幸运值 +1）：每点提高金匣刷新概率，曲线见 js/npc/monster/config.js 的 chestChance
 
 export const BULLET_SPEED = 600;        // 子弹飞行速度
 export const BULLET_RADIUS = 5;         // 主角子弹半径（跟班子弹见 COMPANION_BULLET_RADIUS）

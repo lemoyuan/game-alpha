@@ -153,7 +153,10 @@ prepareCopy(SRC, COPY);
 
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
-const { BOSS_CHESTS, BOSS_XP_GEMS } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
+const {
+  BOSS_CHESTS, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
+  CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
+} = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -182,9 +185,26 @@ let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就�
 let maxPets = 0;
 const colonySeen = new Set(); // 按对象身份数菌群：小怪会被回收复用，只有 home 能把它和杂兵区分开
 
+// 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
+// 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
+const LUCK = Number(process.env.LUCK || 0);
+const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
+
+// 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
+// player.kills 又不区分怪种。委托式包装保留原行为，只加一次记录
+{
+  const spawner = databus.spawner;
+  const origSpawn = Object.getPrototypeOf(spawner).spawn;
+  spawner.spawn = (db, forceType) => {
+    if (forceType === 'chest') chestStamps.push(db.spawner.elapsed);
+    return origSpawn.call(spawner, db, forceType);
+  };
+}
+
 for (let i = 0; i < frames; i++) {
   const p = databus.player;
   if (p) p.hp = p.maxHp;
+  if (p) p.luck = LUCK; // 金匣概率是幸运的单变量函数，钉住它才谈得上量间隔
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
   // 留着它会给后面三场 Boss 战额外垫真实 DPS，把 film breaks 这条基线改掉
@@ -269,6 +289,40 @@ for (let i = 0; i < frames; i++) {
   }
 }
 
+// —— 金匣概率刷新：先查纯函数，再查实场 ——
+// 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
+const CURVE_POINTS = [0, 1, 2, 3, 4, 6, 10];
+// 边际检查必须逐 1 级取样：一张卡 = 幸运 +1，跨两级的采样点（4→6）差值天然更大，
+// 拿混用步长的差值比大小会把饱和曲线误报成「越堆越值」
+const MARGINAL_POINTS = [];
+for (let l = 0; l <= 12; l++) MARGINAL_POINTS.push(l);
+const marginal = MARGINAL_POINTS.map((l) => chestChance(l));
+for (let i = 1; i < marginal.length; i++) {
+  if (!(marginal[i] > marginal[i - 1])) errors.push(`chestChance 在幸运 ${i} 处不再单调递增`);
+  const d = marginal[i] - marginal[i - 1];
+  if (i > 1 && d > marginal[i - 1] - marginal[i - 2] + 1e-12) {
+    errors.push(`chestChance 的边际收益在幸运 ${i} 处变大：曲线不是饱和形，幸运会变成越堆越值`);
+  }
+}
+const curve = CURVE_POINTS.map((l) => chestChance(l));
+if (!(curve[curve.length - 1] < CHEST_CHANCE_BASE + CHEST_CHANCE_EXTRA + 1e-12)) {
+  errors.push('chestChance 撞上或超过了 BASE+EXTRA 这条顶，幸运上限失去意义');
+}
+
+const chestGaps = [];
+for (let i = 1; i < chestStamps.length; i++) chestGaps.push(chestStamps[i] - chestStamps[i - 1]);
+const worstGap = chestGaps.length ? Math.max(...chestGaps) : 0;
+const avgGap = chestGaps.length ? chestGaps.reduce((a, b) => a + b, 0) / chestGaps.length : 0;
+// 掷骰粒度是 1 秒，所以保底触发时的真实间隔允许比 CHEST_PITY 多出这个零头
+const gapCeiling = CHEST_PITY / 1000 + 1.5;
+if (!chestStamps.length) errors.push(`${seconds}s 内一只金匣都没刷出：概率那条路径根本没跑`);
+if (chestStamps[0] < CHEST_FIRST_ROLL) {
+  errors.push(`金匣在第 ${chestStamps[0].toFixed(1)}s 就出现了，早于首次掷骰 ${CHEST_FIRST_ROLL}s`);
+}
+if (worstGap > gapCeiling) {
+  errors.push(`金匣最大间隔 ${worstGap.toFixed(1)}s 超过保底上限 ${gapCeiling}s：CHEST_PITY 没在兜，概率制会留下空窗体感`);
+}
+
 console.log('---');
 console.log('drawn textures:', [...drawnSrc].sort().join(', ') || '(none)');
 console.log('player texture:', playerSpriteSrc, '| rotate calls:', rotateCalls, '| muzzle flash:', sawFlash);
@@ -277,6 +331,10 @@ console.log('peak film:', filmPeak, '| film breaks:', filmBreaks, '| colonies:',
 console.log('slowed frames:', slowFrames, 'of', frames);
 console.log('poisoned frames:', poisonFrames, '| poison ticks:', poisonTicks);
 console.log('boss drops:', bossDrops, '| pet granted:', sawPet ? 'yes' : 'NO', '| peak pets:', maxPets);
+console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
+  '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
+  '| first:', chestStamps.length ? chestStamps[0].toFixed(1) + 's' : '-');
+console.log('chest chance:', CURVE_POINTS.map((l, i) => `${l}→${(curve[i] * 100).toFixed(2)}%/${chestExpectedSeconds(l).toFixed(1)}s`).join(' '));
 console.log('non-finite ctx args:', nonFinite, '| errors:', errors.length);
 if (errors.length) console.log(errors.slice(0, 10).join('\n'));
 process.exit(errors.length ? 1 : 0);

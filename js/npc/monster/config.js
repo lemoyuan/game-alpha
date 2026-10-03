@@ -5,7 +5,7 @@
 // 字段说明：name/latin/group/intro/fact=图鉴展示用（外号 / 学名 / 分类阶元 / 一句话机制 / 一句真实冷知识）
 //           hp=血量 speed=移速 radius=碰撞半径 color=颜色 sprite=贴图路径
 //           xp=击杀掉落经验值 damage=接触玩家的伤害（碰到就结算，无攻击间隔）
-//           weight=刷新权重（越大越常见，宝箱怪固定间隔刷新，不参与权重）
+//           weight=刷新权重（越大越常见；宝箱怪不吃权重，由幸运值决定刷新概率，见文件末尾的 CHEST_* 段）
 // 注意：color 是「识别色」，玩家靠颜色分辨怪类型，优先级高于真实配色；不符时在图鉴里说明
 // 远程怪专属字段：attackRange=索敌距离 attackCd=射击间隔(毫秒)
 //                bulletSpeed/bulletRadius/bulletColor=怪物子弹参数
@@ -40,7 +40,7 @@ export const MONSTER_TYPES = {
   }, // 紫色为识别色，用来强调「硬壳不好打」；真实金葡菌培养后是金黄色菌落
   chest:  {
     name: '金匣', latin: 'Plasmid', group: '细菌 · 染色体外环状 DNA',
-    intro: '闪着金的匣子，击杀必掉宝箱（不掉经验）',
+    intro: '闪着金的匣子，击杀必掉宝箱（不掉经验）；幸运越高出现越勤',
     fact: '质粒是细菌之间的 U 盘：靠一根性菌毛直接插进另一个细胞，甚至跨物种写入。耐药基因就是这么在菌群里传开的。你从宝箱里拿到的增益，本质是别人上传的一份基因。',
     hp: 25, speed: 55,  radius: 16, color: '#f39c12', xp: 0,  damage: 4,
     sprite: 'images/entity/mob_chest.png',
@@ -294,9 +294,47 @@ for (const kinds of Object.values(BOSS_CHESTS)) {
 export const HP_SCALE_TIME = 90;      // 该秒数后所有怪物血量提升
 export const HP_SCALE_MULT = 1.5;     // 血量提升倍数
 
-// 宝箱怪刷新
-export const CHEST_SPAWN_INTERVAL = 25000; // 宝箱怪刷新间隔（毫秒）
-export const CHEST_FIRST_SPAWN = 15;       // 首个宝箱怪出现时间（秒）
+// 宝箱怪刷新：概率制，幸运值是这条概率的唯一起点
+// 旧制是固定 25 秒一只（CHEST_SPAWN_INTERVAL = 25000），那张「幸运值 +1」的卡在当时等于不存在
+export const CHEST_ROLL_INTERVAL = 1000;  // 掷骰间隔（毫秒）。★定的是【真实时间】而不是【刷怪事件】：
+                                          //   普通怪间隔会从 2500 毫秒一路压到 450（spawner 的 interval ramp），
+                                          //   改成「每刷一只怪掷一次」等于幸运随时间自动变强 4.4 倍，曲线当场作废
+export const CHEST_FIRST_ROLL = 5;        // 首次掷骰时间（秒）。旧的 CHEST_FIRST_SPAWN = 15 是被 25 秒间隔盖住的死门，
+                                          //   从没真正生效过；现在它是真的会生效
+export const CHEST_CHANCE_BASE = 0.04;    // ★0 幸运时的每秒概率 = 1/25，也就是旧制的「25 秒一只」。
+                                          //   这条是「不吃幸运的那批玩家不许被系统性削弱」的锚，动它就是在改全体金匣产量
+export const CHEST_CHANCE_EXTRA = 0.04;   // 幸运能买到的概率增量上限：概率最高到 BASE+EXTRA = 8% → 12.4 秒一只 ≈ 0 幸运的 1.8 倍。
+                                          //   再往上（0.06 → 2.2 倍 / 0.08 → 2.8 倍）会让金匣近乎常驻，把「开出宝箱」的稀有感冲淡
+export const CHEST_CHANCE_HALF = 3;       // ★半程点：幸运 3 时恰好吃到 EXTRA 的一半。
+                                          //   3~5 是真实贪心 build 会停下来的区间；抬到 8 以上等于把收益平摊给没人会点的幸运，
+                                          //   前几张卡就没了「一拿就感觉到」的手感
+export const CHEST_PITY = 60000;          // 保底：连续 60 秒没掷中就直接刷一只。纯保险，不是机制的一部分
+                                          //   ——0 幸运时它只截掉 8.6% 的长尾、满幸运只截 0.7%。
+                                          //   ★删掉它就会留下「这局一分钟没匣子」的体感，概率制必须配保底才敢上
+                                          //   想精确回到旧节奏（0 幸运 = 25 秒）把它提到 90000；现在是 22.8 秒，比旧制快 9%
+
+/**
+ * 幸运值 → 金匣刷新概率（每秒）。
+ * 形状抄 LoL 的冷却缩减：CDR = h ÷ (100 + h)，即饱和双曲线 EXTRA × luck ÷ (HALF + luck)。
+ * 过了半程点之后，每多堆一倍幸运只再吃掉剩余空间的一半 —— 实测第 1 张卡省 3.7 秒、
+ * 第 2 张 1.8、第 3 张 1.0、第 4 张 0.7，幸运 6+ 基本没感觉，且永远撞不到 BASE+EXTRA 这条顶。
+ */
+export function chestChance(luck) {
+  const l = luck > 0 ? luck : 0; // 负数/undefined 都不许把概率压到 BASE 以下
+  return CHEST_CHANCE_BASE + CHEST_CHANCE_EXTRA * l / (CHEST_CHANCE_HALF + l);
+}
+
+/**
+ * 幸运值 → 预期间隔（秒），给注释、调试和未来 UI 用。
+ * ★不能直接写 1 ÷ p：保底把长尾砍了，几何分布被截断后的期望是 (1 - (1-p)^N) ÷ p，
+ *   N = CHEST_PITY ÷ CHEST_ROLL_INTERVAL = 60 次掷骰。用 1/p 会把间隔系统性算长。
+ * 实测：0 幸运 22.8 秒 / 1 → 19.1 / 2 → 17.3 / 3 → 16.3 / 4 → 15.6 / 10 → 14.0，顶 12.4 秒。
+ */
+export function chestExpectedSeconds(luck) {
+  const p = chestChance(luck);
+  const rolls = CHEST_PITY / CHEST_ROLL_INTERVAL;
+  return (1 - Math.pow(1 - p, rolls)) / p * (CHEST_ROLL_INTERVAL / 1000);
+}
 
 // 图鉴展示顺序 + 出现条件文案（首页怪物图鉴读取这里）
 export const CODEX_ORDER = [
@@ -304,7 +342,7 @@ export const CODEX_ORDER = [
   { type: 'fast', appear: `${FAST_UNLOCK_TIME} 秒后` },
   { type: 'tank', appear: `${TANK_UNLOCK_TIME} 秒后` },
   { type: 'ranged', appear: `${RANGED_UNLOCK_TIME} 秒后（低权重）` },
-  { type: 'chest', appear: `${CHEST_FIRST_SPAWN} 秒后，每 ${CHEST_SPAWN_INTERVAL / 1000} 秒` },
+  { type: 'chest', appear: '幸运越高越勤' },
   { type: 'boss1', appear: `${BOSS_FIRST_SPAWN_TIME} 秒定时出场` },
   { type: 'boss2', appear: `${BOSS_SECOND_SPAWN_TIME} 秒定时出场` },
   { type: 'boss3', appear: `${BOSS_THIRD_SPAWN_TIME} 秒定时出场` },
