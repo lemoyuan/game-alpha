@@ -105,6 +105,8 @@ export default class Hud {
         { icon: 'pierce', label: '穿透', value: player.pierce, color: UI.gold },
         { icon: 'bubble', label: '护盾', value: player.shield, color: UI.gold },
         { icon: 'buddy', label: '跟班', value: player.companions, color: UI.gold },
+        // 颜色保持金：这一列的 UI.gold 是「宝箱道具」的类别色，不是效果元素色，改成橙会和其余五条不同类
+        { icon: 'flame', label: '燃烧子弹', value: player.burnBullets, color: UI.gold },
         // 这一条是实际像素距离不是次数：开几个匣子都直接看磁吸有多大
         { icon: 'magnet', label: '拾取范围', value: player.pickupRange, color: UI.gold },
       ],

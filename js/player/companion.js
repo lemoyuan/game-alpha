@@ -5,7 +5,7 @@ import {
   COMPANION_SPRITE, COMPANION_SPRITE_SIZE,
   COMPANION_BULLET_RADIUS, COMPANION_BULLET_COLOR,
   COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO,
-  BULLET_RANGE_BUFFER,
+  BULLET_RANGE_BUFFER, BURN_DMG,
 } from '../consts';
 
 export default class Companion extends Sprite {
@@ -65,6 +65,9 @@ export default class Companion extends Sprite {
       bullet.color = COMPANION_BULLET_COLOR;
       bullet.maxRange = player.attackRange + BULLET_RANGE_BUFFER;
       bullet.pierceLeft = player.pierce;
+      // 跟班继承主人的燃烧层数：多带跟班只提高「燃烧覆盖率」，不会提高每跳伤害——
+      // 因为燃烧只刷新时长不叠伤害，这是「只刷时间」那条规则的必然推论，不是漏洞
+      bullet.burnDamage = player.burnBullets * BURN_DMG;
       databus.bullets.push(bullet);
     }
   }

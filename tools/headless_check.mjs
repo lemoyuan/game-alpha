@@ -157,6 +157,9 @@ const {
   BOSS_CHESTS, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
+const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
+const { BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX } = await import(fileUrl(path.join(COPY, 'consts.js')));
+const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -184,10 +187,19 @@ let bossDrops = 0;   // Boss 死亡掉落结算次数
 let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就一直是 false）
 let maxPets = 0;
 const colonySeen = new Set(); // 按对象身份数菌群：小怪会被回收复用，只有 home 能把它和杂兵区分开
+let burnTicks = 0;      // 燃烧跳血次数（按飘字颜色识别，比逐帧比对时钟可靠）
+let burnDmg = 0;        // 燃烧累计造成的伤害
+let maxBurning = 0;     // 同屏燃烧怪数峰值
+let maxTexts = 0;       // 飘字并发峰值：用来判 DAMAGE_TEXT_MAX 这道闸够不够宽
+let totalTexts = 0;     // 飘字请求总量：suppressed 只有对着这个分母才读得出严不严
+let suppressedTexts = 0; // 被上限吃掉的飘字数
 
 // 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
 // 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
 const LUCK = Number(process.env.LUCK || 0);
+// 燃烧层数同样钉死，理由和幸运一样：金匣现在六种里就有燃烧，不钉住两组跑的是两种随机 build。
+// ★默认 0 时子弹根本不会调 applyBurn，所以 BURN=0 那次必须与改动前的基线逐字一致——这就是「新代码零副作用」的证明
+const BURN = Number(process.env.BURN || 0);
 const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
 
 // 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
@@ -201,10 +213,31 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   };
 }
 
+// 跳血按飘字颜色认领：燃烧是唯一带 UI.burn 的伤害源，比逐帧比对时钟可靠（重新挂上时时钟会被归位）
+{
+  const dbProto = Object.getPrototypeOf(databus);
+  const origAdd = dbProto.addDamageText;
+  dbProto.addDamageText = function (x, y, damage, isCrit, color) {
+    if (color === UI.burn) { burnTicks++; burnDmg += damage; }
+    const before = this.damageTexts.length;
+    origAdd.call(this, x, y, damage, isCrit, color);
+    // 不区分来源：白字被顶掉同样要紧，peak 撞到上限就说明这道闸在吃玩家该看到的数字
+    totalTexts++;
+    if (this.damageTexts.length === before) suppressedTexts++;
+  };
+}
+
 for (let i = 0; i < frames; i++) {
   const p = databus.player;
   if (p) p.hp = p.maxHp;
   if (p) p.luck = LUCK; // 金匣概率是幸运的单变量函数，钉住它才谈得上量间隔
+  // 燃烧层数不能照抄 luck 那种「每帧顶部赋值」：金匣的 player[key] += step 就发生在同一帧的
+  // chests.update 里、排在 player.update 之前，赋值会漏出一帧。漏出不要紧，燃烧能在怪身上烧满 5 秒，
+  // 实测就是 BURN=0 也量到 20 次跳血。这里装个吞掉写入的访问器，把层数钉成单变量
+  if (p && !p.__burnPinned) {
+    p.__burnPinned = true;
+    Object.defineProperty(p, 'burnBullets', { configurable: true, get: () => BURN, set: () => {} });
+  }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
   // 留着它会给后面三场 Boss 战额外垫真实 DPS，把 film breaks 这条基线改掉
@@ -246,6 +279,10 @@ for (let i = 0; i < frames; i++) {
     colonySeen.add(e);
   }
   if (colonies > maxColonies) maxColonies = colonies;
+  let burning = 0;
+  for (const e of databus.enemys) if (e.burnLeft > 0) burning++;
+  if (burning > maxBurning) maxBurning = burning;
+  if (databus.damageTexts.length > maxTexts) maxTexts = databus.damageTexts.length;
   if (p && p.slowLeft > 0) slowFrames++;
   // 中毒：本测试台每帧把 hp 回满，所以这里量不到掉血量，只证明状态挂上、跳血在跑
   if (p) {
@@ -285,7 +322,7 @@ for (let i = 0; i < frames; i++) {
     console.log(`t=${(i * DT).toFixed(0)}s lvl=${p && p.level} enemies=${databus.enemys.length} kills=${p && p.kills}`
       + ` boss=${b ? b.type : '-'}${b && b.state ? ':' + b.state : ''}`
       + ` film=${b && b.film !== undefined ? Math.round(b.film) : '-'}`
-      + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length}`);
+      + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`);
   }
 }
 
@@ -323,6 +360,58 @@ if (worstGap > gapCeiling) {
   errors.push(`金匣最大间隔 ${worstGap.toFixed(1)}s 超过保底上限 ${gapCeiling}s：CHEST_PITY 没在兜，概率制会留下空窗体感`);
 }
 
+// —— 燃烧节拍纯检：这条才是「5 秒 / 每 0.5 秒掉 1 血 / 每层 +1」的真凭据，不受 RNG 和 build 影响。
+//   实场那一遍只用来证明「接线真的通了」，量不准节拍（怪会死、会有膜王减伤）
+function burnRun(stacks, reHitAt) {
+  let ticks = 0;
+  let dmg = 0;
+  let maxTick = 0;
+  const fake = {
+    isDead: false, hp: 1e9, x: 0, y: 0, radius: 10,
+    burnLeft: 0, burnTickLeft: BURN_TICK, burnDamage: 0,
+    // updateBurn 把 databus 透传给 takeDamage，这里自当成 databus：假怪不需要飘字和掉落
+    takeDamage(d) { ticks++; dmg += d; if (d > maxTick) maxTick = d; },
+  };
+  Enemy.prototype.applyBurn.call(fake, stacks * BURN_DMG, BURN_HOLD);
+  const dt = 1 / 60;
+  for (let i = 1; i * dt <= 12; i++) {
+    if (reHitAt !== undefined && Math.abs(i * dt - reHitAt) < dt / 2) {
+      Enemy.prototype.applyBurn.call(fake, stacks * BURN_DMG, BURN_HOLD);
+    }
+    Enemy.prototype.updateBurn.call(fake, dt, fake);
+  }
+  return { ticks, dmg, maxTick, left: fake.burnLeft };
+}
+const expectTicks = Math.round(BURN_HOLD / BURN_TICK);
+const burn1 = burnRun(1);
+const burn3 = burnRun(3);
+const burnRefresh = burnRun(1, 3); // 第 3 秒再命中一次
+if (burn1.ticks !== expectTicks) {
+  errors.push(`一次完整燃烧跳了 ${burn1.ticks} 下，应为 ${expectTicks} 下（BURN_HOLD ÷ BURN_TICK）：节拍口径和用户说的「5 秒每 0.5 秒」不符`);
+}
+if (burn1.dmg !== expectTicks * BURN_DMG) {
+  errors.push(`1 层燃烧一轮 ${burn1.dmg} 点伤害，应为 ${expectTicks * BURN_DMG}`);
+}
+if (burn3.dmg !== expectTicks * 3 * BURN_DMG) {
+  errors.push(`3 层燃烧一轮 ${burn3.dmg} 点伤害，应为 ${expectTicks * 3 * BURN_DMG}：每多一个道具每跳 +1 没生效`);
+}
+if (burn1.left !== 0) errors.push('燃烧跑完 burnLeft 没归零，火苗会一直挂在怪身上');
+if (burnRefresh.maxTick !== BURN_DMG) {
+  errors.push(`中途再命中一次后单跳最大 ${burnRefresh.maxTick} 点（应为 ${BURN_DMG}）：燃烧在乘算，不是只刷时间`);
+}
+if (!(burnRefresh.ticks > burn1.ticks)) {
+  errors.push(`中途再命中没有延长燃烧（${burnRefresh.ticks} 跳 ≤ ${burn1.ticks} 跳）：刷新那条路没接上`);
+}
+if (BURN === 0 && burnTicks > 0) {
+  errors.push(`零层燃烧却量到 ${burnTicks} 次跳血：子弹的 burnDamage=0 那道门没关掉，改动动了基线`);
+}
+if (BURN > 0 && burnTicks === 0) {
+  errors.push(`燃烧 ${BURN} 层却一次跳血都没量到：子弹没带上燃烧，或 applyBurn/updateBurn 有一条没接上`);
+}
+if (totalTexts && suppressedTexts / totalTexts > 0.1) {
+  errors.push(`飘字上限太紧：${(suppressedTexts / totalTexts * 100).toFixed(1)}% 的伤害数字被 DAMAGE_TEXT_MAX 吃掉，热闹时段玩家会看到普攻掉数字`);
+}
+
 console.log('---');
 console.log('drawn textures:', [...drawnSrc].sort().join(', ') || '(none)');
 console.log('player texture:', playerSpriteSrc, '| rotate calls:', rotateCalls, '| muzzle flash:', sawFlash);
@@ -335,6 +424,10 @@ console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
   '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
   '| first:', chestStamps.length ? chestStamps[0].toFixed(1) + 's' : '-');
 console.log('chest chance:', CURVE_POINTS.map((l, i) => `${l}→${(curve[i] * 100).toFixed(2)}%/${chestExpectedSeconds(l).toFixed(1)}s`).join(' '));
+console.log('burn (stacks=' + BURN + '):', burnTicks, 'ticks /', burnDmg, 'dmg | peak burning:', maxBurning,
+  '| pure cadence: 1层=' + burn1.ticks + '跳·' + burn1.dmg + '血, 3层=' + burn3.dmg + '血, 中途补枪=' + burnRefresh.ticks + '跳·单跳最大' + burnRefresh.maxTick);
+console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,
+  `(${totalTexts ? (suppressedTexts / totalTexts * 100).toFixed(1) : '0.0'}%)`);
 console.log('non-finite ctx args:', nonFinite, '| errors:', errors.length);
 if (errors.length) console.log(errors.slice(0, 10).join('\n'));
 process.exit(errors.length ? 1 : 0);

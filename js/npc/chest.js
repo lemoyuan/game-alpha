@@ -6,11 +6,13 @@ import { CHEST_GRANTS } from './chestGrant';
 
 // key 必须与 player 的属性名一致（companions 为复数）。step = 每次开匣涨多少：计数型都是 1，
 // 拾取范围涨的是像素（+1 等于没加），所以加成值一律写在 consts.js 里由这里引用
+// ★每加一种就是把六种摊平：出货率从原来的 20% 掉到 16.7%，这是「进普通金匣池」这条路要付的代价
 const BONUSES = [
   { key: 'bulletCount', step: 1, label: '子弹数 +1' },
   { key: 'pierce', step: 1, label: '子弹穿透 +1' },
   { key: 'shield', step: 1, label: '护盾 +1' },
   { key: 'companions', step: 1, label: '跟班 +1' },
+  { key: 'burnBullets', step: 1, label: '燃烧子弹 +1' },
   { key: 'pickupRange', step: XP_PICKUP_STEP, label: `经验拾取范围 +${XP_PICKUP_STEP}` },
 ];
 

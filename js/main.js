@@ -246,7 +246,9 @@ export default class Main {
     for (const l of databus.lasers) l.draw(ctx); // 同属地面层：满 5 道光束时五个光根会叠成一团奶白，压在实体之下才不会把 Boss 本体埋掉（玩家本来就画在光之上）
     for (const g of databus.xpGems) g.draw(ctx);
     for (const c of databus.chests) c.draw(ctx);
-    for (const e of databus.enemys) e.draw(ctx);
+    // 火苗紧跟在每只怪自身画完之后：四个 Boss 子类都覆写了 draw、super.draw 前后还有自绘，
+    // overlay 收进基类的 draw 就会被它们自己那层压掉（挂载点选择的道理同 databus.js 里 updateBurn 那条）
+    for (const e of databus.enemys) { e.draw(ctx); e.drawBurn(ctx); }
     for (const b of databus.bullets) b.draw(ctx);
     for (const b of databus.enemyBullets) b.draw(ctx);
     if (databus.player) {

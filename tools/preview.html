@@ -329,7 +329,7 @@ function spawnAround(n) {
  * 操作台：初始属性太低，正常打怪攒不出能扛住 Boss 的 build，所以直接写角色属性。
  * 输入框本身就是预设 —— startRun() 会把填了的值重放到刚建好的角色上，
  * 因为 main.start() 每次都是 databus.player = new Player()，只改当场那个对象不会跟着开局走。
- * key 必须与 Player 的属性名一致；后四条是宝箱道具的计数/像素值，改它们等于替玩家开匣。
+ * key 必须与 Player 的属性名一致；末尾几条是宝箱道具的计数/像素值，改它们等于替玩家开匣。
  */
 const STATS = [
   { key: 'attack', label: '攻击力', step: 5 },
@@ -347,6 +347,7 @@ const STATS = [
   { key: 'shield', label: '护盾', step: 1 },
   { key: 'companions', label: '跟班', step: 1 },
   { key: 'pickupRange', label: '拾取范围', step: 30 },
+  { key: 'burnBullets', label: '燃烧子弹', step: 1 },
 ];
 
 // 占位符给真实出厂值，不抄常量表：一个 new Player() 就是游戏的初始 build
@@ -493,7 +494,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         place('pet_cmv');
         say('Boss 融合匣已摆在右前方');
       } else {
-        place(); // 不传 kind = 走五种随机加成的普通金匣
+        place(); // 不传 kind = 走六种随机加成的普通金匣
         say('普通金匣已摆在右前方');
       }
       spawnAround(4);
@@ -552,7 +553,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         spawnAround(8);
       }
       if (nav === 'shield') { databus.player.shield += 3; spawnAround(8); }
-      // 宝箱加成雨：一圈摆 16 只普通金匣（kind 为空 = 走五种随机加成那条路），跑两步就能把 HUD 右列填满
+      // 宝箱加成雨：一圈摆 16 只普通金匣（kind 为空 = 走六种随机加成那条路），跑两步就能把 HUD 右列填满
       if (nav === 'chestrain') {
         const { default: Chest } = await import('./js/npc/chest.js');
         const { clampToCoast } = await import('./js/arena/coast.js');

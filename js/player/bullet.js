@@ -1,6 +1,6 @@
 import Sprite from '../base/sprite';
 import { UI } from '../ui/theme';
-import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER, PIERCE_DAMAGE_FALLOFF } from '../consts';
+import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER, PIERCE_DAMAGE_FALLOFF, BURN_HOLD } from '../consts';
 
 export default class Bullet extends Sprite {
   constructor() {
@@ -14,6 +14,7 @@ export default class Bullet extends Sprite {
     this.startX = 0;
     this.startY = 0;
     this.pierceLeft = 0;
+    this.burnDamage = 0;   // 开火时快照的燃烧伤害（层数 × BURN_DMG），0 = 这颗子弹不带燃烧
     this.hitList = [];
     this.isDestroyed = false;
   }
@@ -29,6 +30,7 @@ export default class Bullet extends Sprite {
     this.radius = BULLET_RADIUS;
     this.color = BULLET_COLOR; // 对象池复用必须重置，否则跟班的蓝色会"传染"给主角子弹
     this.pierceLeft = 0;
+    this.burnDamage = 0;       // 同上：漏掉就是「上一发燃烧弹的火烧到了下一发普攻」
     this.hitList = [];
     this.isDestroyed = false;
   }
@@ -62,6 +64,11 @@ export default class Bullet extends Sprite {
             isCrit = true;
           }
           e.takeDamage(dmg, isCrit, databus);
+          // 燃烧排在直击之后：直击已经打死就不必再往尸体上挂状态（updateBurn 自己有 isDead 门，这里是保持状态干净）。
+          // ★穿透弹会把它穿过的每个目标各挂一次燃烧——同一目标有 hitList 去重，这是白送的收益不是漏洞
+          if (this.burnDamage > 0 && !e.isDead) {
+            e.applyBurn(this.burnDamage, BURN_HOLD);
+          }
           this.hitList.push(e);
           this.pierceLeft--;
           if (this.pierceLeft < 0) {

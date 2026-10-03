@@ -8,7 +8,7 @@ import {
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK,
   BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
-  POISON_TICK,
+  POISON_TICK, BURN_DMG,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
@@ -35,6 +35,7 @@ export default class Player extends Sprite {
     this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
     this.companions = 0;                // 跟班数量（宝箱：跟班+1）
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
+    this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
     this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
     this.slowMult = 1;                  // 当前移速倍率（1 = 未被减速），由黏液洼写入 applySlow
@@ -128,6 +129,8 @@ export default class Player extends Sprite {
       bullet.init(mx, my, Math.cos(angle), Math.sin(angle), this.attack);
       bullet.maxRange = this.attackRange + BULLET_RANGE_BUFFER;
       bullet.pierceLeft = this.pierce;
+      // 开火时快照层数：飞在路上的子弹不会因为中途又开一个匣子就变强
+      bullet.burnDamage = this.burnBullets * BURN_DMG;
       databus.bullets.push(bullet);
     }
   }

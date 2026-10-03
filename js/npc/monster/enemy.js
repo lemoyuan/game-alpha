@@ -2,6 +2,9 @@ import Sprite from '../../base/sprite';
 import EnemyBullet from './enemyBullet';
 import { clampToCoast } from '../../arena/coast';
 import { SPRITE_ROTATES } from './config';
+import { BURN_TICK, BURN_HOLD } from '../../consts';
+// 玩法层取 UI 色是本仓库既有做法（bullet.js 就引 UI.ink），火苗和跳字必须与 theme 同源才不会各画各的
+import { UI } from '../../ui/theme';
 
 // 怪物基类：普通怪/宝箱怪共用，boss 可继承此类扩展
 export default class Enemy extends Sprite {
@@ -27,6 +30,13 @@ export default class Enemy extends Sprite {
     this.bulletColor = config.bulletColor || '#fff';
     this.lastAttack = 0;           // 上次射击时间戳（内部用）
     this.angle = 0;                // 朝向弧度（指向玩家）；仅当 SPRITE_ROTATES 为 true 时用于旋转贴图
+    // 燃烧（子弹道具「燃烧子弹」挂上的状态）：一只怪身上最多一个实例，再命中只刷新时长
+    // ★推进必须由 databus.js 的敌人循环调 updateBurn，不要搬进下面的 update：
+    //   毒王 Boss 从不调 super.update，海火只在 chase、膜王只在 idle、菌群只在 lost 才调，
+    //   挂进 update 等于燃烧在四只 Boss 里三只失效，而冒烟测试全是普通怪、看不出来
+    this.burnLeft = 0;             // 燃烧剩余毫秒数（0 = 未燃烧）
+    this.burnTickLeft = BURN_TICK; // 距下一次跳血的毫秒数（内部用）
+    this.burnDamage = 0;           // 每跳跳多少血 = 玩家当时的燃烧子弹层数 × BURN_DMG
   }
 
   init(x, y) {
@@ -35,6 +45,11 @@ export default class Enemy extends Sprite {
     this.isDead = false;
     this.hp = this.maxHp;
     this.lastAttack = 0;
+    // 对象池复用约定：漏掉这三行的话，一旦接上回收就是「刚刷出来的怪自带燃烧」
+    // （现在 Pool.recover() 还没有调用点、敌人实际每次新建，所以这是保险不是救火）
+    this.burnLeft = 0;
+    this.burnTickLeft = BURN_TICK;
+    this.burnDamage = 0;
   }
 
   update(dt, databus) {
@@ -68,10 +83,78 @@ export default class Enemy extends Sprite {
 
   // 受击结算的唯一入口：扣血 / 飘字 / 死亡标记。
   // 减伤类机制（膜王的 EPS 膜）覆写这个方法，不要再去 bullet.js 里加特判
-  takeDamage(dmg, isCrit, databus) {
+  // color 只服务飘字着色（燃烧跳血传 UI.burn）；子类覆写时必须把它透传给 super.takeDamage，
+  // 否则漏的那一只怪身上燃烧跳字会退回白色，其余全是橙色——局部错、默认对，冒烟测试查不出来
+  takeDamage(dmg, isCrit, databus, color) {
     this.hp -= dmg;
-    databus.addDamageText(this.x, this.y - this.radius, dmg, isCrit);
+    databus.addDamageText(this.x, this.y - this.radius, dmg, isCrit, color);
     if (this.hp <= 0) this.isDead = true;
+  }
+
+  // 燃烧上身的唯一入口：和 player.applyPoison 是同一套规矩——伤害取最强的那一下、时长只刷新，绝不相乘。
+  // dmg 来自子弹开火时的快照（层数 × BURN_DMG），所以飞在路上的子弹不会中途变强
+  applyBurn(dmg, hold) {
+    if (this.burnLeft <= 0) {
+      this.burnDamage = dmg;
+      // 新起一次燃烧要把节拍归到 BURN_TICK（但不对齐 0）：不归的话上一轮残留的时钟会让
+      // 第一跳提前到来，一次燃烧的总跳数就从 10 变成 11，「每 0.5 秒掉 1 血」这条承诺守不住
+      this.burnTickLeft = BURN_TICK;
+    } else {
+      // ★这里故意不把 burnTickLeft 对齐到 0（player.applyPoison 是对齐的：赤潮池自身不造成瞬时伤害，
+      //   需要立刻给反馈）。燃烧子弹的直击那一下就是反馈，再补一个同时跳出的数字只会读成「我子弹怎么只打 1 血」
+      this.burnDamage = Math.max(this.burnDamage, dmg);
+    }
+    this.burnLeft = hold;
+  }
+
+  // 由 databus.js 每帧驱动（原因见构造函数那条 ★）。走 dt 不走 Date.now()：升级三选一开着时自然冻结
+  updateBurn(dt, databus) {
+    if (this.burnLeft <= 0 || this.isDead) return;
+    this.burnLeft -= dt * 1000;
+    this.burnTickLeft -= dt * 1000;
+    if (this.burnTickLeft <= 0) {
+      this.burnTickLeft += BURN_TICK; // 加不是清零：掉帧时这一跳不会被吞掉
+      this.takeDamage(this.burnDamage, false, databus, UI.burn);
+    }
+    if (this.burnLeft <= 0) {
+      this.burnLeft = 0;
+      this.burnDamage = 0;
+    }
+  }
+
+  // 火苗画在 main.js 的敌人绘制循环末尾（e.draw 之后），不画进本类的 draw：
+  // 四个 Boss 子类都覆写了 draw 且 super.draw 前后还有自绘，基类里的 overlay 会被它们压掉
+  drawBurn(ctx) {
+    if (this.burnLeft <= 0 || this.isDead) return;
+    const rest = this.burnLeft / BURN_HOLD;      // 余量：最后 1/3 段开始收小、变淡
+    const r = 4 + this.radius * 0.22;            // 跟着体型走：Boss 上一朵固定 5px 的火等于没画
+    const f = 0.85 + 0.15 * (this.burnTickLeft / BURN_TICK); // 节拍闪动来自状态，draw() 里不许调 Math.random
+    // ★火苗画在血条右端外侧，不画在怪物正上方：飘字从 (x, y-radius) 这一列升起 26px，
+    //   而燃烧跳字本身就是 UI.burn 橙色，压在橙色火苗上等于把这套机制唯一的数字反馈抹掉
+    const cx = this.x + this.radius + r * 0.9;
+    const base = this.y - this.radius - 12;      // 血条占 y-radius-8 到 y-radius-4，火苗必须浮在它上面
+    const h = r * 1.9 * (0.55 + 0.45 * rest) * f;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, rest * 3);
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(1, r * 0.24);
+    ctx.strokeStyle = UI.ink;
+    ctx.beginPath();
+    ctx.moveTo(cx, base - h);
+    ctx.bezierCurveTo(cx + r * 0.92, base - h * 0.5, cx + r * 0.7, base, cx, base);
+    ctx.bezierCurveTo(cx - r * 0.7, base, cx - r * 0.92, base - h * 0.5, cx, base - h);
+    ctx.closePath();
+    ctx.fillStyle = UI.burn;
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, base - h * 0.62);
+    ctx.bezierCurveTo(cx + r * 0.4, base - h * 0.3, cx + r * 0.3, base, cx, base);
+    ctx.bezierCurveTo(cx - r * 0.3, base, cx - r * 0.4, base - h * 0.3, cx, base - h * 0.62);
+    ctx.closePath();
+    ctx.fillStyle = UI.gold; // 内焰比外焰亮一档；HUD 那颗 14px 的 flame 用 cream，这里画在怪身上有十几像素，gold 才不至于糊成一团
+    ctx.fill();
+    ctx.restore();
   }
 
   // 贴图画布旋转角：子类可覆写（海火按身体自转角旋转贴图，而不是朝玩家）

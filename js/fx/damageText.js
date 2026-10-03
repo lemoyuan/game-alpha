@@ -19,12 +19,13 @@ export default class DamageText extends Sprite {
   }
 
   // 对象池复用：所有可变字段都必须在这里重置
-  init(x, y, damage, isCrit) {
+  // color 由伤害来源指定（燃烧跳血传 theme 的 UI.burn）；不给就还是「暴击黄、其余白」
+  init(x, y, damage, isCrit, color) {
     this.x = x;
     this.y = y;
     this.startY = y;
     this.text = `${damage}`;
-    this.color = isCrit ? DAMAGE_TEXT_CRIT_COLOR : DAMAGE_TEXT_COLOR;
+    this.color = color || (isCrit ? DAMAGE_TEXT_CRIT_COLOR : DAMAGE_TEXT_COLOR);
     this.fontSize = isCrit ? DAMAGE_TEXT_CRIT_FONT : DAMAGE_TEXT_FONT;
     this.offsetX = (Math.random() - 0.5) * DAMAGE_TEXT_JITTER;
     this.life = 0;

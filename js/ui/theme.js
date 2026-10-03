@@ -24,6 +24,7 @@ export const UI = {
   bossChestBand: '#7B1E12',  // Boss 专属匣箍带 + HUD 计数色：暗红
   bossChestHalo: 'rgba(231,76,60,0.32)', // Boss 专属匣脉冲光晕（平涂 rgba，无渐变无 shadowBlur）
   toxic: '#C15BD8',        // 中毒状态：赤潮毒素的滴落描边与跳血提示。刻意避开海火自己的青 #22d3ee（毒圈要能在自家池子里被看见）、mint（那是增益）和 red（那是伤害/生命）
+  burn: '#FF6B35',         // 燃烧子弹：怪物身上的火苗与跳血字。刻意避开 gold #F5B041（HUD 那一列宝箱道具全是这个金，13px 字号下橙金不分）、red #E74C3C（那是伤害/生命）、toxic #C15BD8（那是赤潮毒素，两套 DoT 必须一眼分开）
 };
 
 export const R_CARD = 16;   // 卡片圆角
@@ -471,6 +472,25 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       dot(-h * 0.32, -h * 0.25, h * 0.2);
       dot(h * 0.34, -h * 0.1, h * 0.17);
       dot(-h * 0.05, h * 0.38, h * 0.15);
+      break;
+    case 'flame':
+      // 燃烧子弹：外焰是上尖下圆的火舌（跟随调用方 color 平涂），芯一颗奶白内焰负责读出层次
+      // ★内焰不要改成 ink 描边：HUD 这一行图标只有 14px，描边会和外焰轮廓糊成一片
+      solid(() => {
+        ctx.beginPath();
+        ctx.moveTo(0, -h * 0.95);
+        ctx.bezierCurveTo(h * 0.58, -h * 0.45, h * 0.92, h * 0.05, h * 0.5, h * 0.6);
+        ctx.bezierCurveTo(h * 0.26, h * 0.92, -h * 0.26, h * 0.92, -h * 0.5, h * 0.6);
+        ctx.bezierCurveTo(-h * 0.92, h * 0.05, -h * 0.58, -h * 0.45, 0, -h * 0.95);
+        ctx.closePath();
+      });
+      ctx.beginPath();
+      ctx.moveTo(0, -h * 0.1);
+      ctx.bezierCurveTo(h * 0.3, h * 0.18, h * 0.3, h * 0.5, 0, h * 0.62);
+      ctx.bezierCurveTo(-h * 0.3, h * 0.5, -h * 0.3, h * 0.18, 0, -h * 0.1);
+      ctx.closePath();
+      ctx.fillStyle = UI.cream;
+      ctx.fill();
       break;
     case 'magnet':
       // 经验拾取范围：中间一颗经验宝石（同 xpgem 的菱形），两侧箭头朝内 = 远处的宝石被吸过来

@@ -72,6 +72,12 @@ export const BULLET_DAMAGE = 10;        // （未直接使用，实际伤害取 
 export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基础上的缓冲
 export const PIERCE_DAMAGE_FALLOFF = 0.6; // 穿透衰减：子弹每穿过一个目标，后续伤害变为上一次的 60%（改成 1 即不衰减）
 
+// 燃烧子弹（宝箱道具）：命中挂 5 秒，每 0.5 秒跳一次血，每跳伤害 = 道具层数
+export const BURN_TICK = 500;   // 每跳跳血的间隔（毫秒）。★故意不与上面玩家的 POISON_TICK 共用一个常量：两条节拍各自可调，玩家中毒和怪被烧本来就不该同拍
+export const BURN_HOLD = 5000;  // 燃烧持续毫秒数：再命中只刷新时长、绝不叠加；一次完整燃烧 = BURN_HOLD / BURN_TICK = 10 跳
+export const BURN_DMG = 1;      // 每层燃烧子弹每跳跳的血（1 层 = 2 DPS，3 层 = 6 DPS）。★体感嫌弱只改这一个数，不要改 BURN_TICK：节拍一动「每 0.5 秒掉 1 血」的口头承诺就变了，而玩家读得出节拍变化、读不出总伤变化
+export const DAMAGE_TEXT_MAX = 160; // 伤害飘字并发上限。★这个数不是拍的：实测 480 秒满 build（bot 每帧抽卡、786 击杀）的并发峰值是零燃烧 120 条、三层燃烧 112 条。曾经按 60 定，结果常态吃掉约 4% 的伤害数字，热闹时段普攻会「不掉字」；按 120 定又刚好压在零燃烧那条尾巴上，最热的几帧照样丢字。它只该兜失控，不该参与常态调度
+
 export const XP_BASE = 10;              // 经验曲线基数
 
 // 伤害飘字（怪物掉血显示）

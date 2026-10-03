@@ -2,6 +2,7 @@ import Pool from './base/pool';
 import Companion from './player/companion';
 import DamageText from './fx/damageText';
 import { settings } from './storage';
+import { DAMAGE_TEXT_MAX } from './consts';
 
 let instance;
 
@@ -47,6 +48,9 @@ export default class DataBus {
     for (const b of this.bullets) b.update(dt, this);
     for (const b of this.enemyBullets) b.update(dt, this);
     for (const e of this.enemys) e.update(dt, this);
+    // 燃烧跳血单独一遍，且必须挂在这里：Enemy.update 里放不下它——毒王 Boss 从不调 super.update，
+    // 海火只在 chase、膜王只在 idle、菌群只在 lost 才调，写进 Enemy.update 等于燃烧在三只 Boss 身上失效
+    for (const e of this.enemys) e.updateBurn(dt, this);
     // 必须排在 enemys 之后：光束每帧从 owner.spin 重算端点，读上一帧的自转角会让眼和光脱开
     // （1.05 弧度/秒 × 0.05 秒 = 3°，在 470px 末端差出 25px）
     for (const l of this.lasers) l.update(dt, this);
@@ -99,10 +103,14 @@ export default class DataBus {
   }
 
   // 伤害飘字：子弹命中时调用，isCrit 决定黄色高亮+放大；设置项关闭时直接跳过
-  addDamageText(x, y, damage, isCrit) {
+  // color 只给燃烧这类非普攻伤害源用；普攻不传，走 damageText.js 里的白字/暴击黄默认
+  // ★上限是烧出来的保险：一只怪 5 秒内多 10 条字，三十几只同时燃烧时是每帧好几条新分配。
+  //   满了就丢新来的这一条、不区分来源，所以真被顶到时普攻也会缺字——headless 的 peakTexts 专门用来看它够不够宽
+  addDamageText(x, y, damage, isCrit, color) {
     if (!settings.damageText) return;
+    if (this.damageTexts.length >= DAMAGE_TEXT_MAX) return;
     const text = this.pool.getItemByClass('damageText', DamageText);
-    text.init(x, y, damage, isCrit);
+    text.init(x, y, damage, isCrit, color);
     this.damageTexts.push(text);
   }
 
