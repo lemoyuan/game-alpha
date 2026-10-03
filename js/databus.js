@@ -32,6 +32,8 @@ export default class DataBus {
     this.xpGems = [];
     this.chests = [];
     this.companions = [];
+    this.bossPets = [];   // 迷你毒王跟班（融合匣开出）：不挂 player.companions 计数，由宝箱授予直接管理
+    this.bossChests = {}; // 本局 Boss 专属匣开启记录：id → 次数，HUD 右栏读它
     this.damageTexts = [];
     this.frame = 0;
     this.chestsOpened = 0; // 本局开箱数（结算写入游戏记录）
@@ -59,6 +61,7 @@ export default class DataBus {
         this.companions.push(comp);
       }
       for (const comp of this.companions) comp.update(dt, this);
+      for (const p of this.bossPets) p.update(dt, this);
       this.player.update(dt, this);
     }
   }
@@ -89,6 +92,10 @@ export default class DataBus {
 
   removeChest(index) {
     this.chests.splice(index, 1);
+  }
+
+  removeBossPet(index) {
+    this.bossPets.splice(index, 1);
   }
 
   // 伤害飘字：子弹命中时调用，isCrit 决定黄色高亮+放大；设置项关闭时直接跳过

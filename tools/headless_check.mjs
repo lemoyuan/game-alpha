@@ -153,6 +153,7 @@ prepareCopy(SRC, COPY);
 
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
+const { BOSS_CHESTS, BOSS_XP_GEMS } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -173,6 +174,12 @@ let filmBreaks = 0;
 let prevFilm = 0;
 let maxColonies = 0;
 let slowFrames = 0;
+let poisonFrames = 0; // 中毒状态覆盖的帧数：赤潮池的 applyPoison 有没有真挂上
+let poisonTicks = 0;  // 中毒结算次数：poisonTickLeft 在两帧之间变大就说明这一帧跳了一次血
+let prevPoisonTick = 0;
+let bossDrops = 0;   // Boss 死亡掉落结算次数
+let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就一直是 false）
+let maxPets = 0;
 const colonySeen = new Set(); // 按对象身份数菌群：小怪会被回收复用，只有 home 能把它和杂兵区分开
 
 for (let i = 0; i < frames; i++) {
@@ -196,6 +203,15 @@ for (let i = 0; i < frames; i++) {
     //   破膜 → 破防窗口 → 被补回去 这条循环的后半段一行都测不到
     boss.takeDamage(Math.ceil(boss.maxHp / 15), false, databus);
   }
+  // Boss 专属匣只会掉在 Boss 尸体上，bot 未必走过去 → CHEST_GRANTS 和跟班的 update/draw 一行都跑不到。
+  // 每帧把匣挪到玩家脚下让它真被拾取一次：跟班约 6 DPS，相对测试台每秒削掉的 maxHp/15 可以忽略，
+  // 不会改写 film breaks 这条基线
+  if (p) {
+    for (const c of databus.chests) {
+      if (c.kindDef) { c.x = p.x; c.y = p.y; }
+    }
+  }
+  const dyingBoss = boss && boss.isDead ? boss : null; // 本帧 checkCollisions 会给它结算掉落
   if (boss && boss.filmMax !== undefined) {
     if (boss.film > filmPeak) filmPeak = boss.film;
     if (prevFilm > 0 && boss.film <= 0) filmBreaks++;
@@ -211,12 +227,35 @@ for (let i = 0; i < frames; i++) {
   }
   if (colonies > maxColonies) maxColonies = colonies;
   if (p && p.slowLeft > 0) slowFrames++;
+  // 中毒：本测试台每帧把 hp 回满，所以这里量不到掉血量，只证明状态挂上、跳血在跑
+  if (p) {
+    if (p.poisonLeft > 0) poisonFrames++;
+    if (p.poisonTickLeft > prevPoisonTick) poisonTicks++;
+    prevPoisonTick = p.poisonTickLeft;
+  }
   const up = databus.upgradeScreen;
   if (up && up.visible && !up.selectAnim) {
     up.pick(0);
     databus.isPaused = false;
   }
   step();
+  // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上
+  if (dyingBoss && !databus.enemys.includes(dyingBoss)) {
+    bossDrops++;
+    if (databus.xpGems.length < BOSS_XP_GEMS) {
+      errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
+    }
+    const table = BOSS_CHESTS[dyingBoss.type];
+    if (table && table.length && !databus.chests.some((c) => c.kindDef)) {
+      errors.push(`boss ${dyingBoss.type} 死亡没掉专属匣`);
+    }
+  }
+  if (databus.bossPets.length) sawPet = true;
+  if (databus.bossPets.length > maxPets) maxPets = databus.bossPets.length;
+  for (const pet of databus.bossPets) {
+    // 环绕/冲锋的三角函数一旦喂进 NaN 就会一路 NaN 下去，画面上是跟班凭空消失
+    if (!Number.isFinite(pet.x) || !Number.isFinite(pet.y)) errors.push('boss pet 坐标出现非有限值');
+  }
   if (databus.lasers.length > maxLasers) maxLasers = databus.lasers.length;
   if (databus.zones.length > maxZones) maxZones = databus.zones.length;
   if (p && p.img) playerSpriteSrc = p.img.__src;
@@ -226,7 +265,7 @@ for (let i = 0; i < frames; i++) {
     console.log(`t=${(i * DT).toFixed(0)}s lvl=${p && p.level} enemies=${databus.enemys.length} kills=${p && p.kills}`
       + ` boss=${b ? b.type : '-'}${b && b.state ? ':' + b.state : ''}`
       + ` film=${b && b.film !== undefined ? Math.round(b.film) : '-'}`
-      + ` lasers=${databus.lasers.length} zones=${databus.zones.length}`);
+      + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length}`);
   }
 }
 
@@ -236,6 +275,8 @@ console.log('player texture:', playerSpriteSrc, '| rotate calls:', rotateCalls, 
 console.log('peak lasers:', maxLasers, '| peak zones:', maxZones);
 console.log('peak film:', filmPeak, '| film breaks:', filmBreaks, '| colonies:', colonySeen.size, 'peak', maxColonies);
 console.log('slowed frames:', slowFrames, 'of', frames);
+console.log('poisoned frames:', poisonFrames, '| poison ticks:', poisonTicks);
+console.log('boss drops:', bossDrops, '| pet granted:', sawPet ? 'yes' : 'NO', '| peak pets:', maxPets);
 console.log('non-finite ctx args:', nonFinite, '| errors:', errors.length);
 if (errors.length) console.log(errors.slice(0, 10).join('\n'));
 process.exit(errors.length ? 1 : 0);

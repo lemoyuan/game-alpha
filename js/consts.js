@@ -59,9 +59,10 @@ export const PLAYER_ATK = 10;           // 初始攻击力，=子弹伤害（升
 export const PLAYER_DEF = 0;            // 初始防御，接触伤害减免（升级项：防御力 +2）
 export const PLAYER_ATTACK_RANGE = 200; // 索敌距离；子弹飞行距离 = 此值 + BULLET_RANGE_BUFFER
 export const PLAYER_ATTACK_CD = 1000;   // 基础攻击间隔（毫秒）：攻速 1.0 = 每 1 秒 1 发，实际间隔 = 此值 ÷ 攻速
-export const PLAYER_INVINCIBLE = 500;   // 受击后无敌时间（毫秒）
+export const PLAYER_INVINCIBLE = 1000;   // 受击后无敌时间（毫秒）
+export const POISON_TICK = 500;         // 中毒每跳一次伤害的间隔（毫秒）。★故意不复用上面那条无敌帧：无敌帧是「一次撞击」的限流器，毒素是挂在身上的状态，走那条路就会被别的伤害源白吃掉结算（赤潮池原来正是这么变成摆设的）
 export const PLAYER_CRIT_RATE = 0;   // 初始暴击率（升级项：暴击率 +10%）
-export const PLAYER_CRIT_MULT = 2;      // 暴击伤害倍数
+export const PLAYER_CRIT_MULT = 1.5;      // 暴击伤害倍数
 export const PLAYER_LUCK = 0;           // 初始幸运值（升级项：幸运值 +1）
 export const LUCK_XP_BONUS = 0.02;      // 每点幸运增加的经验获取比例
 
@@ -70,6 +71,7 @@ export const BULLET_RADIUS = 5;         // 主角子弹半径（跟班子弹见 
 export const BULLET_COLOR = '#F5B041';  // 主角子弹颜色：与 HUD 子弹图标同色（theme.js 的 UI.gold），白点在深地面上读不出方向
 export const BULLET_DAMAGE = 10;        // （未直接使用，实际伤害取 player.attack）
 export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基础上的缓冲
+export const PIERCE_DAMAGE_FALLOFF = 0.6; // 穿透衰减：子弹每穿过一个目标，后续伤害变为上一次的 60%（改成 1 即不衰减）
 
 export const XP_BASE = 10;              // 经验曲线基数
 
@@ -86,6 +88,9 @@ export const DAMAGE_TEXT_CRIT_FONT = 18;      // 暴击字号（放大更醒目�
 export const xpForLevel = (level) => Math.floor(XP_BASE * Math.pow(level, 1.3));
 
 export const CHEST_RADIUS = 12; // 宝箱拾取半径（宝箱怪刷新参数见 js/npc/monster/config.js）
+
+export const XP_PICKUP_RANGE = 80; // 经验磁吸半径初始值：宝石在这个距离内开始往角色飞（原来写死在 xpgem.js 里，挪出来才能手调）
+export const XP_PICKUP_STEP = 30;  // 宝箱「经验拾取范围」每开一个涨的像素：80 → 110 → 140…（涨的是距离，不是等级计数）
 
 export const COMPANION_RADIUS = 8;           // 跟班碰撞半径
 export const COMPANION_SPRITE = 'images/entity/companion.png'; // 跟班贴图：中性粒细胞「小卫士」，正面朝上出图、运行时不旋转（和六只怪同一批语言；一张有脸的图转起来脸就朝天朝地了）

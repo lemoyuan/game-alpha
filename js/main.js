@@ -11,6 +11,8 @@ import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } 
 import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import Chest from './npc/chest';
+import { BOSS_CHESTS, BOSS_XP_GEMS } from './npc/monster/config';
+import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
 
@@ -134,6 +136,8 @@ export default class Main {
           const chest = databus.pool.getItemByClass('chest', Chest);
           chest.init(e.x, e.y);
           databus.chests.push(chest);
+        } else if (e.isBoss) {
+          this.dropBossLoot(e);
         } else {
           const gem = databus.pool.getItemByClass('xpgem', XpGem);
           gem.init(e.x, e.y, e.xpValue);
@@ -202,6 +206,31 @@ export default class Main {
     }
   }
 
+  // Boss 死亡专属回报：随机一种专属匣（BOSS_CHESTS 表空 = 只掉经验爆）+ 一圈经验宝石。
+  // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济
+  dropBossLoot(e) {
+    const kinds = BOSS_CHESTS[e.type];
+    if (kinds && kinds.length) {
+      const kind = kinds[Math.floor(Math.random() * kinds.length)];
+      const chest = databus.pool.getItemByClass('chest', Chest);
+      chest.init(e.x, e.y, kind.id);
+      databus.chests.push(chest);
+    }
+    const n = BOSS_XP_GEMS;
+    const base = Math.floor(e.xpValue / n);
+    const rem = e.xpValue - base * n; // 前 rem 颗各多 1 点，拆完总和正好是 e.xpValue
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+      const d = 30 + Math.random() * 60;
+      const spot = { x: e.x + Math.cos(a) * d, y: e.y + Math.sin(a) * d };
+      // 撒点收回海岸线内：宝石不会追人，掉到 playable 区域外就永远捡不到了
+      clampToCoast(spot, 6);
+      const gem = databus.pool.getItemByClass('xpgem', XpGem);
+      gem.init(spot.x, spot.y, base + (i < rem ? 1 : 0));
+      databus.xpGems.push(gem);
+    }
+  }
+
   render() {
     ctx.clearRect(0, 0, canvasW, canvasH);
     ctx.fillStyle = ABYSS.far; // 地图外 = 深渊底色，边缘沉水过渡见 js/arena/index.js
@@ -221,6 +250,7 @@ export default class Main {
     for (const b of databus.bullets) b.draw(ctx);
     for (const b of databus.enemyBullets) b.draw(ctx);
     if (databus.player) {
+      for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);
       databus.player.draw(ctx);
     }

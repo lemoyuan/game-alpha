@@ -20,6 +20,10 @@ export const UI = {
   shadow: 'rgba(8,10,20,0.45)', // 硬投影
   highlight: 'rgba(255,255,255,0.18)', // 面板顶部高光带
   hudPanel: 'rgba(26,31,53,0.78)', // 战斗内半透明底板（UI.bg 的半透明版）
+  bossChestBody: '#151013',  // Boss 专属匣箱体：近黑底，和普通金匣一眼分开
+  bossChestBand: '#7B1E12',  // Boss 专属匣箍带 + HUD 计数色：暗红
+  bossChestHalo: 'rgba(231,76,60,0.32)', // Boss 专属匣脉冲光晕（平涂 rgba，无渐变无 shadowBlur）
+  toxic: '#C15BD8',        // 中毒状态：赤潮毒素的滴落描边与跳血提示。刻意避开海火自己的青 #22d3ee（毒圈要能在自家池子里被看见）、mint（那是增益）和 red（那是伤害/生命）
 };
 
 export const R_CARD = 16;   // 卡片圆角
@@ -460,6 +464,28 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       });
       solid(() => { ctx.beginPath(); ctx.rect(-h * 0.85, -h * 0.1, h * 1.7, h * 0.85); });
       line(0, -h * 0.55, 0, h * 0.75);
+      break;
+    case 'cellfuse':
+      // 多核巨细胞：一个大胞体里散着三颗核，对应 HCMV 把一圈细胞融成一团（融合匣图标）
+      solid(() => { ctx.beginPath(); ctx.arc(0, 0, h * 0.9, 0, Math.PI * 2); });
+      dot(-h * 0.32, -h * 0.25, h * 0.2);
+      dot(h * 0.34, -h * 0.1, h * 0.17);
+      dot(-h * 0.05, h * 0.38, h * 0.15);
+      break;
+    case 'magnet':
+      // 经验拾取范围：中间一颗经验宝石（同 xpgem 的菱形），两侧箭头朝内 = 远处的宝石被吸过来
+      solid(() => {
+        ctx.beginPath();
+        ctx.moveTo(0, -h * 0.5);
+        ctx.lineTo(h * 0.42, 0);
+        ctx.lineTo(0, h * 0.5);
+        ctx.lineTo(-h * 0.42, 0);
+        ctx.closePath();
+      });
+      line(-h, -h * 0.42, -h * 0.62, 0);
+      line(-h, h * 0.42, -h * 0.62, 0);
+      line(h, -h * 0.42, h * 0.62, 0);
+      line(h, h * 0.42, h * 0.62, 0);
       break;
     case 'gear': {
       for (let i = 0; i < 8; i++) {

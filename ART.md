@@ -169,6 +169,7 @@
 | `UI.blue` `UI.red` `UI.gold` `UI.mint` `UI.violet` | `#3FA9F5` `#E74C3C` `#F5B041` `#2ECC71` `#9B59B6` | 与怪物识别色同一组，只做这五色的强调 |
 | `UI.textOnLight` / `UI.textOnDark` / `UI.muted` | `#1C2843` / `#F7F3E8` / `#8A95A5` | 正文按底色二选一 |
 | `UI.dim` / `UI.shadow` / `UI.highlight` / `UI.hudPanel` | 半透明 | 全屏遮罩 / 硬投影 / 顶部高光带 / 战斗内底板 |
+| `UI.bossChestBody` / `UI.bossChestBand` / `UI.bossChestHalo` | `#151013` / `#7B1E12` / `rgba(231,76,60,0.32)` | Boss 专属匣：近黑箱体 / 暗红箍带（HUD 计数同色）/ 平涂脉冲光晕 |
 
 尺寸与字号：`R_CARD 16`、`R_BTN 14`、`LINE 3`、`BORDER 2.5`、`SHADOW_Y 4`、`FONT monospace`；
 字号只用 `FS` 六档 —— `title 26 / h1 20 / h2 16 / body 13 / small 11 / tiny 10`。
@@ -196,7 +197,7 @@
 | `icon(ctx,name,cx,cy,s,{color})` | 代码绘制图标 |
 
 图标名（新增图标往 `icon()` 里加，不要在界面文件里手画）：
-`heart boot gun shield bolt target star clover bullet pierce buddy hourglass skull chest gear book trophy lock arrowLeft arrowRight replay home virus drop bubble phone note headphones globe chart medal`。
+`heart boot gun shield bolt target star clover bullet pierce buddy hourglass skull chest gear book trophy lock arrowLeft arrowRight replay home virus drop bubble phone note headphones globe chart medal cellfuse magnet`。
 
 ### 3.4 各页约定
 
@@ -205,7 +206,7 @@
 - **设置**：cream 行卡 + 图标徽章 + `toggle`；未接入项整卡转 `panelDeep` 且关掉顶部高光。
 - **图鉴列表 / 详情**：行卡用 `dish` 裁圆复用 `mob_*.png`；未解锁 = `panelDeep` + `lock` 图标；详情三节用 `chip` 当小节标签（机制=蓝、冷知识=金、数值=绿）。
 - **游戏记录**：2×2 徽章卡（`hourglass medal skull chest`）+ 半透明战绩行。
-- **战斗 HUD**：心形徽章 + 血条、等级 `chip` + 经验条、右上计时/击杀两枚 `chip`、左右两列半透明属性面板、Boss 条居中。**结算时 HUD 不再绘制**，避免和结算标题打架。
+- **战斗 HUD**：心形徽章 + 血条、等级 `chip` + 经验条、右上计时/击杀两枚 `chip`、左右两列半透明属性面板、Boss 条居中。**结算时 HUD 不再绘制**，避免和结算标题打架。右列宝箱加成里「拾取范围」（`magnet` 图标）显示的是实际像素距离，不是次数。拾取过 Boss 专属匣后右栏按 `BOSS_CHESTS` 全表循环长出黑红计数行（没拾取不占位）。
 - **升级三选一**：`UI.dim` 遮罩 + 金色 `LEVEL UP!` + 三张 cream 卡；卡的图标与配色读 `UPGRADES` 里的 `icon` / `tint` 字段（tint 是 `UI` 的键名，`consts.js` 不依赖 UI 层）。
 - **结算**：红色 `GAME OVER` + cream 卡（主数字=生存时长，三枚 `chip`，历史最佳行 + 金色「新纪录」`chip`）+ 两枚按钮；按钮布局仍只有 `gameOverButtons()` 一个来源。
 

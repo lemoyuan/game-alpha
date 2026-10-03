@@ -1,6 +1,6 @@
 import Sprite from '../base/sprite';
 import { UI } from '../ui/theme';
-import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER } from '../consts';
+import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER, PIERCE_DAMAGE_FALLOFF } from '../consts';
 
 export default class Bullet extends Sprite {
   constructor() {
@@ -66,6 +66,9 @@ export default class Bullet extends Sprite {
           this.pierceLeft--;
           if (this.pierceLeft < 0) {
             this.isDestroyed = true;
+          } else {
+            // 穿透衰减：下一个目标吃到的伤害是这一次的 60%；保底 1 点，深穿透链不会打出 0 伤害
+            this.damage = Math.max(1, Math.round(this.damage * PIERCE_DAMAGE_FALLOFF));
           }
           break;
         }

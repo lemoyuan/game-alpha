@@ -1,6 +1,6 @@
 import { canvasW, xpForLevel } from '../consts';
 import { safeTop } from '../render';
-import { MONSTER_TYPES } from '../npc/monster/config';
+import { MONSTER_TYPES, BOSS_CHESTS } from '../npc/monster/config';
 import { UI, FS, R_BTN, sticker, bar, badge, chip, icon, label, labelMid } from './theme';
 
 const P = 12; // HUD 与屏幕边缘的安全间距
@@ -69,7 +69,8 @@ export default class Hud {
       }
     }
 
-    this.drawStats(ctx, player, top + (boss ? 84 : 52));
+    // 无 Boss 时面板从 top+58 起：右上「击杀」药丸底边在 top+54，再早就会压住它
+    this.drawStats(ctx, player, top + (boss ? 84 : 58), databus);
 
     // Toast
     const now = Date.now();
@@ -86,11 +87,12 @@ export default class Hud {
   }
 
   // 左右两列属性：图标 + 数值，收进半透明底板，读法与换皮前一致
-  drawStats(ctx, player, y) {
+  drawStats(ctx, player, y, databus) {
     const rows = [
       [
         { icon: 'gun', label: '攻击', value: player.attack },
-        { icon: 'bolt', label: '攻速', value: `${player.atkSpeed}/秒` },
+        // 0.3 连加会攒出 1.9000000000000001 这类浮点噪声，显示前收进两位小数
+        { icon: 'bolt', label: '攻速', value: `${Math.round(player.atkSpeed * 100) / 100}/秒` },
         { icon: 'target', label: '射程', value: player.attackRange },
         { icon: 'star', label: '暴击', value: `${Math.round(player.critRate * 100)}%` },
         // 读实际生效值：踩进黏液时这个数字会自己掉下去，离开后再涨回来（升级加的是 player.speed，不受影响）
@@ -103,8 +105,17 @@ export default class Hud {
         { icon: 'pierce', label: '穿透', value: player.pierce, color: UI.gold },
         { icon: 'bubble', label: '护盾', value: player.shield, color: UI.gold },
         { icon: 'buddy', label: '跟班', value: player.companions, color: UI.gold },
+        // 这一条是实际像素距离不是次数：开几个匣子都直接看磁吸有多大
+        { icon: 'magnet', label: '拾取范围', value: player.pickupRange, color: UI.gold },
       ],
     ];
+    // Boss 专属匣：开过哪种就在右栏多一行（循环全表，以后加新匣自动出现），没开过 HUD 保持干净
+    for (const kinds of Object.values(BOSS_CHESTS)) {
+      for (const k of kinds) {
+        const n = databus.bossChests[k.id] || 0;
+        if (n > 0) rows[1].push({ icon: k.icon, label: k.name, value: n, color: UI.bossChestBand });
+      }
+    }
     const w = 100;
     const rh = 17;
     rows.forEach((col, ci) => {

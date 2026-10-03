@@ -12,6 +12,10 @@
   button { display: block; width: 100%; margin: 4px 0; padding: 7px 8px; background: #24304F; color: #eee; border: 1px solid #3a4a70; border-radius: 6px; font: 12px monospace; text-align: left; cursor: pointer; }
   button:hover { background: #31426c; }
   .grp { margin: 14px 0 4px; color: #8A95A5; font-size: 11px; text-transform: uppercase; }
+  .pad { display: grid; grid-template-columns: 74px 1fr 46px; gap: 3px 6px; align-items: center; margin: 4px 0; }
+  .pad span { color: #9fb0c8; font-size: 11px; }
+  .pad input { width: 100%; box-sizing: border-box; padding: 3px 5px; background: #101728; color: #eee; border: 1px solid #3a4a70; border-radius: 4px; font: 12px monospace; }
+  .pad button { margin: 0; padding: 3px 0; text-align: center; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -78,16 +82,34 @@
   <button data-nav="codexDetail-tank">图鉴详情 · 铁坨</button>
   <button data-nav="codexDetail-chest">图鉴详情 · 金匣（未解锁）</button>
   <button data-nav="records">游戏记录</button>
+  <div class="grp">操作台 · 角色属性（填了就当预设，开局按钮会自动带上）</div>
+  <div class="pad" id="statpad"></div>
+  <div class="pad">
+    <span>开局秒数</span><input id="stat-elapsed" type="number" step="10" placeholder="按钮自带"><button data-set="elapsed">写</button>
+    <span>等级</span><input id="stat-level" type="number" step="1" placeholder="只往上长"><button data-set="level">升</button>
+  </div>
+  <button data-nav="apply">全部应用到当前角色</button>
+  <button data-nav="readout">读取当前角色 → 操作台</button>
+  <button data-nav="clearload">清空预设</button>
+  <div class="grp" id="padmsg"></div>
+  <div class="grp">操作台 · 宝箱道具</div>
+  <button data-nav="grantpet">授予融合匣（立刻得跟班）</button>
+  <button data-nav="chestpet">摆一只 Boss 融合匣</button>
+  <button data-nav="chestplain">摆一只普通金匣</button>
   <div class="grp">战斗中</div>
+  <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
   <button data-nav="game">开始一局（自动跑图）</button>
   <button data-nav="game3">跳到 3 分钟（带怪海）</button>
   <button data-nav="boss">召唤 Boss</button>
   <button data-nav="boss2">召唤二号 Boss（海火）</button>
   <button data-nav="boss3">召唤三号 Boss（膜王）</button>
+  <button data-nav="bosschest">Boss 专属匣（融合匣）</button>
+  <button data-nav="petstart">带融合匣开局</button>
   <button data-nav="upgrade">升级三选一</button>
   <button data-nav="gameover">结算页（新开一局）</button>
   <button data-nav="die">结束当前这局（带破纪录）</button>
   <button data-nav="shield">护盾 +3</button>
+  <button data-nav="chestrain">宝箱加成雨（16 匣）</button>
   <button data-nav="unlock">解锁全部图鉴</button>
   <div class="grp">调试</div>
   <button data-nav="seed">灌入示例存档（战绩 + 解锁）</button>
@@ -108,7 +130,10 @@
     const ev = { touches: kind === 'end' ? [] : [t], changedTouches: [t], timeStamp: Date.now() };
     for (const fn of handlers[kind]) fn(ev);
   };
-  screen.addEventListener('pointerdown', (e) => { screen.setPointerCapture(e.pointerId); fire('start', e); });
+  // 合成 pointer 没有真实的活跃指针，setPointerCapture 会抛 NotFoundError 把这一下整个吞掉，
+  // 注入脚本发的假触摸就永远进不到游戏里（摇杆测试全瞎）。预览台自己管 touches，捕获与否无所谓
+  const capture = (id) => { try { screen.setPointerCapture(id); } catch (e) { /* 忽略 */ } };
+  screen.addEventListener('pointerdown', (e) => { capture(e.pointerId); fire('start', e); });
   screen.addEventListener('pointermove', (e) => { if (e.buttons) fire('move', e); });
   screen.addEventListener('pointerup', (e) => fire('end', e));
   screen.addEventListener('pointercancel', (e) => fire('cancel', e));
@@ -161,6 +186,7 @@ window.addEventListener('unhandledrejection', (e) => window.__fail('promise: ' +
 <script type="module">
 import Main from './js/main.js';
 import databusInit from './js/databus.js';
+import Player from './js/player/index.js';
 
 const main = new Main();
 const databus = new databusInit();
@@ -247,19 +273,141 @@ window.__unfreeze = () => {
 
 // 开局后自动按住摇杆往右上跑，方便直接看 HUD 与战斗画面
 let auto = null;
+let standStill = false;
 const stage = document.getElementById('game');
-function holdStick() {
-  if (auto) return;
+// 合成事件统一打 __auto 标记：真人上手时要靠它区分「这是我自己发的假事件还是手指」
+function sendStick(type, x, y) {
   const r = stage.getBoundingClientRect();
-  const at = (x, y) => ({ clientX: r.left + x, clientY: r.top + y, buttons: 1, pointerId: 1 });
-  stage.dispatchEvent(new PointerEvent('pointerdown', at(120, 640)));
-  auto = setInterval(() => stage.dispatchEvent(new PointerEvent('pointermove', at(120 + Math.sin(Date.now() / 900) * 45, 640 - 45))), 60);
-  stage.dispatchEvent(new PointerEvent('pointermove', at(120, 595)));
+  const ev = new PointerEvent(type, { clientX: r.left + x, clientY: r.top + y, buttons: type === 'pointerup' ? 0 : 1, pointerId: 1 });
+  ev.__auto = true;
+  stage.dispatchEvent(ev);
 }
+
+function holdStick() {
+  // 站桩偏好对所有开局按钮生效：自动跑会把 Boss 一直甩在身后（实测距离稳定 400+，射程 320 全空），
+  // Boss 强度根本测不出来，所以这里必须能停
+  if (auto || standStill) return;
+  sendStick('pointerdown', 120, 640);
+  auto = setInterval(() => sendStick('pointermove', 120 + Math.sin(Date.now() / 900) * 45, 595), 60);
+  sendStick('pointermove', 120, 595);
+}
+
+// release=false 只掐定时器：手指刚按下的那一次接管不能补发 pointerup，
+// 否则会把用户这根手指一起取消掉，摇杆看起来直接失灵
+function setStand(on, release = true) {
+  standStill = !!on;
+  if (auto) { clearInterval(auto); auto = null; }
+  if (standStill && release) {
+    sendStick('pointerup', 120, 640);
+    main.clearJoystick();
+  }
+  holdStick();
+  const btn = document.querySelector('[data-nav="stand"]');
+  if (btn) btn.textContent = standStill ? '站桩中 · 点我恢复自动跑图' : '站桩（停自动跑，让 Boss 上桌）';
+  return standStill ? '站桩' : '自动跑';
+}
+
+window.__stand = (on) => setStand(on);
+
+// 真人一按就交还控制权：预览台的自动跑图每 60ms 发一次合成 pointermove，
+// 和手指拖的方向互相盖，摇杆就会「我往左滑它却往右上跳」——小程序里没有这个定时器，不会有这问题
+// 这里必须用捕获阶段 + 完整 release：挂在 window 上，捕获序列比画布上的触摸处理更早，
+// 所以此刻清掉合成摇杆（基准点在 120,640）不会取消用户这根手指，
+// 事件继续走到游戏时正好按真实按下点重开一个基准点，往左拖就真的是往左
+window.addEventListener('pointerdown', (e) => {
+  if (e.__auto || standStill) return;
+  setStand(true);
+  say('已接管：自动跑图停了（点「站桩中」按钮可恢复）');
+}, true);
 
 function spawnAround(n) {
   const sp = databus.spawner;
   for (let i = 0; i < n; i++) sp.spawn(databus);
+}
+
+/**
+ * 操作台：初始属性太低，正常打怪攒不出能扛住 Boss 的 build，所以直接写角色属性。
+ * 输入框本身就是预设 —— startRun() 会把填了的值重放到刚建好的角色上，
+ * 因为 main.start() 每次都是 databus.player = new Player()，只改当场那个对象不会跟着开局走。
+ * key 必须与 Player 的属性名一致；后四条是宝箱道具的计数/像素值，改它们等于替玩家开匣。
+ */
+const STATS = [
+  { key: 'attack', label: '攻击力', step: 5 },
+  { key: 'atkSpeed', label: '攻速/秒', step: 0.1 },
+  { key: 'attackRange', label: '射程', step: 20 },
+  { key: 'critRate', label: '暴击率0~1', step: 0.05 },
+  { key: 'critMult', label: '暴伤倍数', step: 0.5 },
+  { key: 'speed', label: '移速', step: 10 },
+  { key: 'defence', label: '防御', step: 2 },
+  { key: 'luck', label: '幸运', step: 1 },
+  { key: 'maxHp', label: '生命上限', step: 100 },
+  { key: 'hp', label: '当前生命', step: 10 },
+  { key: 'bulletCount', label: '子弹数', step: 1 },
+  { key: 'pierce', label: '穿透', step: 1 },
+  { key: 'shield', label: '护盾', step: 1 },
+  { key: 'companions', label: '跟班', step: 1 },
+  { key: 'pickupRange', label: '拾取范围', step: 30 },
+];
+
+// 占位符给真实出厂值，不抄常量表：一个 new Player() 就是游戏的初始 build
+const REF = new Player();
+document.getElementById('statpad').innerHTML = STATS
+  .map((s) => `<span>${s.label}</span><input id="stat-${s.key}" type="number" step="${s.step}" placeholder="默认 ${REF[s.key]}"><button data-set="${s.key}">写</button>`)
+  .join('');
+
+const say = (msg) => { document.getElementById('padmsg').textContent = msg; };
+
+// 空输入 = 不动这一项，所以只填攻击力也能开局
+const numIn = (key) => {
+  const el = document.getElementById('stat-' + key);
+  if (!el || el.value === '') return null;
+  const v = Number(el.value);
+  return Number.isFinite(v) ? v : null;
+};
+
+// 等级只往上长：每级自动成长走 player.applyLevelBonus()，和真实升级叠出来的属性一致，
+// 不会凭空造出一套游戏里达不到的 build
+function growTo(p, level) {
+  while (p.level < level) {
+    p.level++;
+    p.applyLevelBonus();
+  }
+}
+
+function applyStat(key, v) {
+  const p = databus.player;
+  if (!p) return '未在局内';
+  if (key === 'level') { growTo(p, v); return `等级 ${p.level}`; }
+  if (key === 'elapsed') { databus.spawner.elapsed = v; return `开局 ${v}s`; }
+  p[key] = v;
+  if (key === 'maxHp') p.hp = Math.min(p.hp, p.maxHp); // 上限往下调别让血条溢出
+  return `${key} = ${p[key]}`;
+}
+
+window.__applyLoadout = () => {
+  const p = databus.player;
+  if (!p) return '未在局内：预设会在下次开局时生效';
+  const lv = numIn('level');
+  // 先长等级再用属性覆盖：反过来会把每级成长叠两遍
+  if (lv !== null) growTo(p, lv);
+  for (const s of STATS) {
+    const v = numIn(s.key);
+    if (v !== null) applyStat(s.key, v);
+  }
+  return `已应用：攻 ${p.attack} / 攻速 ${p.atkSpeed} / 生命 ${p.hp} / Lv${p.level}`;
+};
+
+// 注入脚本用的同一扇门：写进输入框（留在预设里）并立刻作用到当前角色
+window.__setStat = (key, v) => {
+  const el = document.getElementById('stat-' + key);
+  if (el) el.value = v;
+  return applyStat(key, v);
+};
+
+// 开局秒数决定刷怪强度：操作台填了就用它，没填才用按钮自带的档位
+function setElapsed(fallback) {
+  const v = numIn('elapsed');
+  databus.spawner.elapsed = v === null ? fallback : v;
 }
 
 // 开局：置标志后立刻泵一帧把它消费掉，别等墙上时间。
@@ -268,6 +416,8 @@ function spawnAround(n) {
 function startRun() {
   main.startRequested = true;
   window.__pump(16.7);
+  window.__applyLoadout();
+  setElapsed(databus.spawner.elapsed);
   holdStick();
 }
 
@@ -303,6 +453,52 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.homeScreen.openCodex(type);
       return;
     }
+    if (nav === 'stand') {
+      say('移动：' + setStand(!standStill));
+      return;
+    }
+    if (nav === 'apply') { say(window.__applyLoadout()); return; }
+    if (nav === 'readout') {
+      // 把当前角色抄进输入框：正常打出来的 build 就能原样重开一局拿去测 Boss
+      const p = databus.player;
+      if (!p) { say('未在局内，读不到角色'); return; }
+      for (const s of STATS) document.getElementById('stat-' + s.key).value = p[s.key];
+      document.getElementById('stat-level').value = p.level;
+      document.getElementById('stat-elapsed').value = Math.round(databus.spawner.elapsed);
+      say(`已读取 Lv${p.level} / ${Math.round(databus.spawner.elapsed)}s`);
+      return;
+    }
+    if (nav === 'clearload') {
+      document.querySelectorAll('.pad input').forEach((el) => { el.value = ''; });
+      say('预设已清空，回到游戏初始值');
+      return;
+    }
+    // 宝箱道具三条不打断正在打的局：只有停在首页或已结算时才新开一局
+    if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain') {
+      if (databus.screen !== 'game' || databus.isGameOver) startRun();
+      const { clampToCoast } = await import('./js/arena/coast.js');
+      const { default: Chest } = await import('./js/npc/chest.js');
+      const place = (kind) => {
+        const c = databus.pool.getItemByClass('chest', Chest);
+        // 按已有匣数往右让开：连点多次不会叠在同一颗上看不清
+        c.init(databus.player.x + 60 + databus.chests.length * 34, databus.player.y + 40, kind);
+        clampToCoast(c, 6); // 贴着岸摆会掉到海岸线外永远捡不到
+        databus.chests.push(c);
+      };
+      if (nav === 'grantpet') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        CHEST_GRANTS.pet_cmv(databus); // 和拾取同一条路：注册表直接授出跟班
+        say(`融合匣已授出：跟班 ${databus.bossPets.length} 只`);
+      } else if (nav === 'chestpet') {
+        place('pet_cmv');
+        say('Boss 融合匣已摆在右前方');
+      } else {
+        place(); // 不传 kind = 走五种随机加成的普通金匣
+        say('普通金匣已摆在右前方');
+      }
+      spawnAround(4);
+      return;
+    }
     if (nav === 'game') { startRun(); return; }
     if (nav === 'die') {
       // 结束「正在打的这一局」：结算面板才会带上真实的破纪录标记
@@ -310,40 +506,83 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain') {
       startRun();
       if (nav === 'game3') {
-        databus.spawner.elapsed = 180;
+        setElapsed(180);
         spawnAround(26);
       }
       // 手动召唤要把出场表指针推到表尾：不然自动调度器过一会儿自己又刷一只叠上来
       if (nav === 'boss') {
         const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        databus.spawner.elapsed = 200;
+        setElapsed(200);
         databus.spawner.bossIndex = BOSS_SCHEDULE.length;
         databus.spawner.spawnBoss(databus);
         spawnAround(8);
       }
       if (nav === 'boss2') {
         const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        databus.spawner.elapsed = 250;
+        setElapsed(250);
         databus.spawner.bossIndex = BOSS_SCHEDULE.length;
         databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[1]);
         spawnAround(8);
       }
       if (nav === 'boss3') {
         const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        databus.spawner.elapsed = 370;
+        setElapsed(370);
         databus.spawner.bossIndex = BOSS_SCHEDULE.length;
         databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[2]);
         spawnAround(8);
       }
+      // Boss 专属匣：直接把 boss1 掉落表里的匣摆到玩家右侧，走过去看图标/跟班/HUD 计数
+      if (nav === 'bosschest') {
+        const { BOSS_CHESTS } = await import('./js/npc/monster/config.js');
+        const { default: Chest } = await import('./js/npc/chest.js');
+        BOSS_CHESTS.boss1.forEach((k, i) => {
+          const c = databus.pool.getItemByClass('chest', Chest);
+          c.init(databus.player.x + 70 + i * 55, databus.player.y, k.id);
+          databus.chests.push(c);
+        });
+        spawnAround(8);
+      }
+      // 带融合匣开局：不杀 Boss 也能测跟班，直接走注册表授出（和拾取同一条路）
+      if (nav === 'petstart') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        CHEST_GRANTS.pet_cmv(databus);
+        spawnAround(8);
+      }
       if (nav === 'shield') { databus.player.shield += 3; spawnAround(8); }
+      // 宝箱加成雨：一圈摆 16 只普通金匣（kind 为空 = 走五种随机加成那条路），跑两步就能把 HUD 右列填满
+      if (nav === 'chestrain') {
+        const { default: Chest } = await import('./js/npc/chest.js');
+        const { clampToCoast } = await import('./js/arena/coast.js');
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2;
+          const c = databus.pool.getItemByClass('chest', Chest);
+          c.init(databus.player.x + Math.cos(a) * 70, databus.player.y + Math.sin(a) * 70);
+          clampToCoast(c, 6); // 贴着岸摆会掉到海岸线外永远捡不到，落点和 Boss 宝石一样过一遍真实边界
+          databus.chests.push(c);
+        }
+        spawnAround(8);
+      }
       if (nav === 'upgrade') { databus.isPaused = true; databus.upgradeScreen.show(databus); }
       if (nav === 'gameover') { databus.player.hp = 0; databus.isGameOver = true; }
       return;
     }
   });
+});
+
+// 每行「写」只管这一行：改一项立刻作用到当前角色，不用重开一局
+// 输入框按回车等价于点写，调数值时少一次鼠标
+document.querySelectorAll('[data-set]').forEach((btn) => {
+  const key = btn.dataset.set;
+  const run = () => {
+    const v = numIn(key);
+    if (v === null) { say('先填数值'); return; }
+    say(`${key} → ${applyStat(key, v)}`);
+  };
+  btn.addEventListener('click', run);
+  document.getElementById('stat-' + key).addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
 });
 </script>
 </body>

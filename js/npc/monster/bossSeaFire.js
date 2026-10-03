@@ -2,6 +2,7 @@ import Enemy from './enemy';
 import Laser, { LASER_EYES, LASER_LIGHT_ORDER, TURN_WARN } from './laser';
 import Zone from './zone';
 import { ABYSS } from '../../consts';
+import { clampToCoast } from '../../arena/coast';
 import { UI } from '../../ui/theme';
 
 /**
@@ -20,8 +21,11 @@ import { UI } from '../../ui/theme';
 // 出场后多久放第一个技能（毫秒）：比 skillCd 短，玩家刚照面就该看见它转起来
 const FIRST_CAST_DELAY = 2600;
 // 赤潮环相对 Boss 的布池距离（× poolRadius）：太近会合成一坨，太远封不住走位
-// 三片等分在这个半径上，相邻片心距 = √3 × 布池半径 ≈ 2.77 倍池半径，恒大于最小池心距 1.4 倍 → 环上一定留得下缝
-const RING_DIST = 1.6;
+// 三片等分在这个半径上，相邻片心距 = √3 × 布池半径 ≈ 3.46 倍池半径（边缘净缝约 85px ≈ 5 个身位），
+// 恒大于下面 castPools 的最小池心距 2.1 倍 → 环上一定留得下缝
+// ★2026-09-30：1.6 → 2.0。1.6 时三片边缘净缝只有 44px（不到 3 个身位），玩家看到的是"一摊连着的水"
+//   而不是"三片各自要绕的池子"，机制读不出来；摊开之后每片独立可读，代价是封锁密度下降
+const RING_DIST = 2.0;
 
 export default class BossSeaFire extends Enemy {
   constructor(type, config) {
@@ -38,6 +42,7 @@ export default class BossSeaFire extends Enemy {
     this.poolWarn = config.poolWarn;
     this.poolLife = config.poolLife;
     this.poolDamage = config.poolDamage;
+    this.poolPoisonHold = config.poolPoisonHold; // 中毒持续时间：离开池子后还掉多久
     // 传给 Laser.init 的光束参数：tint 直接用怪物识别色，改 config.color 就全身跟着变
     this.laserCfg = {
       telegraph: config.laserTelegraph,
@@ -201,7 +206,12 @@ export default class BossSeaFire extends Enemy {
     }
     if (player && spots.length < this.poolCount) spots.push({ x: player.x, y: player.y });
 
-    const minGap = r * 1.4; // 相邻片心距小于这个数就会糊成一坨没缝可走
+    // 落点先过一次真实海岸线：环摊到 2.0 倍池半径后，Boss 贴着岸施法会把大半片池子甩到岸上，
+    // 画出来就是"水面上凭空一滩发光的水"。余量给 0.5 倍半径，池子主体仍落在水里，只是不指望它整片在岸内
+    for (const s of spots) clampToCoast(s, r * 0.5);
+
+    const minGap = r * 2.1; // 相邻片心距下限；★2.1 是实测定的：1.7（=98.6px）还小于两片直径 116px，
+                            //   脚下那片会和环上某片边缘咬住 17px，看上去仍是一坨连水。2.1 = 121.8px，净缝约 6px
     for (let pass = 0; pass < 2; pass++) {
       for (let i = 0; i < spots.length; i++) {
         const p = spots[i];
@@ -220,7 +230,7 @@ export default class BossSeaFire extends Enemy {
     }
     for (const s of spots) {
       const zone = databus.pool.getItemByClass('zone', Zone);
-      zone.init(s.x, s.y, r, this.poolLife, this.poolWarn, this.poolDamage, this.zoneTint);
+      zone.init(s.x, s.y, r, this.poolLife, this.poolWarn, this.poolDamage, this.poolPoisonHold, this.zoneTint);
       databus.zones.push(zone);
     }
     this.state = 'bloom';

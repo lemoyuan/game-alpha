@@ -11,7 +11,7 @@ import { clampToCoast } from '../../arena/coast';
  *   burst 被孔口的压力喷出去（初速远快于回爬速度，"吐"这个动作要一眼看出来）
  *   home  到达折返距离后掉头，慢速爬回本体 —— 只有这一段画牵引线
  *
- * 直接继承 Enemy 并复用真实的杂兵 config（basic/fast/tank），
+ * 直接继承 Enemy 并复用真实的杂兵 config（boss3.colonyTypes = fast/tank，一整波只出同一种），
  * 于是血量、半径、识别色、贴图、接触伤害、掉落经验、图鉴条目全部白拿，
  * HUD 和图鉴都不需要新增分支。
  *

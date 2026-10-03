@@ -41,6 +41,12 @@ export const CHIMNEY = [
 // 底部孔口：菌群从这里被喷出去，也是回嵌的入口（牵引线画到这儿）
 const HOLE = { a: 0.332, r: 0.70 };
 
+// 菌群喷出的扇形【总张角】（弧度）。★定的是总张角、不是逐只步长：
+// 步长 = 本值 ÷ (只数 - 1)，所以改 colonyCount 不会改变喷出形状。
+// 旧代码把步长硬编成 0.42，3 只时总张角 0.84（≈48°）刚好，8 只就变成 2.94（≈168°）——
+// 半个圆直接喷到本体后方，看上去像被自己顶住了菊花。
+const COLONY_FAN = 1.2;
+
 // 膜里封着的三颗菌：key 指向它对应的杂兵类型，高亮色直接从 MONSTER_TYPES 取，改配色不会脱开
 const EMBEDDED = [
   { a: 2.862, r: 0.52, key: 'basic' },
@@ -329,11 +335,13 @@ export default class BossFilm extends Enemy {
     const hx = this.x + Math.cos(holeA) * HOLE.r * half;
     const hy = this.y + Math.sin(holeA) * HOLE.r * half;
     const n = this.colonyCount;
+    // 一整波只出一种：形状必须固定，玩家才读得懂"这波是窜子（该拦）还是铁坨（拦不完）"
+    const type = this.colonyTypes[Math.floor(Math.random() * this.colonyTypes.length)];
+    const step = n > 1 ? COLONY_FAN / (n - 1) : 0;
     for (let i = 0; i < n; i++) {
-      const type = this.colonyTypes[i % this.colonyTypes.length];
       const colony = new Colony(type, MONSTER_TYPES[type], this.colonyCfg);
-      // 一个孔口扇形喷出，别三只叠成一只
-      const a = holeA + (i - (n - 1) / 2) * 0.42;
+      // 一个孔口扇形喷出，别几只叠成一只
+      const a = holeA + (i - (n - 1) / 2) * step;
       const flipAt = this.colonyDist[0] + Math.random() * (this.colonyDist[1] - this.colonyDist[0]);
       colony.init(hx, hy);
       colony.launch(this, Math.cos(a), Math.sin(a), flipAt);

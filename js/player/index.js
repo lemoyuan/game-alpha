@@ -7,9 +7,12 @@ import {
   PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK, LUCK_XP_BONUS,
   BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
+  XP_PICKUP_RANGE,
+  POISON_TICK,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
+import { UI } from '../ui/theme';
 import { clampToCoast } from '../arena/coast';
 
 export default class Player extends Sprite {
@@ -31,10 +34,14 @@ export default class Player extends Sprite {
     this.pierce = 0;                    // 子弹可穿透敌人数（宝箱：子弹穿透+1）
     this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
     this.companions = 0;                // 跟班数量（宝箱：跟班+1）
+    this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
     this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
     this.slowMult = 1;                  // 当前移速倍率（1 = 未被减速），由黏液洼写入 applySlow
     this.slowLeft = 0;                  // 减速剩余毫秒数：离开黏液后还要拖一会儿才恢复，黏滞感来自这个尾巴
+    this.poisonLeft = 0;                // 中毒剩余毫秒数（赤潮池写入 applyPoison）：离开池子还在身上，这才是"持续掉血"
+    this.poisonTickLeft = 0;            // 距下一跳伤害的毫秒数（内部用），节奏是 POISON_TICK，和受击无敌帧互不相干
+    this.poisonDamage = 0;              // 每跳掉多少血：重叠的毒只取最强的一片，绝不相乘
     this.dirX = 0;                      // 朝向X（跟随子弹方向）
     this.dirY = -1;                     // 朝向Y（跟随子弹方向）
     this.xp = 0;                        // 当前经验
@@ -47,6 +54,21 @@ export default class Player extends Sprite {
     // 无敌帧用 Date.now() 是因为它是「伤害源的限流器」，不是持续时间，两者不要照抄彼此
     this.slowLeft = Math.max(0, this.slowLeft - dt * 1000);
     if (this.slowLeft === 0) this.slowMult = 1; // 归零必须复位倍率，否则下次只上弱黏液会继承旧的强值
+
+    // 中毒：同样的 dt 时钟，但走自己这条路结算——不碰 takeDamage，所以不吃受击无敌帧、也不被护盾挡。
+    // 无敌帧是「一次撞击」的限流器，护盾挡的是「一次攻击」，毒素既不被撞完也不该被盾白吞
+    if (this.poisonLeft > 0) {
+      this.poisonLeft = Math.max(0, this.poisonLeft - dt * 1000);
+      this.poisonTickLeft -= dt * 1000;
+      if (this.poisonTickLeft <= 0) {
+        this.poisonTickLeft += POISON_TICK;
+        this.hp -= this.poisonDamage;
+      }
+      if (this.poisonLeft === 0) {
+        this.poisonDamage = 0;
+        this.poisonTickLeft = 0;
+      }
+    }
 
     const dir = databus.joystick ? databus.joystick.getDirection() : { x: 0, y: 0 };
     let moveX = 0;
@@ -116,6 +138,16 @@ export default class Player extends Sprite {
     if (this.slowLeft > 0) this.slowMult = Math.min(this.slowMult, mult);
     else this.slowMult = mult;
     this.slowLeft = Math.max(this.slowLeft, hold);
+  }
+
+  // 赤潮毒素：和 applySlow 同一套规矩——重叠的池只取最强的一片、时长刷新不叠加。
+  // 刚挂上时把跳血时钟对齐到 0，第一跳立刻到手，玩家才有"踩到了"的即时反馈
+  applyPoison(damage, hold) {
+    const fresh = this.poisonLeft <= 0;
+    if (fresh) this.poisonDamage = damage;
+    else this.poisonDamage = Math.max(this.poisonDamage, damage);
+    this.poisonLeft = Math.max(this.poisonLeft, hold);
+    if (fresh) this.poisonTickLeft = 0;
   }
 
   effectiveSpeed() {
@@ -210,6 +242,31 @@ export default class Player extends Sprite {
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
+    }
+
+    // 中毒自查反馈：身上一圈毒素膜 + 三滴往下淌的毒液，每次跳血整组亮一下——
+    // "持续掉血"这件事必须看得见，否则玩家只会觉得血条莫名其妙在自己少。
+    // 动画按 poisonLeft / poisonTickLeft 走（都是 dt 时钟），三选一面板开着时和跳血一起冻结，不会留下挂着的假毒
+    if (this.poisonLeft > 0) {
+      const s = Math.min(1, this.poisonLeft / 900); // 最后 0.9 秒渐退，别突然消失
+      const pulse = 1 - Math.min(1, this.poisonTickLeft / POISON_TICK); // 刚跳过血 = 1，下一次跳血前衰减到 0
+      ctx.save();
+      ctx.strokeStyle = UI.toxic;
+      ctx.lineWidth = 2.5;
+      ctx.globalAlpha = (0.4 + 0.3 * pulse) * s;
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = UI.toxic;
+      for (let i = 0; i < 3; i++) {
+        const ox = (i - 1) * this.radius * 0.55;
+        const len = 3 + 7 * pulse * (i === 1 ? 1 : 0.7);
+        ctx.globalAlpha = 0.75 * s;
+        ctx.beginPath();
+        ctx.ellipse(this.x + ox, this.y + this.radius * 0.85 + len * 0.5, 2.2, len * 0.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
 
     const flashAge = now - this.lastAttack;

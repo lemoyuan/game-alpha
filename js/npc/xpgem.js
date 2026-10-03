@@ -23,7 +23,8 @@ export default class XpGem extends Sprite {
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 80) {
+    // 磁吸半径是角色属性（初始 XP_PICKUP_RANGE，宝箱「经验拾取范围」往上加）
+    if (dist < player.pickupRange) {
       const speed = 300;
       this.x += (dx / dist) * speed * dt;
       this.y += (dy / dist) * speed * dt;
