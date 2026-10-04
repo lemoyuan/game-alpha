@@ -1,17 +1,28 @@
 import { canvasW, xpForLevel, ITEM_BAR, HUD_TILE, PAUSE_BTN } from '../consts';
-import { safeTop } from '../render';
+import { safeTop, capsuleBottom } from '../render';
 import { MONSTER_TYPES, BOSS_CHESTS } from '../npc/monster/config';
 import { UI, FS, R_BTN, sticker, bar, badge, chip, icon, itemGlyph, label, labelMid } from './theme';
 
 const P = 12; // HUD 与屏幕边缘的安全间距
+const CHIP_W = 64; // 实测字宽：「击杀 1234」10px 粗体 46px、「12:34」13px 粗体 40px，64 宽左右各留 9~12px
+const CHIP_H = 26; // 与 PAUSE_BTN 同高，一排三枚的底边才齐
+const GAP = 8; // 药丸自带 2.5px 白色贴纸外框，间距低于 5 两条白框会合成一条线
+const ROW_CLEAR = 8; // 簇顶离胶囊底边的空隙，同理只让 4px 会剩 1.5px 缝
+
+// 右上簇的顶边：整簇（击杀 / 计时 / 暂停）以及挂在它下面的 Boss 血条和两栏面板，
+// 全部由这一个函数往下推。★不要再写死 P + safeTop —— 那个值在刘海机上是 55，
+// 而胶囊占的是 51..83，压在它底下的暂停按钮在真机上的症状是点不动，不是看不见
+export function hudRowTop() {
+  return Math.max(P + safeTop, capsuleBottom + ROW_CLEAR);
+}
 
 // 暂停按钮的位置：绘制在这里，命中判定在 ui/pause.js，摇杆让位在 ui/joystick.js。
 // ★三处必须共用这一个函数，各自算一次迟早对不齐（对不齐的症状是按钮点不动、或摇杆把这一格吞掉）
 export function pauseButtonRect() {
-  return { x: canvasW - P - PAUSE_BTN, y: P + safeTop, w: PAUSE_BTN, h: PAUSE_BTN };
+  return { x: canvasW - P - PAUSE_BTN, y: hudRowTop(), w: PAUSE_BTN, h: PAUSE_BTN };
 }
 
-// 本局已持有的道具：金匣六种按 ITEM_BAR 的固定顺序，Boss 专属匣追在后面
+// 本局已持有的道具：金匣七种按 ITEM_BAR 的固定顺序，Boss 专属匣追在后面
 // （循环 BOSS_CHESTS 全表，以后加匣这里和 HUD 都不用动），0 层的不占位。
 // HUD 的道具栏和暂停详情页共用这一份，两处的顺序和层数才不会各算各的
 export function ownedItems(databus) {
@@ -62,19 +73,26 @@ export default class Hud {
       size: FS.tiny, bold: true, color: UI.textOnDark,
     });
 
-    // 经验：等级药丸 + 细条，剩余空间放经验数值
+    // 经验：等级药丸 + 细条，数值压在条子正下方。
+    // ★不能画回条子右侧（老位置 x=198）：右上簇横排之后左边缘到 208，
+    //   而药丸的白色贴纸外框还要再往外 2.5px，原位必撞
     const xpNeeded = xpForLevel(player.level);
     chip(ctx, P, top + 26, 26, 16, `L${player.level}`, { color: UI.gold, size: FS.tiny });
     bar(ctx, barX, top + 28, barW, 8, player.xp / xpNeeded, UI.blue, { r: 4 });
-    label(ctx, `${player.xp}/${xpNeeded}`, barX + barW + 8, top + 40, { size: FS.tiny, color: UI.muted });
+    label(ctx, `${player.xp}/${xpNeeded}`, barX, top + 48, { size: FS.tiny, color: UI.muted });
 
-    // 计时与击杀：右上角两枚药丸，整体往左让开暂停按钮
+    // 右上簇：击杀 | 计时 | 暂停 一排三枚，从屏幕右边距往左排，整簇顶边让开微信胶囊
     const mins = Math.floor(databus.spawner.elapsed / 60);
     const secs = Math.floor(databus.spawner.elapsed % 60);
-    const rw = 84;
-    const rx = canvasW - P - PAUSE_BTN - 6 - rw;
-    chip(ctx, rx, top, rw, 26, `${mins}:${secs < 10 ? '0' : ''}${secs}`, { color: UI.cream, size: FS.body });
-    chip(ctx, rx, top + 32, rw, 22, `击杀 ${player.kills}`, { color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny });
+    const rowY = hudRowTop();
+    const rowB = rowY + CHIP_H;
+    const timerX = canvasW - P - PAUSE_BTN - GAP - CHIP_W;
+    chip(ctx, timerX - GAP - CHIP_W, rowY, CHIP_W, CHIP_H, `击杀 ${player.kills}`, {
+      color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny,
+    });
+    chip(ctx, timerX, rowY, CHIP_W, CHIP_H, `${mins}:${secs < 10 ? '0' : ''}${secs}`, {
+      color: UI.cream, size: FS.body,
+    });
 
     // 暂停：刻意画成方贴而不是圆盘，圆盘这一栏全是道具格，形状是唯一能区分「可点」和「只是读数」的线索
     const pb = pauseButtonRect();
@@ -86,7 +104,9 @@ export default class Hud {
     if (boss) {
       const bw = Math.min(canvasW - 40, 300);
       const bx = (canvasW - bw) / 2;
-      const by = top + 58;
+      // +8 而不是 +4：药丸和血条各带 2.5px 白色外框，只让 4px 时两条白框只差 1px，
+      // 血条横贯整排药丸，视觉上会连成一条粗白线
+      const by = rowB + 8;
       bar(ctx, bx, by, bw, 14, boss.hp / boss.maxHp, UI.red, { r: 7 });
       labelMid(ctx, `BOSS ${MONSTER_TYPES[boss.type] ? MONSTER_TYPES[boss.type].name : ''}`, bx + bw / 2, by + 8, {
         size: FS.tiny, bold: true, color: UI.textOnDark,
@@ -99,10 +119,11 @@ export default class Hud {
       }
     }
 
-    // 无 Boss 时面板从 top+58 起：右上「击杀」药丸底边在 top+54，再早就会压住它
-    // 有 Boss 时从 top+86 起：Boss 血条占 top+58..72，膜王还多一条膜量子条到 top+82，
-    // 而面板贴纸顶边画在 panelY-3，84 会让它啃掉膜条底边 1px
-    const panelY = top + (boss ? 86 : 58);
+    // 面板起点跟着簇底走，不再写死在 top 上（刘海机 rowY=91、rowB=117）：
+    // 有 Boss 时血条占 rowB+8..+22（125..139），膜王还多一条膜量子条到 rowB+32（149），
+    // 面板贴纸顶边画在 panelY-3，所以取 rowB+36 = 153 才啃不到膜条底边
+    // 无 Boss 时没有血条也没有膜条，面板直接落在血条原本那一格 rowB+8 = 125
+    const panelY = rowB + (boss ? 36 : 8);
     this.drawStats(ctx, player, panelY);
     this.drawItems(ctx, databus, panelY);
 
@@ -113,7 +134,9 @@ export default class Hud {
       ctx.globalAlpha = Math.min(1, remaining * 2);
       const tw = 210;
       const tx = canvasW / 2 - tw / 2;
-      const ty = 90 + safeTop;
+      // ty 不能再写死成 90 + safeTop：那是照着「簇在 top」量的，簇一跟着胶囊下移就会啃掉血条底边。
+      // 有 Boss 时横条区到 rowB+32（膜条底边）再让 10，无 Boss 时到 rowB+8 再让 10
+      const ty = rowB + (boss ? 42 : 18);
       sticker(ctx, tx, ty, tw, 34, { fill: UI.cream, r: R_BTN });
       labelMid(ctx, this.toastText, canvasW / 2, ty + 18, { size: FS.body, bold: true, color: UI.textOnLight });
       ctx.globalAlpha = 1;
