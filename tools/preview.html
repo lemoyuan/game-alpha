@@ -105,6 +105,7 @@
   <button data-nav="boss3">召唤三号 Boss（膜王）</button>
   <button data-nav="bosschest">Boss 专属匣（融合匣）</button>
   <button data-nav="petstart">带融合匣开局</button>
+  <button data-nav="bomberstart">带炸弹跟班开局（一坨怪）</button>
   <button data-nav="upgrade">升级三选一</button>
   <button data-nav="gameover">结算页（新开一局）</button>
   <button data-nav="die">结束当前这局（带破纪录）</button>
@@ -154,6 +155,8 @@
     createCanvas: () => { if (first) { first = false; return screen; } return document.createElement('canvas'); },
     getWindowInfo: info,
     getSystemInfoSync: info,
+    // 刘海机实测：胶囊在 safeArea.top 下方 4px，87x32 → 底边 83。右上簇就是照这个让位的
+    getMenuButtonBoundingClientRect: () => ({ top: 51, left: 293, width: 87, height: 32, bottom: 83 }),
     createImage: () => new Image(),
     onTouchStart: (fn) => handlers.start.push(fn),
     onTouchMove: (fn) => handlers.move.push(fn),
@@ -325,6 +328,21 @@ function spawnAround(n) {
   for (let i = 0; i < n; i++) sp.spawn(databus);
 }
 
+// 挤成一坨的怪：炸弹跟班挑的是「邻居最多的那一只」，散刷的怪既测不出这条索敌，
+// 也拍不出一张能说明"它凭什么 4 秒才扔一枚"的截图。dx/dy 是相对角色的偏移，spread 是坨的半径
+function spawnBlob(n, dx, dy, spread) {
+  const sp = databus.spawner;
+  const p = databus.player;
+  for (let i = 0; i < n; i++) {
+    sp.spawn(databus);
+    const e = databus.enemys[databus.enemys.length - 1];
+    const a = i * 2.39996; // 黄金角摊开：9 只挤在 44 半径里不会叠成一个点
+    const r = spread * Math.sqrt((i + 0.5) / n);
+    e.x = p.x + dx + Math.cos(a) * r;
+    e.y = p.y + dy + Math.sin(a) * r;
+  }
+}
+
 /**
  * 操作台：初始属性太低，正常打怪攒不出能扛住 Boss 的 build，所以直接写角色属性。
  * 输入框本身就是预设 —— startRun() 会把填了的值重放到刚建好的角色上，
@@ -345,7 +363,8 @@ const STATS = [
   { key: 'bulletCount', label: '子弹数', step: 1 },
   { key: 'pierce', label: '穿透', step: 1 },
   { key: 'shield', label: '护盾', step: 1 },
-  { key: 'companions', label: '跟班', step: 1 },
+  { key: 'companions', label: '射击跟班', step: 1 },
+  { key: 'bomber', label: '炸弹跟班', step: 1 },
   { key: 'pickupRange', label: '拾取范围', step: 30 },
   { key: 'burnBullets', label: '燃烧子弹', step: 1 },
 ];
@@ -494,7 +513,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         place('pet_cmv');
         say('Boss 融合匣已摆在右前方');
       } else {
-        place(); // 不传 kind = 走六种随机加成的普通金匣
+        place(); // 不传 kind = 走七种随机加成的普通金匣
         say('普通金匣已摆在右前方');
       }
       spawnAround(4);
@@ -507,7 +526,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain') {
       startRun();
       if (nav === 'game3') {
         setElapsed(180);
@@ -552,8 +571,13 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         CHEST_GRANTS.pet_cmv(databus);
         spawnAround(8);
       }
+      // 操作台没填层数就给 2：一枚只能看出"它在扔"，两枚才能同时看出散布和密集索敌
+      if (nav === 'bomberstart') {
+        if (!databus.player.bomber) databus.player.bomber = 2;
+        spawnBlob(9, 130, 0, 44);
+      }
       if (nav === 'shield') { databus.player.shield += 3; spawnAround(8); }
-      // 宝箱加成雨：一圈摆 16 只普通金匣（kind 为空 = 走六种随机加成那条路），跑两步就能把 HUD 右列填满
+      // 宝箱加成雨：一圈摆 16 只普通金匣（kind 为空 = 走 BONUSES 那张随机加成表那条路），跑两步就能把 HUD 右列填满
       if (nav === 'chestrain') {
         const { default: Chest } = await import('./js/npc/chest.js');
         const { clampToCoast } = await import('./js/arena/coast.js');

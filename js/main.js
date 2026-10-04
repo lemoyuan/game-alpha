@@ -166,6 +166,13 @@ export default class Main {
       }
     }
 
+    // 炸弹：伤害在引爆那一帧一次结清，这里只回收爆风放完的那一枚
+    for (let i = databus.bombs.length - 1; i >= 0; i--) {
+      if (databus.bombs[i].isDestroyed) {
+        databus.removeBomb(i);
+      }
+    }
+
     // 怪物子弹：命中结算在 bullet.update 内完成，这里回收被销毁的子弹
     for (let i = databus.enemyBullets.length - 1; i >= 0; i--) {
       if (databus.enemyBullets[i].isDestroyed) {
@@ -256,9 +263,13 @@ export default class Main {
     for (const e of databus.enemys) { e.draw(ctx); e.drawBurn(ctx); }
     for (const b of databus.bullets) b.draw(ctx);
     for (const b of databus.enemyBullets) b.draw(ctx);
+    // 炸弹压在怪之上：飞行那几帧里落点环要能被看见，引爆那一闪更要盖住整片怪，
+    // 否则这 4 秒一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
+    for (const b of databus.bombs) b.draw(ctx);
     if (databus.player) {
       for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);
+      for (const b of databus.bombers) b.draw(ctx);
       databus.player.draw(ctx);
     }
     for (const t of databus.damageTexts) t.draw(ctx);

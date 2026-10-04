@@ -71,6 +71,9 @@ export const BULLET_COLOR = '#F5B041';  // 主角子弹颜色：与 HUD 子弹�
 export const BULLET_DAMAGE = 10;        // （未直接使用，实际伤害取 player.attack）
 export const BULLET_RANGE_BUFFER = 50;  // 子弹飞行距离在索敌距离基础上的缓冲
 export const PIERCE_DAMAGE_FALLOFF = 0.6; // 穿透衰减：子弹每穿过一个目标，后续伤害变为上一次的 60%（改成 1 即不衰减）
+export const SHOT_SPREAD = 0.18;        // 多发弹的相邻张角（弧度），主角 bulletCount 与跟班齐射共用
+// ★两处共用一个数是故意的：主角三发和跟班三发同帧飞出时，两张扇面必须看起来是同一套机械，
+//   差 0.02 弧度在 200px 末端就是 4px 的错位，玩家说不出来但会看出"跟班的弹歪得不一样的"
 
 // 燃烧子弹（宝箱道具）：命中挂 5 秒，每 0.5 秒跳一次血，每跳伤害 = 道具层数
 export const BURN_TICK = 500;   // 每跳跳血的间隔（毫秒）。★故意不与上面玩家的 POISON_TICK 共用一个常量：两条节拍各自可调，玩家中毒和怪被烧本来就不该同拍
@@ -106,6 +109,27 @@ export const COMPANION_BULLET_RADIUS = 3;    // 跟班子弹半径（小于主�
 export const COMPANION_BULLET_COLOR = '#5dade2'; // 跟班子弹颜色（蓝色，区别于主角子弹）
 export const COMPANION_DAMAGE_RATIO = 0.5;   // 跟班伤害 = 角色攻击力 × 此系数
 
+// ===== 炸弹跟班（金匣第 7 种加成）=====
+// 0.7 是老射击跟班在身后弧形展开的格距（当时 N 层 = N 只）。现在跟班只留一只、站正后方，
+// 这个数只剩一个用途：给炸弹跟班定它那一格。两只因此相距 45×2×sin(0.35) ≈ 31px，
+// 而显示边长都是 22 —— 一眼分得出是两只不同的跟班，又不会贴成重影
+export const COMPANION_SLOT_ANGLE = 0.7;
+
+export const BOMB_DAMAGE_RATIO = 2;   // 单枚伤害 = 角色攻击力 × 此系数。★不是 3：3 的时候它在任何层数都严格压制射击跟班，第 6 种会被挤成废项；2 才是「炸一群划算、追单怪亏」的那个岔路口
+export const BOMB_CD = 4000;          // 扔一轮的间隔（毫秒），一轮 = player.bomber 枚。体感嫌慢只改这里
+export const BOMB_BLAST_R = 70;       // 爆风半径：比海火赤潮最小的池（58）大一圈，砸进菌群正好覆盖一团
+export const BOMB_H_SPEED = 480;      // 水平速度（像素/秒），只用来把投掷距离换算成飞行时长
+export const BOMB_FLY_MIN = 400;      // 飞行时长下限：贴脸扔也得让它有足够的抛物线高度才看得出"扔"而不是"贴"
+export const BOMB_FLY_MAX = 900;      // 上限：超出索敌距离也按这个时长飞，否则最远那一枚要玩家等一秒多才响
+export const BOMB_GRAVITY_K = 0.3;    // 抛物线顶点高度系数：zMax = 18 + 距离 × 此值，远弹飞得更高，一轮几枚的远近一眼可辨
+export const BOMB_RADIUS = 6;         // 弹体判定/显示半径：比跟班子弹 3 大一倍、比角色 16 小一半，掉在人群里读得出是"一颗东西"
+export const BOMB_BLAST_MS = 260;     // 爆风可见时长（毫秒）。★纯表现，伤害在引爆那一帧一次结清；压到 150 以下会像没炸，超过 350 满屏都是盘子看不清怪
+export const BOMB_CLUSTER_N = 12;     // 密集度索敌的候选数上限：先 O(n) 挑最近 12 只，再在这 12 只里两两数邻居。★为什么压在 12：满场怪能上百只，整场两两比就是万次级；而能一锅炸到的那一群本来就挤在最近这一批里，12 只够覆盖任意一片
+
+// 单枚炸弹的伤害：投掷方 js/player/bomber.js 与详情页 js/ui/pause.js 都从这里取。
+// ★一个公式写两处迟早算成两个数，而详情页那句「单枚 N 点」一旦被拿来对实测，对不上就算界面的锅
+export const bombDamage = (attack) => Math.max(1, Math.floor(attack * BOMB_DAMAGE_RATIO));
+
 // icon 取 js/ui/theme.js 的图标名，tint 取 UI 的色键（在 upgrade.js 里查表，consts 不依赖 UI 层）
 export const UPGRADES = [
   { key: 'maxHp',    label: '生命上限', desc: '+10',  value: 10, icon: 'heart', tint: 'red' },
@@ -118,17 +142,19 @@ export const UPGRADES = [
   { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1, icon: 'clover', tint: 'mint' },
 ];
 
-// 战斗 HUD 右侧道具栏与暂停详情页共用的花名册：只列金匣那六种加成，Boss 专属匣由 hud.js 现从
+// 战斗 HUD 右侧道具栏与暂停详情页共用的花名册：只列金匣那七种加成，Boss 专属匣由 hud.js 现从
 // BOSS_CHESTS 算（以后加匣只动 config 表，这里不用跟）。glyph 见 js/ui/theme.js 的 itemGlyph
 // ★count 返回的是「拾取了几层」而不是属性值本身：子弹数从 1 起算、拾取范围存的是像素，
 //   直接拿属性值当角标会让 0 层的道具也显示一个数字，而且 1 层和 2 层看起来一样
-// ★只有护盾要把破掉的层数加回来：它是六种里唯一会被消耗的一种，读裸值会让这一格在你挨第一下时
+// ★只有护盾要把破掉的层数加回来：它是全部加成里唯一会被消耗的一种，读裸值会让这一格在你挨第一下时
 //   整块消失、右边几格跟着集体左移，而这正是 HUD 上最不该跳版的一栏
 export const ITEM_BAR = [
   { glyph: 'bulletCount', name: '子弹数', color: 'gold', count: (p) => p.bulletCount - 1 },
   { glyph: 'pierce', name: '穿透', color: 'gold', count: (p) => p.pierce },
   { glyph: 'shield', name: '护盾', color: 'gold', count: (p) => p.shield + p.shieldBroken },
   { glyph: 'companions', name: '跟班', color: 'gold', count: (p) => p.companions },
+  // 紧跟在跟班后面：两种跟班挨在一起，HUD 上才看得出「一个打枪的、一个扔弹的」是两件事
+  { glyph: 'bomber', name: '炸弹跟班', color: 'gold', count: (p) => p.bomber },
   { glyph: 'burnBullets', name: '燃烧子弹', color: 'gold', count: (p) => p.burnBullets },
   { glyph: 'pickupRange', name: '经验拾取范围', color: 'gold', count: (p) => (p.pickupRange - XP_PICKUP_RANGE) / XP_PICKUP_STEP },
 ];

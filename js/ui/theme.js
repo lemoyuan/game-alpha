@@ -753,6 +753,27 @@ export function itemGlyph(ctx, key, cx, cy, s) {
       mark(() => { ctx.beginPath(); ctx.arc(-h * 0.22, -h * 0.18, h * 0.13, 0, Math.PI * 2); });
       mark(() => { ctx.beginPath(); ctx.arc(h * 0.22, -h * 0.18, h * 0.13, 0, Math.PI * 2); });
       break;
+    case 'bomber':
+      // 圆弹体 + 引信 + 火花：和上面那颗多头跟班一眼分成「一个打枪的、一个扔弹的」
+      body(() => { ctx.beginPath(); ctx.arc(-h * 0.14, h * 0.24, h * 0.66, 0, Math.PI * 2); });
+      // 引信座：贴在弹体右上的一小段方头，斜着出去才对得上引信
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(h * 0.26, -h * 0.12);
+        ctx.lineTo(h * 0.58, -h * 0.48);
+        ctx.lineTo(h * 0.86, -h * 0.2);
+        ctx.lineTo(h * 0.54, h * 0.16);
+        ctx.closePath();
+      });
+      // 引信画成 ink 粗线：奶白细线落在金盘上等于没有（同下面 burnBullets 那句）
+      ctx.lineWidth = Math.max(2, s * 0.12);
+      ctx.beginPath();
+      ctx.moveTo(h * 0.7, -h * 0.34);
+      ctx.quadraticCurveTo(h * 1.06, -h * 0.7, h * 0.66, -h * 0.98);
+      ctx.stroke();
+      ctx.lineWidth = Math.max(1.5, s * 0.1);
+      body(() => { ctx.beginPath(); ctx.arc(h * 0.62, -h * 1.02, h * 0.2, 0, Math.PI * 2); });
+      break;
     case 'burnBullets':
       // 内焰必须用 ink：icon('flame') 那颗奶白内焰画在金盘上等于没有
       body(() => {

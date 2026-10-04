@@ -6,7 +6,7 @@ import {
   PLAYER_ATK, PLAYER_DEF, PLAYER_ATTACK_RANGE, PLAYER_ATTACK_CD,
   PLAYER_INVINCIBLE, BULLET_SPEED, BULLET_DAMAGE,
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK,
-  BULLET_RANGE_BUFFER, xpForLevel, LEVEL_UP_BONUS,
+  BULLET_RANGE_BUFFER, SHOT_SPREAD, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
   POISON_TICK, BURN_DMG,
   ARENA_W, ARENA_H,
@@ -34,7 +34,8 @@ export default class Player extends Sprite {
     this.pierce = 0;                    // 子弹可穿透敌人数（宝箱：子弹穿透+1）
     this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
     this.shieldBroken = 0;              // 本局被打破的护盾层数，只增不减：shield + shieldBroken 才是「拾取过几层」（HUD 道具格用）
-    this.companions = 0;                // 跟班数量（宝箱：跟班+1）
+    this.companions = 0;                // 射击跟班每轮发数（宝箱：跟班+1）：★场上恒为一只，层数加的是「一次齐射几发」，不是跟班只数
+    this.bomber = 0;                    // 炸弹跟班层数（宝箱：炸弹跟班+1）：场上只有一只，层数 = 一轮扔几枚。节奏与爆风在 consts.js 的 BOMB_CD/BOMB_BLAST_R
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
@@ -123,9 +124,8 @@ export default class Player extends Sprite {
     const baseAngle = Math.atan2(dy, dx);
     const mx = this.x + Math.cos(baseAngle) * PLAYER_MUZZLE_LEN;
     const my = this.y + Math.sin(baseAngle) * PLAYER_MUZZLE_LEN;
-    const spread = 0.18;
     for (let i = 0; i < this.bulletCount; i++) {
-      const angle = baseAngle + (i - (this.bulletCount - 1) / 2) * spread;
+      const angle = baseAngle + (i - (this.bulletCount - 1) / 2) * SHOT_SPREAD;
       const bullet = databus.pool.getItemByClass('bullet', Bullet);
       bullet.init(mx, my, Math.cos(angle), Math.sin(angle), this.attack);
       bullet.maxRange = this.attackRange + BULLET_RANGE_BUFFER;

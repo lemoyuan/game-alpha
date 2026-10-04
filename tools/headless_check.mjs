@@ -26,6 +26,8 @@ const drawnSrc = new Set();
 const fillStyles = new Set();
 let rotateCalls = 0;
 let nonFinite = 0;
+// 画出来的每一句文案。数值算错但被拼进字符串时，NaN 不会经过任何数值检查，只能靠这份文本扫
+const drawnTexts = new Set();
 
 function makeCtx() {
   const state = {
@@ -64,7 +66,7 @@ function makeCtx() {
     fillRect(...a) { check('fillRect', a); },
     strokeRect(...a) { check('strokeRect', a); },
     clearRect(...a) { check('clearRect', a); },
-    fillText(t, ...a) { check('fillText', a); },
+    fillText(t, ...a) { check('fillText', a); drawnTexts.add(String(t)); },
     strokeText(t, ...a) { check('strokeText', a); },
     measureText() { return { width: 10 }; },
     createLinearGradient() { return { addColorStop() {} }; },
@@ -107,6 +109,8 @@ globalThis.wx = {
   },
   getWindowInfo: winInfo,
   getSystemInfoSync: winInfo,
+  // 与 preview.html 同一套刘海机实测读数：胶囊 51..83，右上簇照它的底边让位
+  getMenuButtonBoundingClientRect: () => ({ top: 51, left: 293, width: 87, height: 32, bottom: 83 }),
   createImage: () => {
     const img = { width: 0, height: 0, onload: null, onerror: null, __src: '' };
     Object.defineProperty(img, 'src', {
@@ -158,8 +162,18 @@ const {
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
-const { BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX } = await import(fileUrl(path.join(COPY, 'consts.js')));
+const {
+  BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX,
+  BOMB_CD, BOMB_BLAST_R, BOMB_BLAST_MS, BOMB_H_SPEED, BOMB_FLY_MIN, BOMB_FLY_MAX, bombDamage,
+  ARENA_W, ARENA_H, ITEM_BAR,
+} = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
+const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
+const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).default;
+// 两件新实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
+const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).default;
+const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
+const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -197,9 +211,25 @@ let suppressedTexts = 0; // 被上限吃掉的飘字数
 // 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
 // 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
 const LUCK = Number(process.env.LUCK || 0);
-// 燃烧层数同样钉死，理由和幸运一样：金匣现在六种里就有燃烧，不钉住两组跑的是两种随机 build。
-// ★默认 0 时子弹根本不会调 applyBurn，所以 BURN=0 那次必须与改动前的基线逐字一致——这就是「新代码零副作用」的证明
+// 燃烧层数同样钉死，理由和幸运一样：金匣七种加成里就有燃烧，不钉住两组跑的是两种随机 build。
+// ★BURN=0 曾经兼作「新代码零副作用」的凭据（子弹根本不会调 applyBurn）。
+//   但金匣池加到第七种之后这条不再成立：同一颗种子抽到的加成会重新分配，跑出来本来就是另一种 build。
+//   零副作用的证据改用下面那条 BOMBER=0 等价式
 const BURN = Number(process.env.BURN || 0);
+// 炸弹跟班层数同样钉死成单变量，理由同幸运和燃烧。
+// ★但这批拿不到「与改动前基线逐字一致」这条证据：金匣池从 6 种变 7 种，
+//   同一种子每局抽到的加成会重新分配，跑出来的本来就是另一种 build。
+//   零副作用的证明换成下面那条 BOMBER=0 等价式：层数为 0 时既不生成跟班也一枚不扔
+const BOMBER = Number(process.env.BOMBER || 0);
+// 射击跟班层数同样钉死：这一批改的是「层数 = 一轮几发」，不钉住就量不到多发那条路
+const COMPANIONS = Number(process.env.COMPANIONS || 0);
+let volleyRounds = 0;      // 跟班齐射轮数
+const volleySizes = new Set(); // 每轮实际新增的子弹数：只应有一个取值且等于层数
+let bombsThrown = 0;   // 扔出的枚数（按 Bomb.init 计，一轮 player.bomber 枚）
+let bombBooms = 0;     // 引爆次数：理论上恒等于 bombsThrown，对不上了就是有用量没炸或有弹没飞完
+let maxBombs = 0;      // 同屏在飞枚数峰值
+let maxBombers = 0;    // 场上炸弹跟班只数峰值：★恒应为 1，长到 2 就是「层数当只数」回潮
+let companionPeak = 0; // 同上，射击跟班也只该有一只
 const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
 
 // 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
@@ -227,6 +257,31 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   };
 }
 
+// 炸弹的扔出与引爆：两条都挂在原型上做委托式包装（保留原行为、只加一次记录）。
+// 数量对不上比数量本身更有信息：thrown > booms 说明有弹被局末掐掉或在飞中被回收，
+// booms > thrown 不可能出现，出现就是引爆跑了两遍
+{
+  const proto = Bomb.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) { bombsThrown++; return origInit.apply(this, args); };
+  const origDetonate = proto.detonate;
+  proto.detonate = function (db) { bombBooms++; return origDetonate.call(this, db); };
+}
+
+// 跟班一轮净加几发子弹：一轮之内没有别处会往 databus.bullets 里塞东西，所以差值就是发数。
+// 这个量是「层数 = 每轮发数」的唯一实场读数，纯检那条只能证明代码写了循环
+{
+  const proto = Companion.prototype;
+  const origVolley = proto.volley;
+  proto.volley = function (db, player) {
+    const before = db.bullets.length;
+    const r = origVolley.call(this, db, player);
+    volleyRounds++;
+    volleySizes.add(db.bullets.length - before);
+    return r;
+  };
+}
+
 for (let i = 0; i < frames; i++) {
   const p = databus.player;
   if (p) p.hp = p.maxHp;
@@ -238,10 +293,23 @@ for (let i = 0; i < frames; i++) {
     p.__burnPinned = true;
     Object.defineProperty(p, 'burnBullets', { configurable: true, get: () => BURN, set: () => {} });
   }
+  // 炸弹跟班同样钉成定值：金匣七选一里就有一种是它，不吞掉写入的话 BOMBER=0 那次也会长出跟班，
+  // 那条「关掉就等价于没做」的等价式根本量不出来
+  if (p && !p.__bomberPinned) {
+    p.__bomberPinned = true;
+    Object.defineProperty(p, 'bomber', { configurable: true, get: () => BOMBER, set: () => {} });
+  }
+  // ★钉了层数时下面那段「5 秒后清零」必须让路：清零会让跟班每帧被回收再重建，
+  //   新建的 cdT 从 0 起攒，永远攒不满一轮 → 齐射发数这条量不到。
+  //   代价和 BURN>0 一样：这只跟班会给全场多垫一份 DPS，所以这条只在单独跑 A/B 时开
+  if (COMPANIONS > 0 && p && !p.__companionPinned) {
+    p.__companionPinned = true;
+    Object.defineProperty(p, 'companions', { configurable: true, get: () => COMPANIONS, set: () => {} });
+  }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
   // 留着它会给后面三场 Boss 战额外垫真实 DPS，把 film breaks 这条基线改掉
-  if (p) {
+  if (p && COMPANIONS === 0) {
     if (i * DT < 5) p.companions = Math.max(p.companions, 1);
     else if (databus.companions.length) { p.companions = 0; databus.companions.length = 0; }
   }
@@ -313,6 +381,16 @@ for (let i = 0; i < frames; i++) {
     // 环绕/冲锋的三角函数一旦喂进 NaN 就会一路 NaN 下去，画面上是跟班凭空消失
     if (!Number.isFinite(pet.x) || !Number.isFinite(pet.y)) errors.push('boss pet 坐标出现非有限值');
   }
+  if (databus.bombs.length > maxBombs) maxBombs = databus.bombs.length;
+  if (databus.bombers.length > maxBombers) maxBombers = databus.bombers.length;
+  if (databus.companions.length > companionPeak) companionPeak = databus.companions.length;
+  for (const b of databus.bombs) {
+    // z 是抛物线算出来的视觉高度，它一旦非有限，落影与弹体会在同一帧双双消失
+    if (!Number.isFinite(b.x) || !Number.isFinite(b.y) || !Number.isFinite(b.z)) {
+      errors.push('炸弹坐标或高度出现非有限值');
+      break;
+    }
+  }
   if (databus.lasers.length > maxLasers) maxLasers = databus.lasers.length;
   if (databus.zones.length > maxZones) maxZones = databus.zones.length;
   if (p && p.img) playerSpriteSrc = p.img.__src;
@@ -325,6 +403,33 @@ for (let i = 0; i < frames; i++) {
       + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`);
   }
 }
+
+// —— 炸弹跟班实场断言 ——
+// 先快照：下面那些纯检会直接调 Bomb.prototype.init/detonate，不先取值的话 fieldThrown 会把纯检也算进账
+const fieldThrown = bombsThrown;
+const fieldBooms = bombBooms;
+if (BOMBER === 0 && (fieldThrown || maxBombers)) {
+  errors.push(`炸弹跟班 0 层却量到扔出 ${fieldThrown} 枚、跟班峰值 ${maxBombers} 只：0 层这道门没关掉，"没这个道具"的局也在跑新代码`);
+}
+if (BOMBER > 0 && maxBombers === 0) {
+  errors.push(`炸弹跟班 ${BOMBER} 层场上却一只是一只都没生成：databus 那条封顶判断没接上`);
+}
+if (BOMBER > 0 && fieldThrown === 0) {
+  errors.push(`炸弹跟班 ${BOMBER} 层 ${seconds}s 内一枚都没扔出：索敌、冷却或 databus 更新循环有一条没通`);
+}
+// ★这两条是「层数当只数」回潮最省事的拦网：语义一旦改回去，测试台会立刻变红而不是静默放行
+if (maxBombers > 1) errors.push(`场上出现 ${maxBombers} 只炸弹跟班：层数的口径是「一轮几枚」，不是「几只」`);
+if (companionPeak > 1) errors.push(`场上出现 ${companionPeak} 只射击跟班：同上，现在恒应为一轮多发的一只`);
+if (fieldBooms > fieldThrown) errors.push(`引爆 ${fieldBooms} 次 > 扔出 ${fieldThrown} 枚：有弹炸了两遍`);
+// 一只跟班一轮几发：差值集合只应有一个取值，且它就是钉进去的层数
+if (COMPANIONS > 0) {
+  if (volleyRounds === 0) errors.push(`射击跟班 ${COMPANIONS} 层却一轮齐射都没量到：cdT 那道门或 databus 更新循环没通`);
+  else if (volleySizes.size > 1) errors.push(`同一只跟班的齐射发数在 ${[...volleySizes].join('/')} 之间跳：层数没被读稳`);
+  else if ([...volleySizes][0] !== COMPANIONS) {
+    errors.push(`钉了 ${COMPANIONS} 层，每轮实际射出 ${[...volleySizes][0]} 发：「层数 = 每轮发数」这条不成立`);
+  }
+}
+
 
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
 // 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
@@ -412,6 +517,180 @@ if (totalTexts && suppressedTexts / totalTexts > 0.1) {
   errors.push(`飘字上限太紧：${(suppressedTexts / totalTexts * 100).toFixed(1)}% 的伤害数字被 DAMAGE_TEXT_MAX 吃掉，热闹时段玩家会看到普攻掉数字`);
 }
 
+// —— 炸弹纯检：抛物线、落点选择、多枚不去重。
+//   实场那一遍量不准这三条（怪会死、会有减伤、会随机开出别的加成），所以公式本身在这里单独对
+const FDT = 1 / 60;
+const CENTER = { x: ARENA_W / 2, y: ARENA_H / 2 }; // 落点要躲开海岸：场地中心离四条边都远，clampToCoast 不会来搅
+
+function dummyEnemy(x, y) {
+  return { x, y, radius: 12, isDead: false, hits: 0, lastDmg: 0, takeDamage(d) { this.hits++; this.lastDmg = d; } };
+}
+function dummyDb(player, enemys) {
+  return { player, enemys, bombs: [], pool: { getItemByClass: (name, Class) => new Class() } };
+}
+const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
+
+// 1) 飞行全程：逐帧 update + draw 跑成一条真实的画面序列，画走全局 ctx 所以 NaN 和负半径都会被记进 errors
+{
+  const b = new Bomb();
+  let booms = 0;
+  b.init(CENTER.x, CENTER.y, CENTER.x + 300, CENTER.y, 40);
+  b.detonate = function (db) { booms++; Bomb.prototype.detonate.call(this, db); };
+  if (Math.abs(b.flyMs - clampMs((300 / BOMB_H_SPEED) * 1000)) > 1e-6) {
+    errors.push(`300px 的投掷距离 flyMs=${b.flyMs.toFixed(1)}，不等于夹逼后的时长`);
+  }
+  if (b.flyMs <= BOMB_FLY_MIN || b.flyMs >= BOMB_FLY_MAX) {
+    errors.push(`300px（本应夹在两段中间）撞上了限：时长不是随距离连续变化的`);
+  }
+  let peakZ = 0; let frames = 0;
+  for (let i = 0; i < 400 && !b.isDestroyed; i++) {
+    b.update(FDT, dummyDb(null, []));
+    if (b.blastT < 0 && b.z < 0) errors.push(`抛物线出现负高度 z=${b.z.toFixed(3)}：落影会翻到弹体上面去`);
+    if (b.blastT < 0 && b.z > peakZ) peakZ = b.z;
+    b.draw(ctx);
+    frames++;
+  }
+  if (booms !== 1) errors.push(`一枚炸弹飞完全程引爆了 ${booms} 次（应为 1）`);
+  if (peakZ < b.zMax * 0.9) errors.push(`抛物线顶点只到 ${peakZ.toFixed(1)}，接近不了 zMax=${b.zMax.toFixed(1)}：这条弧线是扁的`);
+  if (b.x !== b.tx || b.y !== b.ty) errors.push('引爆时弹体没有停在落点上');
+  if (b.z !== 0) errors.push('落地那一帧高度没归零，弹体会悬在半空炸');
+  const expectFrames = Math.round((b.flyMs + BOMB_BLAST_MS) / 1000 / FDT);
+  if (Math.abs(frames - expectFrames) > 2) {
+    errors.push(`爆风活了 ${frames} 帧，按 BOMB_BLAST_MS 应为 ${expectFrames} 帧：表现时长和常量对不上`);
+  }
+  for (let i = 0; i < 5; i++) { b.update(FDT, dummyDb(null, [])); b.draw(ctx); }
+  if (booms !== 1) errors.push('已回收的炸弹还在继续引爆');
+}
+// 2) 时长两端夹逼：贴脸扔也要有抛物线，超远扔不能让玩家等一秒多才响
+{
+  const near = new Bomb(); near.init(100, 100, 160, 100, 10);
+  const far = new Bomb(); far.init(100, 100, 5100, 100, 10);
+  if (near.flyMs !== BOMB_FLY_MIN) errors.push(`60px 的贴脸投掷 flyMs=${near.flyMs}，没夹到下限`);
+  if (far.flyMs !== BOMB_FLY_MAX) errors.push(`5000px 的超远投掷 flyMs=${far.flyMs}，没夹到上限`);
+}
+// 3) 爆风命中集：判定用的是「爆风半径 + 怪半径」，圈边的怪不该凭空气吞一发
+{
+  const edge = new Bomb(); edge.init(CENTER.x, CENTER.y, CENTER.x, CENTER.y, 40);
+  const inside = dummyEnemy(CENTER.x + BOMB_BLAST_R + 12 - 1, CENTER.y);
+  const outside = dummyEnemy(CENTER.x + BOMB_BLAST_R + 12 + 1, CENTER.y);
+  edge.detonate(dummyDb(null, [inside, outside]));
+  if (inside.hits !== 1) errors.push('贴着爆风边缘内侧 1px 的怪没被打到：命中判定漏在半径相加那一步');
+  if (outside.hits !== 0) errors.push('爆风外 1px 的怪被打到了：命中判定没有收在 blastR + radius 上');
+}
+// 4) 多枚不去重：两枚砸同一只怪就是两份完整伤害，这正是「多扔一枚」的收益本体
+{
+  const target = dummyEnemy(CENTER.x, CENTER.y);
+  const db = dummyDb(null, [target]);
+  for (let i = 0; i < 2; i++) {
+    const b = new Bomb(); b.init(CENTER.x - 100, CENTER.y, CENTER.x, CENTER.y, 40);
+    b.detonate(db);
+  }
+  if (target.hits !== 2) errors.push(`两枚炸弹砸同一只怪只结算了 ${target.hits} 次：跨枚去重把层数收益抹平了`);
+}
+// 5) 落点选最密的一团，不是最近的一只：砸散兵亏掉的是整整 4 秒冷却
+{
+  const bomber = new Bomber();
+  bomber.x = CENTER.x; bomber.y = CENTER.y;
+  const p = { attackRange: 320 };
+  const solo = { x: CENTER.x + 120, y: CENTER.y };
+  // 成对那团必须真和散兵隔开：放在 150 时它离散兵只有 31px，仍在爆风半径内，
+  // 三只的邻居数会打成 2-2-2，「同票取近」又选回散兵，这条用例就白写
+  const pair = [{ x: CENTER.x + 300, y: CENTER.y - 10 }, { x: CENTER.x + 300, y: CENTER.y + 10 }];
+  const spot = bomber.densestSpot(dummyDb(p, [dummyEnemy(solo.x, solo.y), ...pair.map((q) => dummyEnemy(q.x, q.y))]), p);
+  if (!spot) errors.push('密集度索敌在场上有怪时返回了空');
+  else if (Math.abs(spot.y - CENTER.y) < 1) {
+    errors.push('落点选了更近的那只散兵：密集度那条判据没生效，挑的还是最近的一只');
+  }
+  const dead = dummyEnemy(CENTER.x + 150, CENTER.y); dead.isDead = true;
+  if (bomber.densestSpot(dummyDb(p, [dead]), p)) errors.push('落点选中了已死的怪');
+  const faraway = dummyEnemy(CENTER.x + 400, CENTER.y);
+  if (bomber.densestSpot(dummyDb({ attackRange: 320 }, [faraway]), { attackRange: 320 })) {
+    errors.push('索敌距离外的怪进了候选：炸弹会为了打不着的怪空转冷却');
+  }
+}
+// 6) 一轮枚数 = player.bomber，伤害现读攻击力；第一枚永远正砸中心
+{
+  const player = { attackRange: 320, attack: 23, bomber: 3, critRate: 0 };
+  const db = dummyDb(player, [dummyEnemy(CENTER.x, CENTER.y)]);
+  const bomber = new Bomber();
+  bomber.x = CENTER.x; bomber.y = CENTER.y;
+  if (!bomber.volley(db, player)) errors.push('场上有怪时 volley 仍返回 false：投掷那条路没走通');
+  if (db.bombs.length !== 3) errors.push(`3 层扔出 ${db.bombs.length} 枚：层数和枚数不再是 1:1`);
+  for (const b of db.bombs) {
+    if (b.damage !== bombDamage(23)) errors.push(`单枚伤害 ${b.damage}，应为 ${bombDamage(23)}`);
+  }
+  const rads = db.bombs.map((b) => Math.hypot(b.tx - CENTER.x, b.ty - CENTER.y));
+  if (rads[0] > 1) errors.push(`第一枚偏出密集中心 ${rads[0].toFixed(1)}px：最疼的那一发应该正砸目标`);
+  if (!(rads[1] < rads[2])) errors.push('第二枚比第三枚更远：落点外摊的顺序乱了');
+  const empty = new Bomber(); empty.x = CENTER.x; empty.y = CENTER.y;
+  if (empty.volley(dummyDb(player, []), player)) errors.push('场上没怪也照样空扔一轮：冷却被白白耗掉');
+  // 蓄力环与弹体在三个冷却阶段各画一遍：读条那条弧的半径由 cdT 推出，最容易在 k=0 处出负值
+  for (const k of [0, 0.5, 1]) {
+    empty.cdT = BOMB_CD * k;
+    empty.draw(ctx);
+  }
+}
+
+// 暂停详情页的文案探针：把七种加成挂满，逼七行 describe 各拼一次并真画出来。
+// ★这类 bug 只住在字符串里：bombDamage 收攻击力却传了整个 player，游戏照跑、数值检查全绿，
+//   只有详情页那一行写成「单枚 NaN 点」。不扫文本就永远发现不了
+{
+  const real = databus.player;
+  const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
+  // 一刀切写 3 不行：count 是各格自己的口径（子弹数从 1 起算、拾取范围存的是像素），
+  // 全写 3 会让 pickupRange 算出负层数、被 ownedItems 当"没拾取过"滤掉，那一行就永远扫不到
+  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170 };
+  for (const k in OWNED) probe[k] = OWNED[k];
+  probe.shieldBroken = 0;
+  databus.player = probe;
+  // 临时把 measureText 报成 0：wrapLines 判的是「这行加一个字还塞得下吗」，
+  // 报 0 才是永远不折行；报大宽度会每字符折一行，配上 slice(0,2) 只剩头两个字，NaN 那半句根本进不了文本
+  ctx.measureText = () => ({ width: 0 });
+  const before = drawnTexts.size;
+  databus.pauseScreen.visible = true;
+  databus.pauseScreen.draw(ctx);
+  databus.pauseScreen.visible = false;
+  delete ctx.measureText;
+  databus.player = real;
+  if (drawnTexts.size === before) errors.push('暂停详情页一行文字都没画出来：这条文案检查是空跑的');
+  // 逐格点名：哪一行没被画出来，上面那条总量检查是发现不了的（它只要求"有字"）
+  for (const t of ITEM_BAR) {
+    if (!drawnTexts.has(t.name)) errors.push(`详情页没画出「${t.name}」这一行：ITEM_BAR 有格但 describe 走不到它`);
+  }
+}
+const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
+if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
+
+// —— 注册面扫描：这一节专治静默失效。漏一处不是崩，是 HUD 少一格、或者开箱有 toast 而什么都不涨
+{
+  const src = (rel) => fs.readFileSync(path.join(COPY, rel), 'utf8');
+  const themeSrc = src(path.join('ui', 'theme.js'));
+  const pauseSrc = src(path.join('ui', 'pause.js'));
+  if (ITEM_BAR.length !== BONUSES.length) {
+    errors.push(`HUD 道具体 ${ITEM_BAR.length} 格、金匣池 ${BONUSES.length} 种：加了一种没同步另一种`);
+  }
+  const probe = new Player();
+  for (const b of BONUSES) {
+    if (!Object.prototype.hasOwnProperty.call(probe, b.key)) {
+      errors.push(`金匣 key '${b.key}' 不是 Player 的自有属性：chest 那句裸 player[key] += step 会加到 undefined 上，开箱有提示、游戏无变化`);
+    }
+    if (!ITEM_BAR.some((t) => t.glyph === b.key)) {
+      errors.push(`金匣 '${b.key}' 在 HUD 没有对应格：玩家永远看不到自己捡到了它`);
+    }
+  }
+  for (const t of ITEM_BAR) {
+    if (!themeSrc.includes(`case '${t.glyph}'`)) errors.push(`theme.js 的 itemGlyph 没有 '${t.glyph}' 分支：HUD 上它会被画成普通白圈`);
+    if (!pauseSrc.includes(`case '${t.glyph}'`)) errors.push(`pause.js 的 describe 没有 '${t.glyph}' 分支：详情页那一行的说明是空的`);
+  }
+  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js')]) {
+    const s = src(rel);
+    // 读墙上时钟会在三选一面板期间偷跑（main.js 那时跳过 databus.update），面板一关就连发
+    if (s.includes('Date.now(')) errors.push(`${rel} 里出现 Date.now(：计时必须按 dt 累加`);
+    // 绕过 takeDamage 会跳过减伤、膜、飘字和掉落，Boss 战会被这行代码悄悄改写
+    if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 e.hp：伤害必须走 Enemy.takeDamage`);
+  }
+}
+
 console.log('---');
 console.log('drawn textures:', [...drawnSrc].sort().join(', ') || '(none)');
 console.log('player texture:', playerSpriteSrc, '| rotate calls:', rotateCalls, '| muzzle flash:', sawFlash);
@@ -426,6 +705,10 @@ console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
 console.log('chest chance:', CURVE_POINTS.map((l, i) => `${l}→${(curve[i] * 100).toFixed(2)}%/${chestExpectedSeconds(l).toFixed(1)}s`).join(' '));
 console.log('burn (stacks=' + BURN + '):', burnTicks, 'ticks /', burnDmg, 'dmg | peak burning:', maxBurning,
   '| pure cadence: 1层=' + burn1.ticks + '跳·' + burn1.dmg + '血, 3层=' + burn3.dmg + '血, 中途补枪=' + burnRefresh.ticks + '跳·单跳最大' + burnRefresh.maxTick);
+console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms, 'boomed | peak in flight:', maxBombs,
+  '| entity peak: companion', companionPeak, 'bomber', maxBombers);
+console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
+  '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,
   `(${totalTexts ? (suppressedTexts / totalTexts * 100).toFixed(1) : '0.0'}%)`);
 console.log('non-finite ctx args:', nonFinite, '| errors:', errors.length);
