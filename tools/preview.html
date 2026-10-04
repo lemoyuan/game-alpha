@@ -75,12 +75,6 @@
   <div class="grp">页面</div>
   <button data-nav="main">首页 main</button>
   <button data-nav="settings">设置</button>
-  <button data-nav="codex">图鉴列表</button>
-  <button data-nav="codexDetail-boss1">图鉴详情 · 毒王</button>
-  <button data-nav="codexDetail-boss2">图鉴详情 · 海火</button>
-  <button data-nav="codexDetail-boss3">图鉴详情 · 膜王</button>
-  <button data-nav="codexDetail-tank">图鉴详情 · 铁坨</button>
-  <button data-nav="codexDetail-chest">图鉴详情 · 金匣（未解锁）</button>
   <button data-nav="records">游戏记录</button>
   <div class="grp">操作台 · 角色属性（填了就当预设，开局按钮会自动带上）</div>
   <div class="pad" id="statpad"></div>
@@ -329,7 +323,7 @@ function spawnAround(n) {
 }
 
 // 挤成一坨的怪：炸弹跟班挑的是「邻居最多的那一只」，散刷的怪既测不出这条索敌，
-// 也拍不出一张能说明"它凭什么 4 秒才扔一枚"的截图。dx/dy 是相对角色的偏移，spread 是坨的半径
+// 也拍不出一张能说明"它凭什么攒满一轮才扔一枚"的截图。dx/dy 是相对角色的偏移，spread 是坨的半径
 function spawnBlob(n, dx, dy, spread) {
   const sp = databus.spawner;
   const p = databus.player;
