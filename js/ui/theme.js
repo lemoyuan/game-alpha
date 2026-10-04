@@ -754,25 +754,30 @@ export function itemGlyph(ctx, key, cx, cy, s) {
       mark(() => { ctx.beginPath(); ctx.arc(h * 0.22, -h * 0.18, h * 0.13, 0, Math.PI * 2); });
       break;
     case 'bomber':
-      // 圆弹体 + 引信 + 火花：和上面那颗多头跟班一眼分成「一个打枪的、一个扔弹的」
-      body(() => { ctx.beginPath(); ctx.arc(-h * 0.14, h * 0.24, h * 0.66, 0, Math.PI * 2); });
-      // 引信座：贴在弹体右上的一小段方头，斜着出去才对得上引信
+      // 弹体 + 引信座 + 四角火花，一律奶白实心加墨色描边。
+      // ★引信原来画的是一根裸墨线，金盘上跟另外六格不是一套东西；改成斜出去的方块才读得出是同一套剪影
+      // ★整颗收在 ±1h 内：原来火花顶到 -1.32h，是七格里最高的，和左邻那颗 1.71h 的射击跟班摆一起会大一号
+      body(() => { ctx.beginPath(); ctx.arc(-h * 0.06, h * 0.26, h * 0.58, 0, Math.PI * 2); });
       body(() => {
         ctx.beginPath();
-        ctx.moveTo(h * 0.26, -h * 0.12);
-        ctx.lineTo(h * 0.58, -h * 0.48);
-        ctx.lineTo(h * 0.86, -h * 0.2);
-        ctx.lineTo(h * 0.54, h * 0.16);
+        ctx.moveTo(h * 0.18, h * 0.02);
+        ctx.lineTo(h * 0.42, -h * 0.3);
+        ctx.lineTo(h * 0.7, -h * 0.08);
+        ctx.lineTo(h * 0.46, h * 0.24);
         ctx.closePath();
       });
-      // 引信画成 ink 粗线：奶白细线落在金盘上等于没有（同下面 burnBullets 那句）
-      ctx.lineWidth = Math.max(2, s * 0.12);
-      ctx.beginPath();
-      ctx.moveTo(h * 0.7, -h * 0.34);
-      ctx.quadraticCurveTo(h * 1.06, -h * 0.7, h * 0.66, -h * 0.98);
-      ctx.stroke();
-      ctx.lineWidth = Math.max(1.5, s * 0.1);
-      body(() => { ctx.beginPath(); ctx.arc(h * 0.62, -h * 1.02, h * 0.2, 0, Math.PI * 2); });
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(h * 0.56, -h * 0.86);
+        ctx.lineTo(h * 0.68, -h * 0.64);
+        ctx.lineTo(h * 0.9, -h * 0.52);
+        ctx.lineTo(h * 0.68, -h * 0.4);
+        ctx.lineTo(h * 0.56, -h * 0.18);
+        ctx.lineTo(h * 0.44, -h * 0.4);
+        ctx.lineTo(h * 0.22, -h * 0.52);
+        ctx.lineTo(h * 0.44, -h * 0.64);
+        ctx.closePath();
+      });
       break;
     case 'burnBullets':
       // 内焰必须用 ink：icon('flame') 那颗奶白内焰画在金盘上等于没有
