@@ -6,6 +6,7 @@ import Camera from './camera/index';
 import Joystick from './ui/joystick';
 import Hud from './ui/hud';
 import UpgradeScreen from './ui/upgrade';
+import PauseScreen from './ui/pause';
 import HomeScreen from './ui/home';
 import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } from './ui/theme';
 import Spawner from './npc/monster/spawner';
@@ -35,6 +36,8 @@ export default class Main {
     databus.hud = new Hud();
     databus.upgradeScreen = new UpgradeScreen();
     databus.upgradeScreen.init(databus);
+    databus.pauseScreen = new PauseScreen();
+    databus.pauseScreen.init(databus);
     databus.spawner = new Spawner();
     databus.homeScreen = new HomeScreen();
     databus.homeScreen.init(databus, () => { this.startRequested = true; });
@@ -52,6 +55,7 @@ export default class Main {
     databus.spawner.reset();
     databus.hud.toastUntil = 0; // 丢掉上一局残留的提示
     databus.upgradeScreen.visible = false;
+    databus.pauseScreen.visible = false;
     this.clearJoystick();
     this.runSubmitted = false;
     this.lastTime = Date.now();
@@ -61,6 +65,7 @@ export default class Main {
     databus.reset(); // reset 后 screen === 'home'
     databus.hud.toastUntil = 0;
     databus.upgradeScreen.visible = false;
+    databus.pauseScreen.visible = false;
     this.clearJoystick();
     databus.homeScreen.goto('main');
   }
@@ -264,6 +269,10 @@ export default class Main {
 
     if (databus.upgradeScreen.visible) {
       databus.upgradeScreen.draw(ctx);
+    }
+
+    if (databus.pauseScreen.visible) {
+      databus.pauseScreen.draw(ctx);
     }
 
     if (databus.isGameOver) {

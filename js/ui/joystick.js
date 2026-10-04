@@ -1,4 +1,7 @@
 import { UI } from './theme';
+import { pauseButtonRect } from './hud';
+
+const PAD = 8; // 暂停按钮的可点范围向外扩这么多：手指不必精确落在 26 像素的方贴上
 
 export default class Joystick {
   constructor() {
@@ -17,7 +20,11 @@ export default class Joystick {
     wx.onTouchStart((e) => {
       if (databus.screen !== 'game') return; // 首页点击不参与摇杆
       if (this.active || this.touchId !== null) return;
+      if (databus.isPaused) return; // 暂停页与三选一开着时，屏幕底下不该有东西被拖动
       const t = e.touches[0];
+      const pb = pauseButtonRect();
+      if (t.clientX >= pb.x - PAD && t.clientX <= pb.x + pb.w + PAD
+        && t.clientY >= pb.y - PAD && t.clientY <= pb.y + pb.h + PAD) return;
       this.active = true;
       this.touchId = t.identifier;
       this.baseX = t.clientX;

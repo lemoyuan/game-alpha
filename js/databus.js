@@ -17,6 +17,7 @@ export default class DataBus {
     this.spawner = null;
     this.hud = null;
     this.upgradeScreen = null;
+    this.pauseScreen = null;
     this.homeScreen = null;
     this.reset();
   }

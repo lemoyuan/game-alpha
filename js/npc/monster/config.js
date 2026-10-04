@@ -259,6 +259,7 @@ export const BOSS_CHESTS = {
   boss1: [
     {
       id: 'pet_cmv', name: '融合匣', icon: 'cellfuse',
+      brief: '迷你毒王替你作战：自由游走找怪，蓄力后冲撞命中的目标',
       fact: 'HCMV 把被感染的细胞彼此融成没有细胞壁的多核巨团，「巨细胞」之名就是这么来的；匣里是一只缩小版毒王，散在你周围自己找怪，隔一阵朝最近的怪拱一下，撞伤贴脸的一小片',
       pet: {
         spriteSize: 34,     // 跟班贴图显示边长（逻辑像素），与碰撞半径解耦，同 COMPANION 约定

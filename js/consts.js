@@ -118,6 +118,26 @@ export const UPGRADES = [
   { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1, icon: 'clover', tint: 'mint' },
 ];
 
+// 战斗 HUD 右侧道具栏与暂停详情页共用的花名册：只列金匣那六种加成，Boss 专属匣由 hud.js 现从
+// BOSS_CHESTS 算（以后加匣只动 config 表，这里不用跟）。glyph 见 js/ui/theme.js 的 itemGlyph
+// ★count 返回的是「拾取了几层」而不是属性值本身：子弹数从 1 起算、拾取范围存的是像素，
+//   直接拿属性值当角标会让 0 层的道具也显示一个数字，而且 1 层和 2 层看起来一样
+// ★只有护盾要把破掉的层数加回来：它是六种里唯一会被消耗的一种，读裸值会让这一格在你挨第一下时
+//   整块消失、右边几格跟着集体左移，而这正是 HUD 上最不该跳版的一栏
+export const ITEM_BAR = [
+  { glyph: 'bulletCount', name: '子弹数', color: 'gold', count: (p) => p.bulletCount - 1 },
+  { glyph: 'pierce', name: '穿透', color: 'gold', count: (p) => p.pierce },
+  { glyph: 'shield', name: '护盾', color: 'gold', count: (p) => p.shield + p.shieldBroken },
+  { glyph: 'companions', name: '跟班', color: 'gold', count: (p) => p.companions },
+  { glyph: 'burnBullets', name: '燃烧子弹', color: 'gold', count: (p) => p.burnBullets },
+  { glyph: 'pickupRange', name: '经验拾取范围', color: 'gold', count: (p) => (p.pickupRange - XP_PICKUP_RANGE) / XP_PICKUP_STEP },
+];
+
+// 道具格几何：一排最多 5 格，超出向下续排，整块右对齐（2026-10-04 定的口径）
+// ★pitch 33 = 盘径 26 + 角标留白。压到 30 时右下角那枚数字会蹭上邻格的白色贴纸圈，一排看起来连成一条
+export const HUD_TILE = { r: 13, pitch: 33, rowH: 33, perRow: 5 };
+export const PAUSE_BTN = 26; // 右上角暂停按钮边长；计时/击杀两枚药丸整体往左让开它，方贴才不会和圆形道具格看混
+
 // 每升 1 级自动获得的全属性成长（在三选一升级卡之外额外叠加）
 // key 必须与 Player 的属性名完全一致，否则写入会静默无效
 export const LEVEL_UP_BONUS = {

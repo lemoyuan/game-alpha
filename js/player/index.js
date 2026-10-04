@@ -33,6 +33,7 @@ export default class Player extends Sprite {
     this.bulletCount = 1;               // 每轮子弹数（宝箱：子弹数+1）
     this.pierce = 0;                    // 子弹可穿透敌人数（宝箱：子弹穿透+1）
     this.shield = 0;                    // 护盾层数，每层挡一次伤害（宝箱：护盾+1）
+    this.shieldBroken = 0;              // 本局被打破的护盾层数，只增不减：shield + shieldBroken 才是「拾取过几层」（HUD 道具格用）
     this.companions = 0;                // 跟班数量（宝箱：跟班+1）
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
@@ -162,6 +163,7 @@ export default class Player extends Sprite {
     this.invincibleUntil = now + PLAYER_INVINCIBLE;
     if (this.shield > 0) {
       this.shield--;
+      this.shieldBroken++; // 记一笔：道具格要的是「拾取过几层」，破掉的不该从花名册里退场
       return;
     }
     const dmg = Math.max(1, amount - this.defence);

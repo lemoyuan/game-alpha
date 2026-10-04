@@ -665,8 +665,147 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
         ctx.closePath();
       });
       break;
+    case 'pause':
+      // 暂停：两条圆头竖杠。HUD 右上角那颗按钮专用，方贴 + 圆角条才不会和圆形道具格看混
+      solid(() => { roundRect(ctx, -h * 0.62, -h * 0.82, h * 0.44, h * 1.64, h * 0.2); });
+      solid(() => { roundRect(ctx, h * 0.18, -h * 0.82, h * 0.44, h * 1.64, h * 0.2); });
+      break;
     default:
       solid(() => { ctx.beginPath(); ctx.arc(0, 0, h * 0.7, 0, Math.PI * 2); });
+      break;
+  }
+  ctx.restore();
+}
+
+/**
+ * 道具栏剪影：一律「奶白实心主体 + 墨色描边」，内部层次只用 ink，不跟随调用方颜色。
+ * ★为什么不复用 icon()：道具格底盘本身就是 UI.gold，而 icon() 的主体色由调用方给、
+ *   细节靠细线（穿透的弹道、磁吸的四支箭头）和内焰奶白（flame）——同明度的线落在金盘上直接消失。
+ *   这两个图标层口径不同，各自演化，不要合并回去
+ * 未知 key 退回 icon()：以后往 BOSS_CHESTS 加新匣，只要它配过 icon 名就能先出图，不会画成空盘
+ */
+export function itemGlyph(ctx, key, cx, cy, s) {
+  const h = s / 2;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.lineWidth = Math.max(1.5, s * 0.1);
+  ctx.strokeStyle = UI.ink;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const body = (path) => { path(); ctx.fillStyle = UI.cream; ctx.fill(); ctx.stroke(); };
+  const mark = (path) => { path(); ctx.fillStyle = UI.ink; ctx.fill(); };
+
+  switch (key) {
+    case 'bulletCount':
+      // 一颗主弹 + 左右各半颗副弹 = 读出「一次发多颗」
+      body(() => { ctx.beginPath(); ctx.ellipse(-h * 0.62, h * 0.1, h * 0.24, h * 0.42, 0, 0, Math.PI * 2); });
+      body(() => { ctx.beginPath(); ctx.ellipse(h * 0.62, h * 0.1, h * 0.24, h * 0.42, 0, 0, Math.PI * 2); });
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(-h * 0.5, -h * 0.05);
+        ctx.quadraticCurveTo(-h * 0.5, -h * 0.62, 0, -h * 1.02);
+        ctx.quadraticCurveTo(h * 0.5, -h * 0.62, h * 0.5, -h * 0.05);
+        ctx.lineTo(h * 0.5, h * 0.95);
+        ctx.lineTo(-h * 0.5, h * 0.95);
+        ctx.closePath();
+      });
+      mark(() => { ctx.beginPath(); ctx.rect(-h * 0.5, h * 0.42, h, h * 0.2); });
+      break;
+    case 'pierce':
+      // 目标圆 + 一条加粗弹道横穿它：弹道是「条」不是「线」，金盘上才看得见
+      body(() => { ctx.beginPath(); ctx.arc(-h * 0.34, 0, h * 0.52, 0, Math.PI * 2); });
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(-h * 0.95, -h * 0.2);
+        ctx.lineTo(h * 0.4, -h * 0.2);
+        ctx.lineTo(h * 0.4, -h * 0.52);
+        ctx.lineTo(h * 1.02, 0);
+        ctx.lineTo(h * 0.4, h * 0.52);
+        ctx.lineTo(h * 0.4, h * 0.2);
+        ctx.lineTo(-h * 0.95, h * 0.2);
+        ctx.closePath();
+      });
+      break;
+    case 'shield':
+      // 气泡盾：一圈挖空的厚壳，读作「套在外面的一层」，和左栏防御那颗实心盾分开
+      ctx.beginPath();
+      ctx.arc(0, 0, h * 0.95, 0, Math.PI * 2);
+      ctx.arc(0, 0, h * 0.5, 0, Math.PI * 2, true);
+      ctx.fillStyle = UI.cream;
+      ctx.fill('evenodd');
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, h * 0.5, 0, Math.PI * 2);
+      ctx.stroke();
+      mark(() => { ctx.beginPath(); ctx.arc(-h * 0.62, -h * 0.62, h * 0.13, 0, Math.PI * 2); });
+      break;
+    case 'companions':
+      body(() => {
+        ctx.beginPath();
+        ctx.arc(0, -h * 0.2, h * 0.6, Math.PI, 0);
+        ctx.lineTo(h * 0.6, h * 0.72);
+        ctx.lineTo(h * 0.28, h * 0.48);
+        ctx.lineTo(0, h * 0.72);
+        ctx.lineTo(-h * 0.28, h * 0.48);
+        ctx.lineTo(-h * 0.6, h * 0.72);
+        ctx.closePath();
+      });
+      mark(() => { ctx.beginPath(); ctx.arc(-h * 0.22, -h * 0.18, h * 0.13, 0, Math.PI * 2); });
+      mark(() => { ctx.beginPath(); ctx.arc(h * 0.22, -h * 0.18, h * 0.13, 0, Math.PI * 2); });
+      break;
+    case 'burnBullets':
+      // 内焰必须用 ink：icon('flame') 那颗奶白内焰画在金盘上等于没有
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(0, -h * 1.0);
+        ctx.bezierCurveTo(h * 0.62, -h * 0.42, h * 0.95, h * 0.08, h * 0.52, h * 0.62);
+        ctx.bezierCurveTo(h * 0.28, h * 0.95, -h * 0.28, h * 0.95, -h * 0.52, h * 0.62);
+        ctx.bezierCurveTo(-h * 0.95, h * 0.08, -h * 0.62, -h * 0.42, 0, -h * 1.0);
+        ctx.closePath();
+      });
+      mark(() => {
+        ctx.beginPath();
+        ctx.moveTo(0, -h * 0.12);
+        ctx.bezierCurveTo(h * 0.32, h * 0.2, h * 0.3, h * 0.52, 0, h * 0.66);
+        ctx.bezierCurveTo(-h * 0.3, h * 0.52, -h * 0.32, h * 0.2, 0, -h * 0.12);
+        ctx.closePath();
+      });
+      break;
+    case 'pickupRange':
+      // 中心一颗宝石 + 左右两条粗箭头条：四条细线箭头在 26px 盘上会整条消失
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(0, -h * 0.62);
+        ctx.lineTo(h * 0.5, 0);
+        ctx.lineTo(0, h * 0.62);
+        ctx.lineTo(-h * 0.5, 0);
+        ctx.closePath();
+      });
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(-h * 1.05, -h * 0.24);
+        ctx.lineTo(-h * 0.72, -h * 0.24);
+        ctx.lineTo(-h * 0.72, -h * 0.44);
+        ctx.lineTo(-h * 0.62, 0);
+        ctx.lineTo(-h * 0.72, h * 0.44);
+        ctx.lineTo(-h * 0.72, h * 0.24);
+        ctx.lineTo(-h * 1.05, h * 0.24);
+        ctx.closePath();
+      });
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(h * 1.05, -h * 0.24);
+        ctx.lineTo(h * 0.72, -h * 0.24);
+        ctx.lineTo(h * 0.72, -h * 0.44);
+        ctx.lineTo(h * 0.62, 0);
+        ctx.lineTo(h * 0.72, h * 0.44);
+        ctx.lineTo(h * 0.72, h * 0.24);
+        ctx.lineTo(h * 1.05, h * 0.24);
+        ctx.closePath();
+      });
+      break;
+    default:
+      icon(ctx, key, 0, 0, s, { color: UI.cream });
       break;
   }
   ctx.restore();
