@@ -264,7 +264,7 @@ export default class Main {
     for (const b of databus.bullets) b.draw(ctx);
     for (const b of databus.enemyBullets) b.draw(ctx);
     // 炸弹压在怪之上：飞行那几帧里落点环要能被看见，引爆那一闪更要盖住整片怪，
-    // 否则这 4 秒一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
+    // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
     if (databus.player) {
       for (const p of databus.bossPets) p.draw(ctx);

@@ -212,6 +212,7 @@ Add-Type -TypeDefinition $code -ReferencedAssemblies System.Drawing
 $jobs = @(
   @{ prefix = 'player_idle'; logical = 42 },
   @{ prefix = 'companion';   logical = 22 }, # display size = COMPANION_SPRITE_SIZE in js/consts.js (hit radius stays 8)
+  @{ prefix = 'bomber';      logical = 22 }, # display size = BOMBER_SPRITE_SIZE in js/consts.js (same hit radius 8)
   @{ prefix = 'mob_basic';   logical = 28 },
   @{ prefix = 'mob_fast';    logical = 20 },
   @{ prefix = 'mob_tank';    logical = 44 },

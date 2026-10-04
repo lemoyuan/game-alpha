@@ -115,12 +115,15 @@ export const COMPANION_DAMAGE_RATIO = 0.5;   // 跟班伤害 = 角色攻击力 �
 // 而显示边长都是 22 —— 一眼分得出是两只不同的跟班，又不会贴成重影
 export const COMPANION_SLOT_ANGLE = 0.7;
 
+export const BOMBER_SPRITE = 'images/entity/bomber.png'; // 炸弹跟班贴图：奶沙色弹体 + 深蓝描边 + 深色核 + 怒目 + 引信火星，和 companion.png 同一批语言。★刻意用暖色而不是跟班蓝：两只并排站在角色身后，同色同形就分不清谁在投弹
+export const BOMBER_SPRITE_SIZE = 22;  // 显示边长，和 COMPANION_SPRITE_SIZE 同格。实测弹体只占图内 32/44 = 0.73，缩到 22 格里弹体 16px、和射击跟班的膜体 18px 差 2px（视觉等大够用，刻意不再往上抬：再大就要压过角色本体）；引信和火星伸到 44 高，等同对方的伪足外伸。另一侧的核对齐口径是深色权重 0.51 对 0.53
+
 export const BOMB_DAMAGE_RATIO = 2;   // 单枚伤害 = 角色攻击力 × 此系数。★不是 3：3 的时候它在任何层数都严格压制射击跟班，第 6 种会被挤成废项；2 才是「炸一群划算、追单怪亏」的那个岔路口
-export const BOMB_CD = 4000;          // 扔一轮的间隔（毫秒），一轮 = player.bomber 枚。体感嫌慢只改这里
+export const BOMB_CD = 5000;          // 扔一轮的间隔（毫秒），一轮 = player.bomber 枚。★2026-10-04 从 4000 放慢：用户体感太密。这是"节奏"那一端的天平，嫌单发不够痛该改 BOMB_DAMAGE_RATIO 而不是这里。牵动两处：读条那根弧的起点跟着挪到 2.5 秒（它只画后半程），以及 headless 每 120 秒的投掷次数按比例掉
 export const BOMB_BLAST_R = 70;       // 爆风半径：比海火赤潮最小的池（58）大一圈，砸进菌群正好覆盖一团
-export const BOMB_H_SPEED = 480;      // 水平速度（像素/秒），只用来把投掷距离换算成飞行时长
-export const BOMB_FLY_MIN = 400;      // 飞行时长下限：贴脸扔也得让它有足够的抛物线高度才看得出"扔"而不是"贴"
-export const BOMB_FLY_MAX = 900;      // 上限：超出索敌距离也按这个时长飞，否则最远那一枚要玩家等一秒多才响
+export const BOMB_H_SPEED = 360;      // 水平速度（像素/秒），只用来把投掷距离换算成飞行时长。★2026-10-04 从 480 放慢：用户体感飞太快。300px 那一档 = 833ms（原来是 625ms）
+export const BOMB_FLY_MIN = 500;      // 飞行时长下限：贴脸扔也得让它有足够的抛物线高度才看得出"扔"而不是"贴"。★跟着 H_SPEED 一起抬过，否则 180px 以内的近弹全被这条下限兜住，上面那个放慢等于没做
+export const BOMB_FLY_MAX = 1050;     // 上限：超出索敌距离也按这个时长飞。★不能压得太狠——一轮里外摊的几枚全靠"落点距离不同 → flyMs 不同"自然错开落地（见 bomber.js 的太阳花排布），上限一撞就等于几枚同时炸。放慢之后最远那枚要 1000ms，所以这里得留到 1050
 export const BOMB_GRAVITY_K = 0.3;    // 抛物线顶点高度系数：zMax = 18 + 距离 × 此值，远弹飞得更高，一轮几枚的远近一眼可辨
 export const BOMB_RADIUS = 6;         // 弹体判定/显示半径：比跟班子弹 3 大一倍、比角色 16 小一半，掉在人群里读得出是"一颗东西"
 export const BOMB_BLAST_MS = 260;     // 爆风可见时长（毫秒）。★纯表现，伤害在引爆那一帧一次结清；压到 150 以下会像没炸，超过 350 满屏都是盘子看不清怪

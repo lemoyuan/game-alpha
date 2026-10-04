@@ -4,6 +4,7 @@ import { UI } from '../ui/theme';
 import { clampToCoast } from '../arena/coast';
 import {
   COMPANION_RADIUS, COMPANION_FOLLOW_DIST, COMPANION_SLOT_ANGLE,
+  BOMBER_SPRITE, BOMBER_SPRITE_SIZE,
   BOMB_CD, BOMB_BLAST_R, BOMB_CLUSTER_N, bombDamage,
 } from '../consts';
 
@@ -14,15 +15,19 @@ const GOLDEN = 2.39996;
  * 炸弹跟班（金匣第 7 种加成）：站角色身后偏左那一格，攒满 BOMB_CD 就往怪最密的一团扔一枚。
  * ★场上恒为一只，player.bomber 是「一轮扔几枚」，同 companion.js 的口径。
  *
- * 和射击跟班的分工就是这件道具的全部意义：跟班每 0.67 秒单发刮一条线，它 4 秒砸一片。
+ * 和射击跟班的分工就是这件道具的全部意义：跟班每 0.67 秒单发刮一条线，它 5 秒砸一片。
  * 所以它不追最近的怪，追**最挤**的怪——落点选错，低频率就永远换不回高总量。
  *
- * 代码绘制，不出图：额度给实体；而且复用 companion.png 会让两只跟班看着是同一张贴图的重影。
- * 也正因为 4 秒里它什么都不做，那圈蓄力环是必需品——没有可见读条，4 秒会被玩家读成「这道具没生效」。
+ * 贴图走的是 companion.png 同一批语言，但刻意用暖沙色弹体 + 圆光滑剪影：两只跟班并排站在角色身后，
+ * 同色同形就分不清谁在投弹（2026-10-04 之前它是代码画的一颗近黑实心盘，和旁边那颗奶蓝贴图摆在一起
+ * 既大一圈又是两种质感，用户拍板出图统一）。
+ * 读条只在后半程出现（2026-10-04 定稿：整圈和"前半程也画"两个版本都被否）：攒过 2 秒才在弹体左下象限
+ * 烧出一根 90° 弧，前半程身上什么都没有。这样它永远闭不成一个环，也不会常年挂着一圈东西压过旁边那只，
+ * 而"快好了"这个信息恰好留在玩家真正需要它的时刻。
  */
 export default class Bomber extends Sprite {
   constructor() {
-    super(null, 0, 0, 0, 0);
+    super(BOMBER_SPRITE, BOMBER_SPRITE_SIZE, BOMBER_SPRITE_SIZE, 0, 0);
     this.radius = COMPANION_RADIUS; // 与射击跟班同一条判定：两个都是贴身站位的友方实体，没必要分开调
     this.cdT = 0;                   // 距上轮投掷已过的毫秒数（dt 累加）
   }
@@ -74,7 +79,7 @@ export default class Bomber extends Sprite {
 
   /**
    * 落点：够得着的怪里挑「邻居最多的那一只」。不是挑最近的单只——一炸弹砸在一只散兵身上，
-   * 亏掉的是它 4 秒的冷却。
+   * 亏掉的是整整一轮 BOMB_CD 的冷却。
    * 两段式：先 O(n) 收最近 BOMB_CLUSTER_N 只，再在这十几只里 O(k²) 数邻居。
    * 同票留更近的那一只（near 已按距离升序，所以严格 > 天然就是这个语义）。
    */
@@ -111,70 +116,37 @@ export default class Bomber extends Sprite {
   }
 
   draw(ctx) {
-    // 显示比判定大一圈（同 COMPANION_SPRITE_SIZE / COMPANION_RADIUS 那个比值），
-    // 判定收在体内、剪影伸出去，和怪与 Boss 的约定一致
-    const dr = this.radius * 1.4;
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    this.drawCharge(ctx, dr);
-
-    const k = Math.min(1, this.cdT / BOMB_CD);
-    // 引信：攒满一轮的过程中烧到尽头，所以它同时是第二根读条
-    ctx.strokeStyle = UI.ink;
-    ctx.lineWidth = 2.4;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(dr * 0.3, -dr * 0.78);
-    ctx.quadraticCurveTo(dr * 1.05, -dr * 1.1, dr * 0.86, -dr * 1.72);
-    ctx.stroke();
-    ctx.fillStyle = UI.burn;
-    ctx.globalAlpha = 0.45 + 0.55 * k;
-    ctx.beginPath();
-    ctx.arc(dr * 0.86, -dr * 1.72, dr * (0.16 + 0.16 * k), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    ctx.fillStyle = UI.ink;
-    ctx.beginPath();
-    ctx.arc(0, 0, dr, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = UI.sticker;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    // 两只眼：圆弹加脸就是"一只跟班"，不加脸就是"一颗弹"——场上同时有两者，这个区别不能丢
+    this.drawCharge(ctx); // 画在贴图底下：弧的外沿只比框多 1.25px，压上去会啃掉弹体那一圈描边
+    if (this.drawSprite(ctx)) return;
+    // 贴图还没加载完 → 同格同大小的奶白实心 + 粗墨描边占位（同 companion.js 的兜底口径）
     ctx.fillStyle = UI.cream;
     ctx.beginPath();
-    ctx.arc(-dr * 0.34, -dr * 0.1, dr * 0.15, 0, Math.PI * 2);
+    ctx.arc(this.x, this.y, BOMBER_SPRITE_SIZE / 2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.beginPath();
-    ctx.arc(dr * 0.34, -dr * 0.1, dr * 0.15, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    ctx.strokeStyle = UI.ink;
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
   }
 
   /**
-   * 蓄力环：底圈是流动虚线（和赤潮预警、毒王冲锋同一套"这里马上要疼"的语法），
-   * 上面压一段实心弧表示已经攒到几分之几。攒满时整圈烧成橙，下一帧就扔
+   * 蓄力读条：90° 行程全留给后半程，攒满 BOMB_CD 时刚好烧满一个象限。
+   * ★象限取 6 点 → 9 点（左下）：v3 的引信和火星在弹体右上，那截剪影是这只跟班唯一的身份标识，弧绝不能压
+   * ★半径取贴图边框本身（直径 22），和射击跟班同格，不往外撑
+   * 索敌范围内没怪时 cdT 被钉在 BOMB_CD 上（见 update），所以这根弧会一直亮满档 = 「我好了，在等目标」
    */
-  drawCharge(ctx, dr) {
-    const r = dr + 5;
-    const k = Math.min(1, this.cdT / BOMB_CD);
-    ctx.setLineDash([7, 6]);
-    ctx.lineDashOffset = -((this.cdT / 22) % 13);
+  drawCharge(ctx) {
+    const k = this.cdT / BOMB_CD;
+    if (k < 0.5) return;
+    const p = (k - 0.5) * 2;
+    ctx.save();
+    ctx.translate(this.x, this.y);
     ctx.strokeStyle = UI.burn;
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.3;
-    ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    ctx.globalAlpha = 0.5 + 0.5 * k;
     ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.75 + 0.25 * p;
     ctx.beginPath();
-    ctx.arc(0, 0, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+    ctx.arc(0, 0, BOMBER_SPRITE_SIZE / 2, Math.PI / 2, Math.PI / 2 + (Math.PI / 2) * p);
     ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
 }

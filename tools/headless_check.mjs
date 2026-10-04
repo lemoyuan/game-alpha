@@ -561,7 +561,7 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   for (let i = 0; i < 5; i++) { b.update(FDT, dummyDb(null, [])); b.draw(ctx); }
   if (booms !== 1) errors.push('已回收的炸弹还在继续引爆');
 }
-// 2) 时长两端夹逼：贴脸扔也要有抛物线，超远扔不能让玩家等一秒多才响
+// 2) 时长两端夹逼：下限保证贴脸那枚也有抛物线（不是"贴"），上限保证超远投掷不会挂着不落
 {
   const near = new Bomb(); near.init(100, 100, 160, 100, 10);
   const far = new Bomb(); far.init(100, 100, 5100, 100, 10);
@@ -587,7 +587,7 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   }
   if (target.hits !== 2) errors.push(`两枚炸弹砸同一只怪只结算了 ${target.hits} 次：跨枚去重把层数收益抹平了`);
 }
-// 5) 落点选最密的一团，不是最近的一只：砸散兵亏掉的是整整 4 秒冷却
+// 5) 落点选最密的一团，不是最近的一只：砸散兵亏掉的是整整一轮 BOMB_CD 冷却
 {
   const bomber = new Bomber();
   bomber.x = CENTER.x; bomber.y = CENTER.y;
@@ -624,7 +624,8 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   if (!(rads[1] < rads[2])) errors.push('第二枚比第三枚更远：落点外摊的顺序乱了');
   const empty = new Bomber(); empty.x = CENTER.x; empty.y = CENTER.y;
   if (empty.volley(dummyDb(player, []), player)) errors.push('场上没怪也照样空扔一轮：冷却被白白耗掉');
-  // 蓄力环与弹体在三个冷却阶段各画一遍：读条那条弧的半径由 cdT 推出，最容易在 k=0 处出负值
+  // 三个冷却阶段各画一遍：0 / 0.5 / 1 正好卡在 drawCharge 那个「后半程才画」的起点两侧，
+  // 弧的行程由 (cdT/BOMB_CD - 0.5) * 2 推出，最容易出 0 长度或负角度的就是这一处
   for (const k of [0, 0.5, 1]) {
     empty.cdT = BOMB_CD * k;
     empty.draw(ctx);
