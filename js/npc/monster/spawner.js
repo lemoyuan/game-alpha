@@ -4,7 +4,7 @@ import BossSeaFire from './bossSeaFire';
 import BossFilm from './bossFilm';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
-  HP_SCALE_TIME, HP_SCALE_MULT,
+  hpScaleAt,
   CHEST_ROLL_INTERVAL, CHEST_FIRST_ROLL, CHEST_PITY, chestChance,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
   BOSS_SPAWN_INTERVAL_MULT,
@@ -26,7 +26,11 @@ export default class Spawner {
     this.chestRollT = 0;      // 距上次「掷骰」累计的毫秒，满 CHEST_ROLL_INTERVAL 掷一次
     this.chestSinceLast = 0;  // 距上次真正刷出金匣累计的毫秒 —— 保底计数器，满 CHEST_PITY 强制刷一只
     this.bossIndex = 0; // BOSS_SCHEDULE 读到第几条，出场即自增
-    this.bossRest = 0;  // 场上没有 Boss 时累计的毫秒数：Boss 之间的冷却
+    // 场上没有 Boss 时累计的毫秒数：Boss 之间的冷却。
+    // ★初值是 GAP 而不是 0：这条冷却说的是「上一只死亡后还要缓多久」，开局并没有上一只。
+    //   留 0 就等于让一号 Boss 也空攒一遍冷却，而 GAP 现在和 BOSS_FIRST_SPAWN_TIME 都是 120 秒，
+    //   一号 Boss 会不会迟到只剩「这两条恰好相等」这个巧合，谁把其中一个动一下就静默失灵
+    this.bossRest = BOSS_RESPAWN_GAP;
   }
 
   reset() {
@@ -36,7 +40,7 @@ export default class Spawner {
     this.chestRollT = 0;
     this.chestSinceLast = 0;
     this.bossIndex = 0;
-    this.bossRest = 0;
+    this.bossRest = BOSS_RESPAWN_GAP; // 同上：新开局没有「上一只」要等，一号 Boss 只看自己的 time
   }
 
   update(dt, databus) {
@@ -141,8 +145,11 @@ export default class Spawner {
     const enemy = new Enemy(type, config);
     enemy.init(pos.x, pos.y);
 
-    if (this.elapsed > HP_SCALE_TIME) {
-      enemy.hp = Math.floor(enemy.hp * HP_SCALE_MULT);
+    // 只有普通刷怪池吃这条时间曲线：Boss 走下面的 spawnBoss、膜王菌群自己 new，
+    // 都不经过这里，所以它们那些按实测反解出来的血量不会被后期涨血扫坏
+    const scale = hpScaleAt(this.elapsed);
+    if (scale > 1) {
+      enemy.hp = Math.floor(enemy.hp * scale);
       enemy.maxHp = enemy.hp;
     }
 

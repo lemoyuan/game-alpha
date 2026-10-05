@@ -59,7 +59,7 @@ export const PLAYER_ATK = 10;           // 初始攻击力，=子弹伤害（升
 export const PLAYER_DEF = 0;            // 初始防御，接触伤害减免（升级项：防御力 +2）
 export const PLAYER_ATTACK_RANGE = 200; // 索敌距离；子弹飞行距离 = 此值 + BULLET_RANGE_BUFFER
 export const PLAYER_ATTACK_CD = 1000;   // 基础攻击间隔（毫秒）：攻速 1.0 = 每 1 秒 1 发，实际间隔 = 此值 ÷ 攻速
-export const PLAYER_INVINCIBLE = 1000;   // 受击后无敌时间（毫秒）
+export const PLAYER_INVINCIBLE = 1500;   // 受击后无敌时间（毫秒）
 export const POISON_TICK = 500;         // 中毒每跳一次伤害的间隔（毫秒）。★故意不复用上面那条无敌帧：无敌帧是「一次撞击」的限流器，毒素是挂在身上的状态，走那条路就会被别的伤害源白吃掉结算（赤潮池原来正是这么变成摆设的）
 export const PLAYER_CRIT_RATE = 0;   // 初始暴击率（升级项：暴击率 +10%）
 export const PLAYER_CRIT_MULT = 1.5;      // 暴击伤害倍数
