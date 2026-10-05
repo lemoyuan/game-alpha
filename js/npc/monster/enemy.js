@@ -22,6 +22,9 @@ export default class Enemy extends Sprite {
     this.damage = config.damage;   // 接触玩家的伤害（远程怪同时是子弹伤害）
     this.isBoss = !!config.boss;   // Boss 标记：HUD 血条、刷怪降速、图鉴文案都读它，来源和图鉴同源所以不会不一致
     this.isDead = false;
+    // 突变型刺头（概率见 config.js 的 MUTANT_CHANCE）：只表示「这只 basic 会额外掉一颗血块」，
+    // type 仍然是 'basic'——图鉴解锁、HUD 计数、首页那张表都读 type，单列一个 type 等于凭空多出个喊不出的外号
+    this.mutant = false;
     // 远程怪专属字段（近战怪为 0，走默认追击逻辑）
     this.attackRange = config.attackRange || 0;  // 索敌距离，玩家进入后停下射击
     this.attackCd = config.attackCd || 0;        // 射击间隔（毫秒）
@@ -43,6 +46,9 @@ export default class Enemy extends Sprite {
     this.x = x;
     this.y = y;
     this.isDead = false;
+    // ★复位：和下面 burnLeft 那几条同一条对象池约定。spawner 因此必须在 init 之后才掷突变骰，
+    //   放前面等于刚刷出来就被自己擦掉
+    this.mutant = false;
     this.hp = this.maxHp;
     this.lastAttack = 0;
     // 对象池复用约定：漏掉这三行的话，一旦接上回收就是「刚刷出来的怪自带燃烧」
@@ -181,6 +187,32 @@ export default class Enemy extends Sprite {
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+
+    // 突变型：身上叠一块血斑。画在贴图之后、血条之前，两种画法（真贴图 / 兜底形状）都盖到
+    if (this.mutant) {
+      // 尺寸和偏移一律取 radius 的分数（刺头 radius=14，贴图边长正好也是 28，分数就是「占身子几分之几」）。
+      // ★不在这几行里调 Math.random()：见上面 drawBurn 的同类注释，draw 里每帧随机会让斑块每帧变形
+      const r = this.radius;
+      ctx.save();
+      // ★裁剪圆半径 0.80r 是实测出来的：mob_basic.png 的身子圆盘到 0.80 × 半边长才开始变透明。
+      //   取小了（0.76/0.78）血斑外沿会留一圈 teal 缝，读成「盖了个贴纸」；取大了（0.82）血会渗进刺里。
+      //   正好 0.80 时血斑外沿和身子描边齐平，看着才像这块身子本身在泛红
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, r * 0.8, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = UI.blood;
+      // 主斑压在左上肩，且刻意让它溢出裁剪圆（中心到圆心 0.55r + 半径 0.50r > 0.80r）——
+      // 溢出去的那部分被身子圆切掉，血斑就有一条边是身子的弧线，这是「泛在身上的」和「贴上去的圆」的分界
+      ctx.beginPath();
+      ctx.arc(this.x - r * 0.46, this.y - r * 0.3, r * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      // 卫星斑：不描边（两层圆各描一条会割出穿模的弧线），从主斑顶边「渗」出去一点，
+      // 把整块血斑的轮廓从「一个正圆」扭成不规则形——正圆再像血也不像血
+      ctx.beginPath();
+      ctx.arc(this.x - r * 0.06, this.y - r * 0.58, r * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     // 血条

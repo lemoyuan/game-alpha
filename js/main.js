@@ -11,8 +11,9 @@ import HomeScreen from './ui/home';
 import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } from './ui/theme';
 import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
+import BloodClot from './npc/bloodclot';
 import Chest from './npc/chest';
-import { BOSS_CHESTS, BOSS_XP_GEMS } from './npc/monster/config';
+import { BOSS_CHESTS, BOSS_XP_GEMS, BLOOD_CLOT_HEAL } from './npc/monster/config';
 import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
@@ -147,6 +148,13 @@ export default class Main {
           const gem = databus.pool.getItemByClass('xpgem', XpGem);
           gem.init(e.x, e.y, e.xpValue);
           databus.xpGems.push(gem);
+          // 突变型额外掉一颗血块：经验宝石照旧掉，它是「多一颗」不是「换一颗」，
+          // 「数值与刺头完全一样」这条才成立（掉落方在这里判，血块自己不知道是谁掉的）
+          if (e.mutant) {
+            const clot = databus.pool.getItemByClass('bloodclot', BloodClot);
+            clot.init(e.x, e.y, BLOOD_CLOT_HEAL);
+            databus.clots.push(clot);
+          }
         }
         player.kills++;
         databus.removeEnemy(i);
@@ -211,6 +219,12 @@ export default class Main {
       }
     }
 
+    for (let i = databus.clots.length - 1; i >= 0; i--) {
+      if (databus.clots[i].collected) {
+        databus.removeClot(i);
+      }
+    }
+
     for (let i = databus.chests.length - 1; i >= 0; i--) {
       if (databus.chests[i].collected) {
         databus.removeChest(i);
@@ -257,6 +271,7 @@ export default class Main {
     for (const z of databus.zones) z.draw(ctx); // 赤潮和黏液都是地贴，压在所有实体下面；画在 arena 的裁切之外，黑水上照样亮
     for (const l of databus.lasers) l.draw(ctx); // 同属地面层：满 5 道光束时五个光根会叠成一团奶白，压在实体之下才不会把 Boss 本体埋掉（玩家本来就画在光之上）
     for (const g of databus.xpGems) g.draw(ctx);
+    for (const cl of databus.clots) cl.draw(ctx); // 血块和经验宝石同层：都是地上的拾取物，压在所有怪之下
     for (const c of databus.chests) c.draw(ctx);
     // 火苗紧跟在每只怪自身画完之后：四个 Boss 子类都覆写了 draw、super.draw 前后还有自绘，
     // overlay 收进基类的 draw 就会被它们自己那层压掉（挂载点选择的道理同 databus.js 里 updateBurn 那条）

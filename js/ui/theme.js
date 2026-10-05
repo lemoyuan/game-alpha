@@ -25,6 +25,7 @@ export const UI = {
   bossChestHalo: 'rgba(231,76,60,0.32)', // Boss 专属匣脉冲光晕（平涂 rgba，无渐变无 shadowBlur）
   toxic: '#C15BD8',        // 中毒状态：赤潮毒素的滴落描边与跳血提示。刻意避开海火自己的青 #22d3ee（毒圈要能在自家池子里被看见）、mint（那是增益）和 red（那是伤害/生命）
   burn: '#FF6B35',         // 燃烧子弹：怪物身上的火苗与跳血字。刻意避开 gold #F5B041（HUD 那一列宝箱道具全是这个金，13px 字号下橙金不分）、red #E74C3C（那是伤害/生命）、toxic #C15BD8（那是赤潮毒素，两套 DoT 必须一眼分开）
+  blood: '#E8355C',        // 突变型刺头身上的红斑 + 掉落血块。刻意避开 red #E74C3C（那是伤害飘字，而且喷子的识别色就是它，同色会让突变体读成第二只喷子）、bossChestBand #7B1E12（那是 Boss 专属匣的暗砖红）、toxic #C15BD8（那是赤潮毒素）；往洋红偏一点才既像「血」又不和自家红撞
 };
 
 export const R_CARD = 16;   // 卡片圆角

@@ -365,6 +365,14 @@ export function chestExpectedSeconds(luck) {
   return (1 - Math.pow(1 - p, rolls)) / p * (CHEST_ROLL_INTERVAL / 1000);
 }
 
+// 突变型刺头：刷怪时按 MUTANT_CHANCE 掷一次骰，命中的那只刺头身上叠一块红斑，击杀额外掉一颗血块。
+// 数值（hp/伤害/移速/经验/权重）与普通刺头完全一致，只多一个掉落，所以它不是一个新 type、不进图鉴
+export const MUTANT_CHANCE = 0.01;  // 掷骰概率，唯一的调节旋钮。一局血块数 ≈ 本局刺头击杀数 × 本行：
+                                    //   1% 是「一局碰得上一两次」的手感，抬到 5% 就变成满地血包、
+                                    //   回血从惊喜退化成常规资源，玩家会开始故意留残血去捡
+export const BLOOD_CLOT_HEAL = 2;   // 单颗回血量（生命上限 40）。刻意小于一下接触伤害（刺头 8）：
+                                    //   捡一颗不够挨一下，回血永远是「跑着顺手」的收益，不是可以算的账
+
 // 图鉴展示顺序 + 出现条件文案（首页怪物图鉴读取这里）
 export const CODEX_ORDER = [
   { type: 'basic', appear: '开局' },

@@ -171,6 +171,14 @@ export default class Player extends Sprite {
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
   }
 
+  // 回血：唯一的一处血包入口（血块，见 npc/bloodclot.js），别让掉落方直接改 this.hp。
+  // 返回实际回复量而不是布尔——差 1 血时捡到一颗回 2 的血块，只该算回复了 1
+  heal(amount) {
+    const before = this.hp;
+    this.hp = Math.min(this.hp + amount, this.maxHp);
+    return this.hp - before;
+  }
+
   // 一次只结一级：面板关掉时 upgrade.js 会再调 addXp(0) 把溢出经验接着结算成下一张卡。
   // 不要改成 while 循环——那等于一颗宝石白送好几次升级而不给对应的卡
   addXp(amount, databus) {

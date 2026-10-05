@@ -155,11 +155,24 @@ function touch(x, y, id) {
 
 prepareCopy(SRC, COPY);
 
+// A/B 用：MUT=1 把副本里的突变概率改成必出，好把「红斑真的画了」「血块真的掉了」这两条量出来
+// （1% 概率下 900 秒也可能一只都不刷，那种跑次的零是抽样零，不是代码零）。
+// ★改的是 .hcheck 副本不是 js/ 源码，和当年 HPROLD 那条同一个套路
+const MUT = process.env.MUT;
+if (MUT !== undefined) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const next = code.replace(/(export const MUTANT_CHANCE = )[\d.eE+-]+/, `$1${Number(MUT)}`);
+  if (next === code) errors.push(`副本 config.js 里没改到 MUTANT_CHANCE，MUT=${MUT} 这一组等于没跑`);
+  else fs.writeFileSync(f, next);
+}
+
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
 const {
   BOSS_CHESTS, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
+  MONSTER_TYPES, MUTANT_CHANCE, BLOOD_CLOT_HEAL,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
 const {
@@ -170,10 +183,11 @@ const {
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
 const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).default;
-// 两件新实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
+// 这几件实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
 const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).default;
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
+const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -231,6 +245,14 @@ let maxBombs = 0;      // 同屏在飞枚数峰值
 let maxBombers = 0;    // 场上炸弹跟班只数峰值：★恒应为 1，长到 2 就是「层数当只数」回潮
 let companionPeak = 0; // 同上，射击跟班也只该有一只
 const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
+// 突变型刺头与血块。出生按对象身份数（和 colonySeen 同一条理由：只有身份能把它和杂兵区分开），
+// 掉落数挂在 BloodClot.prototype.init 上
+const mutantSeen = new Set();
+const mutantAlive = new Set();
+let mutantDeaths = 0;
+let clotsDropped = 0;
+let clotPeak = 0;
+let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：主循环里那条回血线路跑通过的凭据
 
 // 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
 // player.kills 又不区分怪种。委托式包装保留原行为，只加一次记录
@@ -239,7 +261,17 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   const origSpawn = Object.getPrototypeOf(spawner).spawn;
   spawner.spawn = (db, forceType) => {
     if (forceType === 'chest') chestStamps.push(db.spawner.elapsed);
-    return origSpawn.call(spawner, db, forceType);
+    const before = db.enemys.length;
+    const r = origSpawn.call(spawner, db, forceType);
+    // ★突变体在刷出这一帧就登记，不等下一帧扫 enemys：刷出和死亡可能落在同一个 step 里
+    //   （跟班的子弹正好扫到出生点），漏登记就是「血块掉了一颗而死亡数没涨」——1:1 那条会假红
+    for (let i = before; i < db.enemys.length; i++) {
+      const e = db.enemys[i];
+      if (!e.mutant) continue;
+      mutantSeen.add(e);
+      mutantAlive.add(e);
+    }
+    return r;
   };
 }
 
@@ -249,6 +281,7 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   const origAdd = dbProto.addDamageText;
   dbProto.addDamageText = function (x, y, damage, isCrit, color) {
     if (color === UI.burn) { burnTicks++; burnDmg += damage; }
+    if (color === UI.blood) clotHeals++; // 血块被吃掉才会有的洋红跳字：主循环里那条回血线路的唯一实场读数
     const before = this.damageTexts.length;
     origAdd.call(this, x, y, damage, isCrit, color);
     // 不区分来源：白字被顶掉同样要紧，peak 撞到上限就说明这道闸在吃玩家该看到的数字
@@ -266,6 +299,14 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   proto.init = function (...args) { bombsThrown++; return origInit.apply(this, args); };
   const origDetonate = proto.detonate;
   proto.detonate = function (db) { bombBooms++; return origDetonate.call(this, db); };
+}
+
+// 血块掉落数：挂在 init 上，和上面炸弹那条一样是委托式包装（保留原行为、只加一次记录）。
+// ★下面「突变型」那节的纯检也会调 init，所以实场取值必须先快照
+{
+  const proto = BloodClot.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) { clotsDropped++; return origInit.apply(this, args); };
 }
 
 // 跟班一轮净加几发子弹：一轮之内没有别处会往 databus.bullets 里塞东西，所以差值就是发数。
@@ -364,6 +405,13 @@ for (let i = 0; i < frames; i++) {
     databus.isPaused = false;
   }
   step();
+  // 突变体从 enemys 里消失 = 本帧它的死亡结算跑完了，血块要是有掉也就在这一帧掉
+  for (const m of mutantAlive) {
+    if (databus.enemys.includes(m)) continue;
+    mutantAlive.delete(m);
+    if (!databus.isGameOver) mutantDeaths++;
+  }
+  if (databus.clots.length > clotPeak) clotPeak = databus.clots.length;
   // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上
   if (dyingBoss && !databus.enemys.includes(dyingBoss)) {
     bossDrops++;
@@ -430,6 +478,77 @@ if (COMPANIONS > 0) {
   }
 }
 
+
+// —— 突变型刺头与血块：先实场断言，再补纯检 ——
+// 先快照：下面那段纯检会直接 new BloodClot 并调 init，不先取值的话 fieldDrops 会把纯检也算进账
+const fieldMutants = mutantSeen.size;
+const fieldDrops = clotsDropped;
+const fieldPeak = clotPeak;
+const fieldHeals = clotHeals;
+if (MUT !== undefined && fieldMutants === 0) {
+  errors.push(`MUT=${MUT} 却一只突变体都没刷出来：spawner 那条掷骰根本没跑，这一组是空跑的`);
+}
+// 掉落的账必须平：死掉的每只掉且只掉一颗，还活着的那颗都不该掉
+if (fieldDrops !== mutantDeaths) {
+  errors.push(`突变体死了 ${mutantDeaths} 只、血块掉了 ${fieldDrops} 颗：1:1 那条不成立`);
+}
+if (fieldMutants && !fillStyles.has(UI.blood)) {
+  errors.push(`场上出现过 ${fieldMutants} 只突变体，却没有一笔画过 UI.blood：那块血斑根本没画出来`);
+}
+// ★测试台只在每帧【顶部】把 hp 回满，而同一帧里的接触伤害排在血块 update 之前，所以场上确实存在残血窗口：
+//   掉出来的血块该被真吃掉。heals 这颗数就是「回血在主循环里真跑通了」的实场凭据
+//   （纯检那几条只驱动原型，证明不了 databus/main 接了线）
+if (fieldHeals > fieldDrops) {
+  errors.push(`血块被吃掉 ${fieldHeals} 次 > 掉出 ${fieldDrops} 颗：有那颗结算了两遍，回收没跟上`);
+}
+if (fieldDrops > 0 && fieldHeals === 0) {
+  errors.push(`掉了 ${fieldDrops} 颗血块却一颗都没被吃掉：主循环里那条回血路径没接上（纯检过了不代表 databus/main 通了）`);
+}
+
+// —— 血块纯检：回多少、差 1 血时的封顶、满血那道门。这三条实场读不出数值（回血主循环里量不到具体加了几）
+function clotRun(hp, maxHp, dist) {
+  const player = Object.create(Player.prototype);
+  player.x = 0; player.y = 0; player.radius = 14; player.pickupRange = 90;
+  player.hp = hp; player.maxHp = maxHp;
+  const texts = [];
+  const db = { player, addDamageText(x, y, damage, isCrit, color) { texts.push({ damage, color }); } };
+  const clot = new BloodClot();
+  clot.init(player.x + dist, player.y, BLOOD_CLOT_HEAL);
+  const sx = clot.x; const sy = clot.y;
+  clot.update(1 / 60, db);
+  return { player, clot, texts, moved: Math.hypot(clot.x - sx, clot.y - sy) };
+}
+const clotFull = clotRun(40, 40, 10);      // 满血，而且已经贴到接触距离里了
+const clotHurt = clotRun(20, 40, 10);      // 残血，接触即回
+const clotEdge = clotRun(39, 40, 10);      // 只差 1 血：吃一颗回 2 的，应该只结算 1
+const clotNear = clotRun(20, 40, 60);      // 在磁吸半径内、还没碰上
+const clotFar = clotRun(20, 40, 120);      // 磁吸半径外：该一动不动
+if (clotFull.clot.collected || clotFull.player.hp !== 40 || clotFull.moved !== 0 || clotFull.texts.length) {
+  errors.push(`满血时那颗血块被吃了/被吸动了（collected=${clotFull.clot.collected} moved=${clotFull.moved.toFixed(1)}）：开局第一颗血块会白送`);
+}
+if (!clotHurt.clot.collected || clotHurt.player.hp !== 22) {
+  errors.push(`残血拾取后 hp=${clotHurt.player.hp}（应 22）、collected=${clotHurt.clot.collected}：回 BLOOD_CLOT_HEAL 那条没生效`);
+}
+if (clotHurt.texts.length !== 1 || clotHurt.texts[0].damage !== `+${BLOOD_CLOT_HEAL}` || clotHurt.texts[0].color !== UI.blood) {
+  errors.push(`拾血红字不对：${JSON.stringify(clotHurt.texts)}（应一条 +${BLOOD_CLOT_HEAL}、颜色 UI.blood）`);
+}
+if (clotEdge.player.hp !== 40 || (clotEdge.texts[0] || {}).damage !== '+1') {
+  errors.push(`差 1 血时吃了回 2 的血块，hp=${clotEdge.player.hp}、字面=${clotEdge.texts[0] && clotEdge.texts[0].damage}：封顶或飘字取的不是实际回复量`);
+}
+if (!(clotNear.moved > 0) || clotNear.clot.collected || clotNear.player.hp !== 20) {
+  errors.push(`磁吸没跑（移动 ${clotNear.moved.toFixed(1)}px）或者还没碰上就结算了：拾取范围这条改不了体验`);
+}
+if (clotFar.moved !== 0) {
+  errors.push(`磁吸半径外那颗也自己飞过来了（移动 ${clotFar.moved.toFixed(1)}px）：pickupRange 这道门没生效`);
+}
+// Enemy.init 必须复位 mutant（对象池约定）。漏了不会当场出问题，只会在池化接上之后污染后面所有刺头
+{
+  const e = new Enemy('basic', MONSTER_TYPES.basic);
+  e.init(0, 0);
+  e.mutant = true;
+  e.init(0, 0);
+  if (e.mutant) errors.push('Enemy.init 没把 mutant 复位：一旦接上对象池，第一只突变体会污染后面所有刺头');
+}
 
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
 // 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
@@ -708,6 +827,9 @@ console.log('burn (stacks=' + BURN + '):', burnTicks, 'ticks /', burnDmg, 'dmg |
   '| pure cadence: 1层=' + burn1.ticks + '跳·' + burn1.dmg + '血, 3层=' + burn3.dmg + '血, 中途补枪=' + burnRefresh.ticks + '跳·单跳最大' + burnRefresh.maxTick);
 console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms, 'boomed | peak in flight:', maxBombs,
   '| entity peak: companion', companionPeak, 'bomber', maxBombers);
+console.log('mutant (chance=' + MUTANT_CHANCE + '):', fieldMutants, 'spawned /', mutantDeaths, 'killed /', fieldDrops,
+  'clots, field peak', fieldPeak, '| eaten in main loop:', fieldHeals,
+  `| pure: 满血${clotFull.clot.collected ? '被吞' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);
 console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
   '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,

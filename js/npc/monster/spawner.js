@@ -4,7 +4,7 @@ import BossSeaFire from './bossSeaFire';
 import BossFilm from './bossFilm';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
-  hpScaleAt,
+  hpScaleAt, MUTANT_CHANCE,
   CHEST_ROLL_INTERVAL, CHEST_FIRST_ROLL, CHEST_PITY, chestChance,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
   BOSS_SPAWN_INTERVAL_MULT,
@@ -144,6 +144,11 @@ export default class Spawner {
 
     const enemy = new Enemy(type, config);
     enemy.init(pos.x, pos.y);
+
+    // 突变型：只给刺头掷骰，type 仍然是 'basic'（数值、图鉴、HUD 计数全不动，它只多一个掉落）。
+    // ★必须在 init 之后：init 会把 mutant 复位（对象池约定），放前面等于刚刷出来就被自己擦掉。
+    //   forceType='chest' 走不到这里（type 不是 basic），Boss 走 spawnBoss、膜王菌群自己 new，都不经过这一行
+    if (type === 'basic' && Math.random() < MUTANT_CHANCE) enemy.mutant = true;
 
     // 只有普通刷怪池吃这条时间曲线：Boss 走下面的 spawnBoss、膜王菌群自己 new，
     // 都不经过这里，所以它们那些按实测反解出来的血量不会被后期涨血扫坏
