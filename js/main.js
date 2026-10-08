@@ -13,7 +13,7 @@ import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import BloodClot from './npc/bloodclot';
 import Chest from './npc/chest';
-import { BOSS_CHESTS, BOSS_XP_GEMS, BLOOD_CLOT_HEAL } from './npc/monster/config';
+import { BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, BLOOD_CLOT_HEAL } from './npc/monster/config';
 import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
@@ -157,6 +157,10 @@ export default class Main {
           }
         }
         player.kills++;
+        // 嗜血：击杀回血只在这里掷。★这是全项目唯一「一次算一杀」的落点 —— 跟班子弹、炸弹爆风、
+        //   燃烧跳血、Boss、宝箱怪全汇到这一行；燃烧在 databus.update 里就把 isDead 置了，但移除仍由
+        //   这条倒序循环完成，所以同一帧只触发一次。上面的 absorbed 已 continue，被膜王吃回的菌群不算击杀
+        player.onKill(databus);
         databus.removeEnemy(i);
         continue;
       }
@@ -232,15 +236,20 @@ export default class Main {
     }
   }
 
-  // Boss 死亡专属回报：随机一种专属匣（BOSS_CHESTS 表空 = 只掉经验爆）+ 一圈经验宝石。
-  // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济
+  // Boss 死亡专属回报：一圈经验宝石（必掉）+ 一只专属匣（已整条下线，见 config 的 BOSS_CHESTS_ENABLED）。
+  // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济。
+  // ★门只钉在这一个掉落口：带 kind 的匣除这里以外只有预览台一个来源，所以游戏内整条不可达，
+  //   HUD 的黑红计数行和详情页那行读的都是 databus.bossChests（恒空），自然不占位，不必各自再钉一遍。
+  //   经验爆刻意留在门外：那是 Boss 战的经济收益，和「匣的强度」无关
   dropBossLoot(e) {
-    const kinds = BOSS_CHESTS[e.type];
-    if (kinds && kinds.length) {
-      const kind = kinds[Math.floor(Math.random() * kinds.length)];
-      const chest = databus.pool.getItemByClass('chest', Chest);
-      chest.init(e.x, e.y, kind.id);
-      databus.chests.push(chest);
+    if (BOSS_CHESTS_ENABLED) {
+      const kinds = BOSS_CHESTS[e.type];
+      if (kinds && kinds.length) {
+        const kind = kinds[Math.floor(Math.random() * kinds.length)];
+        const chest = databus.pool.getItemByClass('chest', Chest);
+        chest.init(e.x, e.y, kind.id);
+        databus.chests.push(chest);
+      }
     }
     const n = BOSS_XP_GEMS;
     const base = Math.floor(e.xpValue / n);

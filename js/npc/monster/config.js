@@ -261,6 +261,14 @@ export const BOSS_SCHEDULE = [
 
 // Boss 专属宝箱：Boss 死亡时随机掉表里一种（main.js dropBossLoot），拾取效果走 chestGrant.js 注册表。
 // 本轮只有毒王有匣；海火/膜王留空表 = 只掉经验爆，以后接机制往表里加行即可，掉落与 HUD 代码不用动
+// ★整条下线中（2026-10-06 用户：强度目前不合理）。回退路径只有这一个常量：改回 true →
+//   黑红匣掉落 → chestGrant 授予 → HUD 黑红计数行 → 详情页 brief，一行代码都不用再补。
+//   下面这张表和 pet 那串数值是「待发状态」不是死代码，别删、也别顺手调平衡，重做强度时先量再改。
+//   ★为什么不用「把 boss1 清空成 []」来下线：CHEST_KIND_BY_ID 是由这张表建的，清空会让
+//   预览台的「授予融合匣 / 带融合匣开局」拿到 undefined 再 def.pet 抛 TypeError，
+//   以后想在验收台里试强度就没入口了 —— 所以门钉在掉落口，表继续当数据源
+export const BOSS_CHESTS_ENABLED = false;
+
 export const BOSS_CHESTS = {
   boss1: [
     {

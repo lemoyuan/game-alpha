@@ -831,6 +831,39 @@ export function itemGlyph(ctx, key, cx, cy, s) {
         ctx.closePath();
       });
       break;
+    case 'leech':
+      // 嗜血：奶白粗十字（回血的通用符号）+ 右上空角一颗尖朝上的血滴。
+      // ★不能画成「水滴里嵌个加号」—— 上面 burnBullets 那颗火焰的外轮廓本来就是水滴，
+      //   两格在同一条金盘上会长成一家，所以这里让十字当主体、血滴只做配角。
+      // ★十字的臂必须是「条」不是「线」：细线在 26px 金盘上会整条消失（同 pickupRange 那条箭头线的教训）
+      body(() => {
+        const a = h * 0.26; // 臂半宽
+        const e = h * 0.74; // 臂端到中心
+        ctx.beginPath();
+        ctx.moveTo(-a, -e);
+        ctx.lineTo(a, -e);
+        ctx.lineTo(a, -a);
+        ctx.lineTo(e, -a);
+        ctx.lineTo(e, a);
+        ctx.lineTo(a, a);
+        ctx.lineTo(a, e);
+        ctx.lineTo(-a, e);
+        ctx.lineTo(-a, a);
+        ctx.lineTo(-e, a);
+        ctx.lineTo(-e, -a);
+        ctx.lineTo(-a, -a);
+        ctx.closePath();
+      });
+      // 血滴一颗路径成形（尖端 + 一段大弧圆底），不拆成「三角 + 圆」两块：
+      // 两块各自描边会在交界处割出一条穿模的墨线（同炸弹跟班那颗卫星斑的规矩）
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(h * 0.6, -h * 0.9);
+        ctx.lineTo(h * 0.771, -h * 0.688);
+        ctx.arc(h * 0.6, -h * 0.55, h * 0.22, -0.68, Math.PI + 0.68);
+        ctx.closePath();
+      });
+      break;
     default:
       icon(ctx, key, 0, 0, s, { color: UI.cream });
       break;

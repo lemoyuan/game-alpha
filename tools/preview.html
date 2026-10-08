@@ -87,8 +87,8 @@
   <button data-nav="clearload">清空预设</button>
   <div class="grp" id="padmsg"></div>
   <div class="grp">操作台 · 宝箱道具</div>
-  <button data-nav="grantpet">授予融合匣（立刻得跟班）</button>
-  <button data-nav="chestpet">摆一只 Boss 融合匣</button>
+  <button data-nav="grantpet">授予融合匣（游戏内已下线）</button>
+  <button data-nav="chestpet">摆一只 Boss 融合匣（游戏内已下线）</button>
   <button data-nav="chestplain">摆一只普通金匣</button>
   <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
@@ -98,8 +98,8 @@
   <button data-nav="boss">召唤 Boss</button>
   <button data-nav="boss2">召唤二号 Boss（海火）</button>
   <button data-nav="boss3">召唤三号 Boss（膜王）</button>
-  <button data-nav="bosschest">Boss 专属匣（融合匣）</button>
-  <button data-nav="petstart">带融合匣开局</button>
+  <button data-nav="bosschest">Boss 专属匣（融合匣，游戏内已下线）</button>
+  <button data-nav="petstart">带融合匣开局（游戏内已下线）</button>
   <button data-nav="bomberstart">带炸弹跟班开局（一坨怪）</button>
   <button data-nav="upgrade">升级三选一</button>
   <button data-nav="gameover">结算页（新开一局）</button>
@@ -362,6 +362,7 @@ const STATS = [
   { key: 'bomber', label: '炸弹跟班', step: 1 },
   { key: 'pickupRange', label: '拾取范围', step: 30 },
   { key: 'burnBullets', label: '燃烧子弹', step: 1 },
+  { key: 'leech', label: '嗜血层数', step: 1 },
 ];
 
 // 占位符给真实出厂值，不抄常量表：一个 new Player() 就是游戏的初始 build

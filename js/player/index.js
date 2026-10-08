@@ -8,7 +8,7 @@ import {
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK,
   BULLET_RANGE_BUFFER, SHOT_SPREAD, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
-  POISON_TICK, BURN_DMG,
+  POISON_TICK, BURN_DMG, LEECH_CHANCE,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
@@ -38,6 +38,7 @@ export default class Player extends Sprite {
     this.bomber = 0;                    // 炸弹跟班层数（宝箱：炸弹跟班+1）：场上只有一只，层数 = 一轮扔几枚。节奏与爆风在 consts.js 的 BOMB_CD/BOMB_BLAST_R
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
+    this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
     this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
     this.slowMult = 1;                  // 当前移速倍率（1 = 未被减速），由黏液洼写入 applySlow
@@ -177,6 +178,17 @@ export default class Player extends Sprite {
     const before = this.hp;
     this.hp = Math.min(this.hp + amount, this.maxHp);
     return this.hp - before;
+  }
+
+  // 嗜血：击杀结算点（main.js 每确认一次击杀调一次）。返回实际回复量，0 表示这一杀什么都没回
+  // ★满血照掷、白白浪费是定过的口径：不判 hp < maxHp，也不留「存着下次再触发」的缓冲。
+  //   唯一的短路是层数为 0 —— 那不是「满血浪费」，是这件道具还没拾取到，掷了连回多少都没有
+  onKill(databus) {
+    if (this.leech <= 0) return 0;
+    if (Math.random() >= LEECH_CHANCE) return 0;
+    const healed = this.heal(this.leech);
+    if (healed > 0) databus.addDamageText(this.x, this.y - this.radius, `+${healed}`, false, UI.blood);
+    return healed;
   }
 
   // 一次只结一级：面板关掉时 upgrade.js 会再调 addXp(0) 把溢出经验接着结算成下一张卡。
