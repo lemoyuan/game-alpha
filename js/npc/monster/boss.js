@@ -84,6 +84,8 @@ export default class Boss extends Enemy {
         databus.enemyBullets.push(bullet);
       }
     } else {
+      // 召唤体自己 new Enemy、绕过 spawner.spawn，所以永远不会是突变型：这是故意的，
+      // Boss 战里凭空开一个回水龙头等于给毒王减难度，别把它当漏接的 bug 修
       for (let i = 0; i < this.summonCount; i++) {
         const a = Math.random() * Math.PI * 2;
         const d = 60 + Math.random() * 60;

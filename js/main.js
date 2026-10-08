@@ -11,8 +11,9 @@ import HomeScreen from './ui/home';
 import { UI, FS, R_CARD, sticker, chip, label, labelMid, stickerLabel, button } from './ui/theme';
 import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
+import BloodClot from './npc/bloodclot';
 import Chest from './npc/chest';
-import { BOSS_CHESTS, BOSS_XP_GEMS } from './npc/monster/config';
+import { BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, BLOOD_CLOT_HEAL } from './npc/monster/config';
 import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
@@ -147,8 +148,19 @@ export default class Main {
           const gem = databus.pool.getItemByClass('xpgem', XpGem);
           gem.init(e.x, e.y, e.xpValue);
           databus.xpGems.push(gem);
+          // 突变型额外掉一颗血块：经验宝石照旧掉，它是「多一颗」不是「换一颗」，
+          // 「数值与刺头完全一样」这条才成立（掉落方在这里判，血块自己不知道是谁掉的）
+          if (e.mutant) {
+            const clot = databus.pool.getItemByClass('bloodclot', BloodClot);
+            clot.init(e.x, e.y, BLOOD_CLOT_HEAL);
+            databus.clots.push(clot);
+          }
         }
         player.kills++;
+        // 嗜血：击杀回血只在这里掷。★这是全项目唯一「一次算一杀」的落点 —— 跟班子弹、炸弹爆风、
+        //   燃烧跳血、Boss、宝箱怪全汇到这一行；燃烧在 databus.update 里就把 isDead 置了，但移除仍由
+        //   这条倒序循环完成，所以同一帧只触发一次。上面的 absorbed 已 continue，被膜王吃回的菌群不算击杀
+        player.onKill(databus);
         databus.removeEnemy(i);
         continue;
       }
@@ -211,6 +223,12 @@ export default class Main {
       }
     }
 
+    for (let i = databus.clots.length - 1; i >= 0; i--) {
+      if (databus.clots[i].collected) {
+        databus.removeClot(i);
+      }
+    }
+
     for (let i = databus.chests.length - 1; i >= 0; i--) {
       if (databus.chests[i].collected) {
         databus.removeChest(i);
@@ -218,15 +236,20 @@ export default class Main {
     }
   }
 
-  // Boss 死亡专属回报：随机一种专属匣（BOSS_CHESTS 表空 = 只掉经验爆）+ 一圈经验宝石。
-  // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济
+  // Boss 死亡专属回报：一圈经验宝石（必掉）+ 一只专属匣（已整条下线，见 config 的 BOSS_CHESTS_ENABLED）。
+  // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济。
+  // ★门只钉在这一个掉落口：带 kind 的匣除这里以外只有预览台一个来源，所以游戏内整条不可达，
+  //   HUD 的黑红计数行和详情页那行读的都是 databus.bossChests（恒空），自然不占位，不必各自再钉一遍。
+  //   经验爆刻意留在门外：那是 Boss 战的经济收益，和「匣的强度」无关
   dropBossLoot(e) {
-    const kinds = BOSS_CHESTS[e.type];
-    if (kinds && kinds.length) {
-      const kind = kinds[Math.floor(Math.random() * kinds.length)];
-      const chest = databus.pool.getItemByClass('chest', Chest);
-      chest.init(e.x, e.y, kind.id);
-      databus.chests.push(chest);
+    if (BOSS_CHESTS_ENABLED) {
+      const kinds = BOSS_CHESTS[e.type];
+      if (kinds && kinds.length) {
+        const kind = kinds[Math.floor(Math.random() * kinds.length)];
+        const chest = databus.pool.getItemByClass('chest', Chest);
+        chest.init(e.x, e.y, kind.id);
+        databus.chests.push(chest);
+      }
     }
     const n = BOSS_XP_GEMS;
     const base = Math.floor(e.xpValue / n);
@@ -257,6 +280,7 @@ export default class Main {
     for (const z of databus.zones) z.draw(ctx); // 赤潮和黏液都是地贴，压在所有实体下面；画在 arena 的裁切之外，黑水上照样亮
     for (const l of databus.lasers) l.draw(ctx); // 同属地面层：满 5 道光束时五个光根会叠成一团奶白，压在实体之下才不会把 Boss 本体埋掉（玩家本来就画在光之上）
     for (const g of databus.xpGems) g.draw(ctx);
+    for (const cl of databus.clots) cl.draw(ctx); // 血块和经验宝石同层：都是地上的拾取物，压在所有怪之下
     for (const c of databus.chests) c.draw(ctx);
     // 火苗紧跟在每只怪自身画完之后：四个 Boss 子类都覆写了 draw、super.draw 前后还有自绘，
     // overlay 收进基类的 draw 就会被它们自己那层压掉（挂载点选择的道理同 databus.js 里 updateBurn 那条）

@@ -1,6 +1,6 @@
 import {
   canvasW, canvasH, HUD_TILE, PIERCE_DAMAGE_FALLOFF, PLAYER_INVINCIBLE,
-  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage, BURN_TICK, BURN_HOLD, BURN_DMG, XP_PICKUP_RANGE,
+  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage, BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, XP_PICKUP_RANGE,
 } from '../consts';
 import { safeTop } from '../render';
 import { CHEST_KIND_BY_ID } from '../npc/monster/config';
@@ -18,6 +18,8 @@ function describe(item, player) {
     case 'bulletCount': return `每次射击射出 ${player.bulletCount} 颗子弹`;
     case 'pierce': return `可穿透 ${player.pierce} 个目标，每穿一个伤害变为上一次的 ${Math.round(PIERCE_DAMAGE_FALLOFF * 100)}%`;
     case 'shield': return `每层挡一次伤害，破盾后有 ${PLAYER_INVINCIBLE / 1000} 秒无敌；当前 ${player.shield}/${item.n} 层`;
+    // ★报的是「一口回几血」而不是「几 × 0.5%」：层数买的就是回血量，概率恒为 LEECH_CHANCE
+    case 'leech': return `每次击杀有 ${Math.round(LEECH_CHANCE * 1000) / 10}% 几率回 ${player.leech} 点血；满血时这一下会白白浪费`;
     case 'companions': return `1 个跟班一轮射出 ${player.companions} 发，${COMPANION_ATK_SPEED} 次/秒，伤害为角色的 ${COMPANION_DAMAGE_RATIO * 100}%，不会被攻击`;
     case 'bomber': return `1 个跟班每 ${BOMB_CD / 1000} 秒往最密的一团扔 ${player.bomber} 枚，单枚 ${bombDamage(player.attack)} 点，爆风半径 ${BOMB_BLAST_R} 像素`;
     case 'burnBullets': return `命中点燃 ${BURN_HOLD / 1000} 秒，每 ${BURN_TICK / 1000} 秒跳一次血，每跳 ${item.n * BURN_DMG} 点，再命中只刷新时长`;

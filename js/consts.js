@@ -59,7 +59,7 @@ export const PLAYER_ATK = 10;           // 初始攻击力，=子弹伤害（升
 export const PLAYER_DEF = 0;            // 初始防御，接触伤害减免（升级项：防御力 +2）
 export const PLAYER_ATTACK_RANGE = 200; // 索敌距离；子弹飞行距离 = 此值 + BULLET_RANGE_BUFFER
 export const PLAYER_ATTACK_CD = 1000;   // 基础攻击间隔（毫秒）：攻速 1.0 = 每 1 秒 1 发，实际间隔 = 此值 ÷ 攻速
-export const PLAYER_INVINCIBLE = 1000;   // 受击后无敌时间（毫秒）
+export const PLAYER_INVINCIBLE = 1500;   // 受击后无敌时间（毫秒）
 export const POISON_TICK = 500;         // 中毒每跳一次伤害的间隔（毫秒）。★故意不复用上面那条无敌帧：无敌帧是「一次撞击」的限流器，毒素是挂在身上的状态，走那条路就会被别的伤害源白吃掉结算（赤潮池原来正是这么变成摆设的）
 export const PLAYER_CRIT_RATE = 0;   // 初始暴击率（升级项：暴击率 +10%）
 export const PLAYER_CRIT_MULT = 1.5;      // 暴击伤害倍数
@@ -79,6 +79,12 @@ export const SHOT_SPREAD = 0.18;        // 多发弹的相邻张角（弧度）�
 export const BURN_TICK = 500;   // 每跳跳血的间隔（毫秒）。★故意不与上面玩家的 POISON_TICK 共用一个常量：两条节拍各自可调，玩家中毒和怪被烧本来就不该同拍
 export const BURN_HOLD = 5000;  // 燃烧持续毫秒数：再命中只刷新时长、绝不叠加；一次完整燃烧 = BURN_HOLD / BURN_TICK = 10 跳
 export const BURN_DMG = 1;      // 每层燃烧子弹每跳跳的血（1 层 = 2 DPS，3 层 = 6 DPS）。★体感嫌弱只改这一个数，不要改 BURN_TICK：节拍一动「每 0.5 秒掉 1 血」的口头承诺就变了，而玩家读得出节拍变化、读不出总伤变化
+
+// 嗜血（宝箱道具）：每次击杀有 LEECH_CHANCE 概率回血，回多少 = 道具层数
+export const LEECH_CHANCE = 0.005;  // 触发概率，唯一的调节旋钮。★层数买的是「一次回几血」，不是概率（10-05 定的口径），
+                                    //   所以概率只有这一个数、不随层数变，详情页那句「有 0.5% 几率回 N 点血」才始终成立。
+                                    //   一局期望回血 ≈ kills × 本行 × 层数（实测 480 秒满 build 约 786 击杀 → 1 层约 4 口、3 层约 12 血）。
+                                    //   调大它 = 回血从「偶尔一口」变成常态，玩家会开始主动挨一下再去杀一只换回来，那是另一种玩法
 export const DAMAGE_TEXT_MAX = 160; // 伤害飘字并发上限。★这个数不是拍的：实测 480 秒满 build（bot 每帧抽卡、786 击杀）的并发峰值是零燃烧 120 条、三层燃烧 112 条。曾经按 60 定，结果常态吃掉约 4% 的伤害数字，热闹时段普攻会「不掉字」；按 120 定又刚好压在零燃烧那条尾巴上，最热的几帧照样丢字。它只该兜失控，不该参与常态调度
 
 export const XP_BASE = 10;              // 经验曲线基数
@@ -155,6 +161,8 @@ export const ITEM_BAR = [
   { glyph: 'bulletCount', name: '子弹数', color: 'gold', count: (p) => p.bulletCount - 1 },
   { glyph: 'pierce', name: '穿透', color: 'gold', count: (p) => p.pierce },
   { glyph: 'shield', name: '护盾', color: 'gold', count: (p) => p.shield + p.shieldBroken },
+  // 紧跟护盾：这两格都是「活下来」的道具，挨在一起才看得出分工 —— 一个挡掉那一下，一个把血补回来
+  { glyph: 'leech', name: '嗜血', color: 'gold', count: (p) => p.leech },
   { glyph: 'companions', name: '跟班', color: 'gold', count: (p) => p.companions },
   // 紧跟在跟班后面：两种跟班挨在一起，HUD 上才看得出「一个打枪的、一个扔弹的」是两件事
   { glyph: 'bomber', name: '炸弹跟班', color: 'gold', count: (p) => p.bomber },

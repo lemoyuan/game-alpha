@@ -155,25 +155,61 @@ function touch(x, y, id) {
 
 prepareCopy(SRC, COPY);
 
+// A/B 用：MUT=1 把副本里的突变概率改成必出，好把「红斑真的画了」「血块真的掉了」这两条量出来
+// （1% 概率下 900 秒也可能一只都不刷，那种跑次的零是抽样零，不是代码零）。
+// ★改的是 .hcheck 副本不是 js/ 源码，和当年 HPROLD 那条同一个套路
+const MUT = process.env.MUT;
+if (MUT !== undefined) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const next = code.replace(/(export const MUTANT_CHANCE = )[\d.eE+-]+/, `$1${Number(MUT)}`);
+  if (next === code) errors.push(`副本 config.js 里没改到 MUTANT_CHANCE，MUT=${MUT} 这一组等于没跑`);
+  else fs.writeFileSync(f, next);
+}
+// 嗜血的触发概率同样改副本：0.5% 下 900 秒也可能一次都不触发，那种零分不清是抽样零还是代码零。
+// LEECHP=1 把「每杀必回」钉成确定路径，现场那条接线才量得准；LEECHP=0 是概率那一端的门
+const LEECHP = process.env.LEECHP;
+if (LEECHP !== undefined) {
+  const f = path.join(COPY, 'consts.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const next = code.replace(/(export const LEECH_CHANCE = )[\d.eE+-]+/, `$1${Number(LEECHP)}`);
+  if (next === code) errors.push(`副本 consts.js 里没改到 LEECH_CHANCE，LEECHP=${LEECHP} 这一组等于没跑`);
+  else fs.writeFileSync(f, next);
+}
+
+// Boss 专属匣的下线开关也翻得回 true：BOSSCHEST=1 把副本里那个 false 改成 true，
+// 用来证明 config 注释上那句「改回 true 就整条恢复」不是空话（关掉的那一端由下面的零断言守）
+const BOSSCHEST = process.env.BOSSCHEST;
+if (BOSSCHEST !== undefined) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const re = /export const BOSS_CHESTS_ENABLED = \w+/;
+  // ★不能用「替换后字符串没变」判有没有命中：BOSSCHEST=0 时本来就不变，那样会假报一组没跑
+  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_CHESTS_ENABLED，BOSSCHEST=${BOSSCHEST} 这一组等于没跑`);
+  else fs.writeFileSync(f, code.replace(re, `export const BOSS_CHESTS_ENABLED = ${BOSSCHEST === '1' ? 'true' : 'false'}`));
+}
+
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
 const {
-  BOSS_CHESTS, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
+  BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
+  MONSTER_TYPES, MUTANT_CHANCE, BLOOD_CLOT_HEAL,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
 const {
   BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX,
   BOMB_CD, BOMB_BLAST_R, BOMB_BLAST_MS, BOMB_H_SPEED, BOMB_FLY_MIN, BOMB_FLY_MAX, bombDamage,
-  ARENA_W, ARENA_H, ITEM_BAR,
+  ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
 const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).default;
-// 两件新实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
+// 这几件实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
 const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).default;
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
+const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -200,6 +236,7 @@ let prevPoisonTick = 0;
 let bossDrops = 0;   // Boss 死亡掉落结算次数
 let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就一直是 false）
 let maxPets = 0;
+let sawBossChest = false; // 场上是否出现过带 kindDef 的专属匣：下线期间这条必须一直 false
 const colonySeen = new Set(); // 按对象身份数菌群：小怪会被回收复用，只有 home 能把它和杂兵区分开
 let burnTicks = 0;      // 燃烧跳血次数（按飘字颜色识别，比逐帧比对时钟可靠）
 let burnDmg = 0;        // 燃烧累计造成的伤害
@@ -211,7 +248,7 @@ let suppressedTexts = 0; // 被上限吃掉的飘字数
 // 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
 // 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
 const LUCK = Number(process.env.LUCK || 0);
-// 燃烧层数同样钉死，理由和幸运一样：金匣七种加成里就有燃烧，不钉住两组跑的是两种随机 build。
+// 燃烧层数同样钉死，理由和幸运一样：金匣八种加成里就有燃烧，不钉住两组跑的是两种随机 build。
 // ★BURN=0 曾经兼作「新代码零副作用」的凭据（子弹根本不会调 applyBurn）。
 //   但金匣池加到第七种之后这条不再成立：同一颗种子抽到的加成会重新分配，跑出来本来就是另一种 build。
 //   零副作用的证据改用下面那条 BOMBER=0 等价式
@@ -223,6 +260,14 @@ const BURN = Number(process.env.BURN || 0);
 const BOMBER = Number(process.env.BOMBER || 0);
 // 射击跟班层数同样钉死：这一批改的是「层数 = 一轮几发」，不钉住就量不到多发那条路
 const COMPANIONS = Number(process.env.COMPANIONS || 0);
+// 嗜血层数同样钉成单变量：金匣八选一里就有它，不吞掉写入的话 LEECH=0 那趟也会长出层数，
+// 那条「关掉等价式」就量不出来
+const LEECH = Number(process.env.LEECH || 0);
+let leechCalls = 0;     // 击杀结算点被真正调到过几次：和 player.kills 一比一，是「接线只此一处」的凭据
+let leechProcs = 0;     // 实际回了血（返回值 > 0）的次数
+let leechHp = 0;        // 累计回复量
+let leechRoom = 0;      // 按「一口 = 层数、封顶取剩余额」应得的回复量：现场那 4 点缺口会被同帧多杀吃掉，
+let leechRoomProcs = 0; //   所以断言比的是这两个「算得出来的期望」，不是一句 procs === kills
 let volleyRounds = 0;      // 跟班齐射轮数
 const volleySizes = new Set(); // 每轮实际新增的子弹数：只应有一个取值且等于层数
 let bombsThrown = 0;   // 扔出的枚数（按 Bomb.init 计，一轮 player.bomber 枚）
@@ -231,6 +276,14 @@ let maxBombs = 0;      // 同屏在飞枚数峰值
 let maxBombers = 0;    // 场上炸弹跟班只数峰值：★恒应为 1，长到 2 就是「层数当只数」回潮
 let companionPeak = 0; // 同上，射击跟班也只该有一只
 const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
+// 突变型刺头与血块。出生按对象身份数（和 colonySeen 同一条理由：只有身份能把它和杂兵区分开），
+// 掉落数挂在 BloodClot.prototype.init 上
+const mutantSeen = new Set();
+const mutantAlive = new Set();
+let mutantDeaths = 0;
+let clotsDropped = 0;
+let clotPeak = 0;
+let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：主循环里那条回血线路跑通过的凭据
 
 // 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
 // player.kills 又不区分怪种。委托式包装保留原行为，只加一次记录
@@ -239,7 +292,17 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   const origSpawn = Object.getPrototypeOf(spawner).spawn;
   spawner.spawn = (db, forceType) => {
     if (forceType === 'chest') chestStamps.push(db.spawner.elapsed);
-    return origSpawn.call(spawner, db, forceType);
+    const before = db.enemys.length;
+    const r = origSpawn.call(spawner, db, forceType);
+    // ★突变体在刷出这一帧就登记，不等下一帧扫 enemys：刷出和死亡可能落在同一个 step 里
+    //   （跟班的子弹正好扫到出生点），漏登记就是「血块掉了一颗而死亡数没涨」——1:1 那条会假红
+    for (let i = before; i < db.enemys.length; i++) {
+      const e = db.enemys[i];
+      if (!e.mutant) continue;
+      mutantSeen.add(e);
+      mutantAlive.add(e);
+    }
+    return r;
   };
 }
 
@@ -249,6 +312,7 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   const origAdd = dbProto.addDamageText;
   dbProto.addDamageText = function (x, y, damage, isCrit, color) {
     if (color === UI.burn) { burnTicks++; burnDmg += damage; }
+    if (color === UI.blood) clotHeals++; // 血块被吃掉才会有的洋红跳字：主循环里那条回血线路的唯一实场读数
     const before = this.damageTexts.length;
     origAdd.call(this, x, y, damage, isCrit, color);
     // 不区分来源：白字被顶掉同样要紧，peak 撞到上限就说明这道闸在吃玩家该看到的数字
@@ -268,6 +332,14 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   proto.detonate = function (db) { bombBooms++; return origDetonate.call(this, db); };
 }
 
+// 血块掉落数：挂在 init 上，和上面炸弹那条一样是委托式包装（保留原行为、只加一次记录）。
+// ★下面「突变型」那节的纯检也会调 init，所以实场取值必须先快照
+{
+  const proto = BloodClot.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) { clotsDropped++; return origInit.apply(this, args); };
+}
+
 // 跟班一轮净加几发子弹：一轮之内没有别处会往 databus.bullets 里塞东西，所以差值就是发数。
 // 这个量是「层数 = 每轮发数」的唯一实场读数，纯检那条只能证明代码写了循环
 {
@@ -282,9 +354,31 @@ const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算�
   };
 }
 
+// 嗜血的实场计数：包的是 player 实例上的方法，不包原型。
+// ★理由和当年那批实例钩子一样 —— 下面那段纯检直接 `Player.prototype.onKill.call(假玩家)`，
+//   挂在原型上会把纯检的五次调用一起计进现场账，procs 对不上 kills 就成了假红。
+//   第一帧才装：player 是开局那一帧才 new 出来的，提前装会挂到 null 上、整组计数空跑
+
 for (let i = 0; i < frames; i++) {
   const p = databus.player;
-  if (p) p.hp = p.maxHp;
+  if (p && !p.__leechHooked) {
+    p.__leechHooked = true;
+    const orig = p.onKill;
+    p.onKill = function (db) {
+      leechCalls++;
+      // 期望值在调用前算：一口 = 层数，但封顶取「还差几血」，同帧第二杀常常只剩零头
+      const room = Math.max(0, this.maxHp - this.hp);
+      leechRoom += Math.min(LEECH, room);
+      if (room > 0) leechRoomProcs++;
+      const healed = orig.call(this, db);
+      if (healed > 0) leechProcs++;
+      leechHp += healed;
+      return healed;
+    };
+  }
+  // ★开了 LEECH 时把每帧的回满改成「留 4 点缺口」：血每次都是满的话 heal() 恒返回 0，
+  //   现场读数会永远是 0，而那个 0 和「功能根本没接上」长得一模一样
+  if (p) p.hp = LEECH > 0 ? p.maxHp - 4 : p.maxHp;
   if (p) p.luck = LUCK; // 金匣概率是幸运的单变量函数，钉住它才谈得上量间隔
   // 燃烧层数不能照抄 luck 那种「每帧顶部赋值」：金匣的 player[key] += step 就发生在同一帧的
   // chests.update 里、排在 player.update 之前，赋值会漏出一帧。漏出不要紧，燃烧能在怪身上烧满 5 秒，
@@ -306,6 +400,12 @@ for (let i = 0; i < frames; i++) {
     p.__companionPinned = true;
     Object.defineProperty(p, 'companions', { configurable: true, get: () => COMPANIONS, set: () => {} });
   }
+  // 嗜血层数不管开没开都要钉：金匣八选一里就有它，不吞掉写入的话 LEECH=0 那趟照样会长出层数，
+  // 那条「关掉等价式」量不出来，LEECH=3 那趟也会顺带开出第四、五层
+  if (p && !p.__leechPinned) {
+    p.__leechPinned = true;
+    Object.defineProperty(p, 'leech', { configurable: true, get: () => LEECH, set: () => {} });
+  }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
   // 留着它会给后面三场 Boss 战额外垫真实 DPS，把 film breaks 这条基线改掉
@@ -326,10 +426,15 @@ for (let i = 0; i < frames; i++) {
   }
   // Boss 专属匣只会掉在 Boss 尸体上，bot 未必走过去 → CHEST_GRANTS 和跟班的 update/draw 一行都跑不到。
   // 每帧把匣挪到玩家脚下让它真被拾取一次：跟班约 6 DPS，相对测试台每秒削掉的 maxHp/15 可以忽略，
-  // 不会改写 film breaks 这条基线
+  // 不会改写 film breaks 这条基线。★专属匣已整条下线（BOSS_CHESTS_ENABLED = false）时场上不会有
+  // kindDef 的匣，这段自然一行都不做；它只在 BOSSCHEST=1 那一跑里负责保证「授予链真被跑到」
   if (p) {
     for (const c of databus.chests) {
-      if (c.kindDef) { c.x = p.x; c.y = p.y; }
+      if (c.kindDef) {
+        sawBossChest = true;
+        c.x = p.x;
+        c.y = p.y;
+      }
     }
   }
   const dyingBoss = boss && boss.isDead ? boss : null; // 本帧 checkCollisions 会给它结算掉落
@@ -364,15 +469,25 @@ for (let i = 0; i < frames; i++) {
     databus.isPaused = false;
   }
   step();
+  // 突变体从 enemys 里消失 = 本帧它的死亡结算跑完了，血块要是有掉也就在这一帧掉
+  for (const m of mutantAlive) {
+    if (databus.enemys.includes(m)) continue;
+    mutantAlive.delete(m);
+    if (!databus.isGameOver) mutantDeaths++;
+  }
+  if (databus.clots.length > clotPeak) clotPeak = databus.clots.length;
   // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上
   if (dyingBoss && !databus.enemys.includes(dyingBoss)) {
     bossDrops++;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
     }
-    const table = BOSS_CHESTS[dyingBoss.type];
-    if (table && table.length && !databus.chests.some((c) => c.kindDef)) {
-      errors.push(`boss ${dyingBoss.type} 死亡没掉专属匣`);
+    // ★这条只在开关为 true 时成立：专属匣已整条下线，表非空却查不到匣是设计如此，不是掉了
+    if (BOSS_CHESTS_ENABLED) {
+      const table = BOSS_CHESTS[dyingBoss.type];
+      if (table && table.length && !databus.chests.some((c) => c.kindDef)) {
+        errors.push(`boss ${dyingBoss.type} 死亡没掉专属匣`);
+      }
     }
   }
   if (databus.bossPets.length) sawPet = true;
@@ -404,6 +519,18 @@ for (let i = 0; i < frames; i++) {
   }
 }
 
+// —— Boss 专属匣的两端断言：下线期间「整条不可达」，翻回 true 时「授予链真能跑通」 ——
+if (!BOSS_CHESTS_ENABLED) {
+  if (sawBossChest) {
+    errors.push('专属匣已下线却还在场上掉出来：main.js 的门没钉住，或者还有第二个掉落口没关');
+  }
+  if (maxPets) {
+    errors.push(`专属匣已下线却生成过 ${maxPets} 只跟班：CHEST_GRANTS 被掉落以外的地方调用了`);
+  }
+} else if (bossDrops > 0 && !sawPet) {
+  errors.push(`开关翻回 true、也死了 ${bossDrops} 只 Boss，却没有一只跟班：掉落→拾取→授予→bossPet 断了一环，"改回 true 即恢复"不成立`);
+}
+
 // —— 炸弹跟班实场断言 ——
 // 先快照：下面那些纯检会直接调 Bomb.prototype.init/detonate，不先取值的话 fieldThrown 会把纯检也算进账
 const fieldThrown = bombsThrown;
@@ -430,6 +557,157 @@ if (COMPANIONS > 0) {
   }
 }
 
+
+// —— 嗜血实场断言 ——
+// 先快照：下面那段纯检会直接驱动 Player.prototype.onKill（不经过这个实例钩子），但 kills 会一直涨到局末
+const fieldKills = databus.player ? databus.player.kills : 0;
+// 这条是所有断言里最硬的一条：接线点既不能漏杀（procs 上不去）也不能一杀两掷（红字翻倍）
+if (leechCalls !== fieldKills) {
+  errors.push(`结算了 ${fieldKills} 次击杀而 onKill 被调了 ${leechCalls} 次：main.js 那条「一次算一杀」的接线对不上`);
+}
+if (LEECH === 0 && (leechProcs || leechHp)) {
+  errors.push(`嗜血 0 层却量到 ${leechProcs} 次回血共 ${leechHp} 点：0 层那道门没关掉，没捡到这个道具的局也在跑新代码`);
+}
+if (LEECHP !== undefined) {
+  const pin = Number(LEECHP);
+  if (pin === 0 && (leechProcs || leechHp)) {
+    errors.push(`概率钉成 0 却回了 ${leechHp} 点血（${leechProcs} 次）：LEECH_CHANCE 那道门没生效`);
+  }
+  if (pin === 1) {
+    if (LEECH > 0 && leechProcs === 0) {
+      errors.push(`概率钉成 1、层数 ${LEECH} 却一口都没回：现场那条接线没通（纯检过了不代表 main 接上了）`);
+    }
+    if (leechProcs !== leechRoomProcs) {
+      errors.push(`必触发下回了血 ${leechProcs} 次，按「有余血才回得进」算应有 ${leechRoomProcs} 次：概率钉死了还在掷骰`);
+    }
+    if (leechHp !== leechRoom) {
+      errors.push(`必触发下累计回 ${leechHp} 点，按「一口 ${LEECH} 点、封顶取剩余额」算应得 ${leechRoom} 点：一口的量不是层数`);
+    }
+  }
+}
+
+// —— 突变型刺头与血块：先实场断言，再补纯检 ——
+// 先快照：下面那段纯检会直接 new BloodClot 并调 init，不先取值的话 fieldDrops 会把纯检也算进账
+const fieldMutants = mutantSeen.size;
+const fieldDrops = clotsDropped;
+const fieldPeak = clotPeak;
+const fieldHeals = clotHeals;
+if (MUT !== undefined && fieldMutants === 0) {
+  errors.push(`MUT=${MUT} 却一只突变体都没刷出来：spawner 那条掷骰根本没跑，这一组是空跑的`);
+}
+// 掉落的账必须平：死掉的每只掉且只掉一颗，还活着的那颗都不该掉
+if (fieldDrops !== mutantDeaths) {
+  errors.push(`突变体死了 ${mutantDeaths} 只、血块掉了 ${fieldDrops} 颗：1:1 那条不成立`);
+}
+if (fieldMutants && !fillStyles.has(UI.blood)) {
+  errors.push(`场上出现过 ${fieldMutants} 只突变体，却没有一笔画过 UI.blood：那块血斑根本没画出来`);
+}
+// ★测试台只在每帧【顶部】把 hp 回满，而同一帧里的接触伤害排在血块 update 之前，所以场上确实存在残血窗口：
+//   掉出来的血块该被真吃掉。heals 这颗数就是「回血在主循环里真跑通了」的实场凭据
+//   （纯检那几条只驱动原型，证明不了 databus/main 接了线）
+// ★clotHeals 那个计数器现在是两家共用：血块被吃掉的红字和嗜血回血的红字在 addDamageText 上长得
+//   一模一样（都是 +N、都是 UI.blood），分不开只能按笔数相减。嗜血每次回血必出一条红字
+//   （onKill 里 healed > 0 才画），所以减 leechProcs 是精确的，不是估的
+const clotEats = fieldHeals - leechProcs;
+if (clotEats > fieldDrops) {
+  errors.push(`血块被吃掉 ${clotEats} 次 > 掉出 ${fieldDrops} 颗：有那颗结算了两遍，回收没跟上`);
+}
+if (fieldDrops > 0 && clotEats <= 0) {
+  errors.push(`掉了 ${fieldDrops} 颗血块却一颗都没被吃掉：主循环里那条回血路径没接上（纯检过了不代表 databus/main 通了）`);
+}
+
+// —— 血块纯检：回多少、差 1 血时的封顶、满血那道门。这三条实场读不出数值（回血主循环里量不到具体加了几）
+function clotRun(hp, maxHp, dist) {
+  const player = Object.create(Player.prototype);
+  player.x = 0; player.y = 0; player.radius = 14; player.pickupRange = 90;
+  player.hp = hp; player.maxHp = maxHp;
+  const texts = [];
+  const db = { player, addDamageText(x, y, damage, isCrit, color) { texts.push({ damage, color }); } };
+  const clot = new BloodClot();
+  clot.init(player.x + dist, player.y, BLOOD_CLOT_HEAL);
+  const sx = clot.x; const sy = clot.y;
+  clot.update(1 / 60, db);
+  return { player, clot, texts, moved: Math.hypot(clot.x - sx, clot.y - sy) };
+}
+const clotFull = clotRun(40, 40, 10);      // 满血，而且已经贴到接触距离里了
+const clotHurt = clotRun(20, 40, 10);      // 残血，接触即回
+const clotEdge = clotRun(39, 40, 10);      // 只差 1 血：吃一颗回 2 的，应该只结算 1
+const clotNear = clotRun(20, 40, 60);      // 在磁吸半径内、还没碰上
+const clotFar = clotRun(20, 40, 120);      // 磁吸半径外：该一动不动
+if (clotFull.clot.collected || clotFull.player.hp !== 40 || clotFull.moved !== 0 || clotFull.texts.length) {
+  errors.push(`满血时那颗血块被吃了/被吸动了（collected=${clotFull.clot.collected} moved=${clotFull.moved.toFixed(1)}）：开局第一颗血块会白送`);
+}
+if (!clotHurt.clot.collected || clotHurt.player.hp !== 22) {
+  errors.push(`残血拾取后 hp=${clotHurt.player.hp}（应 22）、collected=${clotHurt.clot.collected}：回 BLOOD_CLOT_HEAL 那条没生效`);
+}
+if (clotHurt.texts.length !== 1 || clotHurt.texts[0].damage !== `+${BLOOD_CLOT_HEAL}` || clotHurt.texts[0].color !== UI.blood) {
+  errors.push(`拾血红字不对：${JSON.stringify(clotHurt.texts)}（应一条 +${BLOOD_CLOT_HEAL}、颜色 UI.blood）`);
+}
+if (clotEdge.player.hp !== 40 || (clotEdge.texts[0] || {}).damage !== '+1') {
+  errors.push(`差 1 血时吃了回 2 的血块，hp=${clotEdge.player.hp}、字面=${clotEdge.texts[0] && clotEdge.texts[0].damage}：封顶或飘字取的不是实际回复量`);
+}
+if (!(clotNear.moved > 0) || clotNear.clot.collected || clotNear.player.hp !== 20) {
+  errors.push(`磁吸没跑（移动 ${clotNear.moved.toFixed(1)}px）或者还没碰上就结算了：拾取范围这条改不了体验`);
+}
+if (clotFar.moved !== 0) {
+  errors.push(`磁吸半径外那颗也自己飞过来了（移动 ${clotFar.moved.toFixed(1)}px）：pickupRange 这道门没生效`);
+}
+// Enemy.init 必须复位 mutant（对象池约定）。漏了不会当场出问题，只会在池化接上之后污染后面所有刺头
+{
+  const e = new Enemy('basic', MONSTER_TYPES.basic);
+  e.init(0, 0);
+  e.mutant = true;
+  e.init(0, 0);
+  if (e.mutant) errors.push('Enemy.init 没把 mutant 复位：一旦接上对象池，第一只突变体会污染后面所有刺头');
+}
+
+// —— 嗜血纯检：这一条才是「0.5% / 一口 N 血 / 满血浪费」三条口径的凭据。
+//   现场样本证不了概率（0.5% 下 900 秒只期望几口，跑一万次也报不出「恰好 0.5%」），
+//   所以把 Math.random 钉到两端、直接驱动原型，一次一条口径
+function leechRun(stacks, hp, maxHp) {
+  const player = Object.create(Player.prototype);
+  player.x = 0; player.y = 0; player.radius = 14;
+  player.hp = hp; player.maxHp = maxHp; player.leech = stacks;
+  const texts = [];
+  const db = { addDamageText(x, y, damage, isCrit, color) { texts.push({ damage, color }); } };
+  const healed = Player.prototype.onKill.call(player, db);
+  return { player, healed, texts };
+}
+const prevRandom = Math.random;
+const canForce = LEECH_CHANCE > 0; // LEECHP=0 那趟里 `0 >= 0` 也算不命中，必触发那几条无从证明，直接跳过
+let leechOne; let leechA; let leechB; let leechC; let leechE; let leechD;
+Math.random = () => 0;
+leechOne = leechRun(1, 10, 40);
+leechA = leechRun(3, 10, 40);
+leechB = leechRun(3, 39, 40);
+leechC = leechRun(3, 40, 40);
+leechE = leechRun(0, 10, 40);
+Math.random = () => 1;
+leechD = leechRun(10, 10, 40);
+Math.random = prevRandom;
+if (canForce) {
+  if (leechOne.healed !== 1 || leechOne.player.hp !== 11) {
+    errors.push(`1 层必触发回了 ${leechOne.healed} 点（应 1）：层数买的是概率不是回血量，口径 1 被改写`);
+  }
+  if (leechA.healed !== 3 || leechA.player.hp !== 13) {
+    errors.push(`3 层必触发回 ${leechA.healed} 点、hp=${leechA.player.hp}（应 3 / 13）：一口的量不是层数`);
+  }
+  if (leechA.texts.length !== 1 || leechA.texts[0].damage !== '+3' || leechA.texts[0].color !== UI.blood) {
+    errors.push(`嗜血红字不对：${JSON.stringify(leechA.texts)}（应一条 +3、颜色 UI.blood）`);
+  }
+  if (leechB.player.hp !== 40 || leechB.healed !== 1 || (leechB.texts[0] || {}).damage !== '+1') {
+    errors.push(`差 1 血时触发一口 3 血，hp=${leechB.player.hp}、返回 ${leechB.healed}、字面=${(leechB.texts[0] || {}).damage}：封顶或飘字报的不是实际回复量`);
+  }
+  if (leechC.healed !== 0 || leechC.player.hp !== 40 || leechC.texts.length !== 0) {
+    errors.push(`满血触发返回 ${leechC.healed}、飘字 ${leechC.texts.length} 条：口径 2 是「照掷、白白浪费」，不该有红字这种假反馈`);
+  }
+  if (leechE.healed !== 0 || leechE.player.hp !== 10 || leechE.texts.length !== 0) {
+    errors.push(`0 层也回了血（${leechE.healed}）：leech <= 0 那道短路没生效，下面那条关掉等价式不成立`);
+  }
+}
+if (leechD.healed !== 0 || leechD.player.hp !== 10 || leechD.texts.length !== 0) {
+  errors.push(`掷不中还是回了血（${leechD.healed}）：LEECH_CHANCE 那道门形同虚设`);
+}
 
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
 // 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
@@ -632,7 +910,7 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   }
 }
 
-// 暂停详情页的文案探针：把七种加成挂满，逼七行 describe 各拼一次并真画出来。
+// 暂停详情页的文案探针：把八种加成挂满，逼八行 describe 各拼一次并真画出来。
 // ★这类 bug 只住在字符串里：bombDamage 收攻击力却传了整个 player，游戏照跑、数值检查全绿，
 //   只有详情页那一行写成「单枚 NaN 点」。不扫文本就永远发现不了
 {
@@ -640,7 +918,7 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
   // 一刀切写 3 不行：count 是各格自己的口径（子弹数从 1 起算、拾取范围存的是像素），
   // 全写 3 会让 pickupRange 算出负层数、被 ownedItems 当"没拾取过"滤掉，那一行就永远扫不到
-  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170 };
+  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170, leech: 3 };
   for (const k in OWNED) probe[k] = OWNED[k];
   probe.shieldBroken = 0;
   databus.player = probe;
@@ -699,7 +977,9 @@ console.log('peak lasers:', maxLasers, '| peak zones:', maxZones);
 console.log('peak film:', filmPeak, '| film breaks:', filmBreaks, '| colonies:', colonySeen.size, 'peak', maxColonies);
 console.log('slowed frames:', slowFrames, 'of', frames);
 console.log('poisoned frames:', poisonFrames, '| poison ticks:', poisonTicks);
-console.log('boss drops:', bossDrops, '| pet granted:', sawPet ? 'yes' : 'NO', '| peak pets:', maxPets);
+console.log('boss drops:', bossDrops, '| boss chest:', BOSS_CHESTS_ENABLED
+  ? `on (${sawBossChest ? 'dropped' : 'NOT dropped'} / pet ${sawPet ? 'granted' : 'NO'} / peak pets ${maxPets})`
+  : `off (${sawBossChest ? '泄漏' : '0 只匣'} / peak pets ${maxPets})`);
 console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
   '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
   '| first:', chestStamps.length ? chestStamps[0].toFixed(1) + 's' : '-');
@@ -708,6 +988,13 @@ console.log('burn (stacks=' + BURN + '):', burnTicks, 'ticks /', burnDmg, 'dmg |
   '| pure cadence: 1层=' + burn1.ticks + '跳·' + burn1.dmg + '血, 3层=' + burn3.dmg + '血, 中途补枪=' + burnRefresh.ticks + '跳·单跳最大' + burnRefresh.maxTick);
 console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms, 'boomed | peak in flight:', maxBombs,
   '| entity peak: companion', companionPeak, 'bomber', maxBombers);
+console.log('mutant (chance=' + MUTANT_CHANCE + '):', fieldMutants, 'spawned /', mutantDeaths, 'killed /', fieldDrops,
+  'clots, field peak', fieldPeak, '| eaten in main loop:', clotEats,
+  `| pure: 满血${clotFull.clot.collected ? '被吞' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);
+console.log('leech (stacks=' + LEECH + ', chance=' + LEECH_CHANCE + '):', leechCalls, 'calls /', leechProcs,
+  'procs /', leechHp, 'hp back (clamp-aware expect ' + leechRoom + ')',
+  `| 一局 ${fieldKills} 杀 ≈ ${(fieldKills * LEECH_CHANCE).toFixed(1)} 口 = 1层 ${(fieldKills * LEECH_CHANCE).toFixed(1)} 血 / 3层 ${(fieldKills * LEECH_CHANCE * 3).toFixed(1)} 血`,
+  `| pure: ${canForce ? `1层${leechOne.healed} 3层${leechA.healed} 封顶${leechB.healed} 满血${leechC.healed} 0层${leechE.healed}` : '跳过（LEECHP=0 钉死不触发）'}`);
 console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
   '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,

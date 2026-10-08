@@ -87,9 +87,10 @@
   <button data-nav="clearload">清空预设</button>
   <div class="grp" id="padmsg"></div>
   <div class="grp">操作台 · 宝箱道具</div>
-  <button data-nav="grantpet">授予融合匣（立刻得跟班）</button>
-  <button data-nav="chestpet">摆一只 Boss 融合匣</button>
+  <button data-nav="grantpet">授予融合匣（游戏内已下线）</button>
+  <button data-nav="chestpet">摆一只 Boss 融合匣（游戏内已下线）</button>
   <button data-nav="chestplain">摆一只普通金匣</button>
+  <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
   <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
   <button data-nav="game">开始一局（自动跑图）</button>
@@ -97,8 +98,8 @@
   <button data-nav="boss">召唤 Boss</button>
   <button data-nav="boss2">召唤二号 Boss（海火）</button>
   <button data-nav="boss3">召唤三号 Boss（膜王）</button>
-  <button data-nav="bosschest">Boss 专属匣（融合匣）</button>
-  <button data-nav="petstart">带融合匣开局</button>
+  <button data-nav="bosschest">Boss 专属匣（融合匣，游戏内已下线）</button>
+  <button data-nav="petstart">带融合匣开局（游戏内已下线）</button>
   <button data-nav="bomberstart">带炸弹跟班开局（一坨怪）</button>
   <button data-nav="upgrade">升级三选一</button>
   <button data-nav="gameover">结算页（新开一局）</button>
@@ -361,6 +362,7 @@ const STATS = [
   { key: 'bomber', label: '炸弹跟班', step: 1 },
   { key: 'pickupRange', label: '拾取范围', step: 30 },
   { key: 'burnBullets', label: '燃烧子弹', step: 1 },
+  { key: 'leech', label: '嗜血层数', step: 1 },
 ];
 
 // 占位符给真实出厂值，不抄常量表：一个 new Player() 就是游戏的初始 build
@@ -520,7 +522,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
       startRun();
       if (nav === 'game3') {
         setElapsed(180);
@@ -583,6 +585,27 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
           databus.chests.push(c);
         }
         spawnAround(8);
+      }
+      // 突变型刺头：一真一假并排 + 角色正前方一颗血块，一张图同时验收「血斑认不认得出」和「血块长什么样」
+      if (nav === 'mutant') {
+        setStand(true); // 站桩：自动跑图会把角色带走，三只实体全拍出画面外
+        const put = (dx, mutant) => {
+          databus.spawner.spawn(databus, 'basic'); // 走真实刷怪路径，只是掷完骰再手动改写标记
+          const e = databus.enemys[databus.enemys.length - 1];
+          e.x = databus.player.x + dx;
+          e.y = databus.player.y - 90;
+          e.mutant = mutant; // ★只能在 spawn 之后改：spawn 里的 init 会把 mutant 复位
+          e.speed = 0;       // 钉住：别让它们走过来打出接触伤害，残血的瞬间前方那颗血块会立刻被吸走
+          return e;
+        };
+        put(-34, false);
+        put(34, true);
+        const { default: BloodClot } = await import('./js/npc/bloodclot.js');
+        const { BLOOD_CLOT_HEAL } = await import('./js/npc/monster/config.js');
+        const clot = databus.pool.getItemByClass('bloodclot', BloodClot);
+        clot.init(databus.player.x, databus.player.y + 64, BLOOD_CLOT_HEAL);
+        databus.clots.push(clot);
+        say('左=普通刺头 右=突变型 · 前方那颗血块：满血时它不追人也不被吃掉，这就是设计口径');
       }
       if (nav === 'upgrade') { databus.isPaused = true; databus.upgradeScreen.show(databus); }
       if (nav === 'gameover') { databus.player.hp = 0; databus.isGameOver = true; }

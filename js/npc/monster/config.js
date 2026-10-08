@@ -21,21 +21,21 @@ export const MONSTER_TYPES = {
     name: '刺头', latin: 'Coronaviridae', group: '病毒 · 有包膜单链正链 RNA',
     intro: '直线追击，最常见的杂兵',
     fact: '表面那根刺突蛋白像钥匙插锁，拧开细胞门口的 ACE2 才能进去。普通感冒里约一到两成是它引起的，2003 年的 SARS 和 2019 年的新冠也只是这个家族里比较能打的两个。',
-    hp: 15, speed: 60,  radius: 14, color: '#16a085', xp: 2,  damage: 8, weight: 1,
+    hp: 20, speed: 60,  radius: 14, color: '#16a085', xp: 2,  damage: 8, weight: 1,
     sprite: 'images/entity/mob_basic.png',
   }, // 青色=最常见的杂兵识别色；真实冠状病毒电镜下是灰白颗粒，没有固定颜色
   fast:  {
     name: '窜子', latin: 'Influenzavirus A', group: '病毒 · 分节段 RNA · 甲型流感',
     intro: '血薄但跑得快，容易贴脸',
     fact: '基因组切成 8 个独立小段，两株同时感染一个细胞就能整段互换，叫「抗原转变」——流感疫苗每年得重打就是因为它。小段内部零星换几个碱基是「抗原漂移」，年年都在发生。',
-    hp: 8,  speed: 130, radius: 10, color: '#e67e22', xp: 3,  damage: 4, weight: 1,
+    hp: 12,  speed: 130, radius: 10, color: '#e67e22', xp: 3,  damage: 4, weight: 1,
     sprite: 'images/entity/mob_fast.png',
   }, // 橙色为识别色，强调「窜得快」；真实流感病毒同样是无色颗粒
   tank:  {
     name: '铁坨', latin: 'Staphylococcus aureus', group: '细菌 · 厚壁菌门 · 葡萄球菌属',
     intro: '血厚伤害高，移动缓慢',
     fact: '显微镜下一串串像葡萄，故名。青霉素 1943 年上市，1950 年就有过半金葡菌能分泌 β-内酰胺酶把抗生素剪断；MRSA 更进一步改了靶位，几乎刀枪不入——厚壳不是白长的。',
-    hp: 45, speed: 35,  radius: 22, color: '#8e44ad', xp: 5,  damage: 12, weight: 1,
+    hp: 50, speed: 35,  radius: 22, color: '#8e44ad', xp: 5,  damage: 12, weight: 1,
     sprite: 'images/entity/mob_tank.png',
   }, // 紫色为识别色，用来强调「硬壳不好打」；真实金葡菌培养后是金黄色菌落
   chest:  {
@@ -238,13 +238,19 @@ export const TANK_UNLOCK_TIME = 45;   // 坦克怪出现时间
 export const RANGED_UNLOCK_TIME = 60; // 远程怪出现时间
 
 // Boss 出场（秒）：存活期间普通刷怪照常走，只是间隔乘 BOSS_SPAWN_INTERVAL_MULT（密度减半）
-export const BOSS_FIRST_SPAWN_TIME = 120;  // 一号 Boss（毒王）出现时间
-export const BOSS_SECOND_SPAWN_TIME = 240; // 二号 Boss（海火）出现时间
-export const BOSS_THIRD_SPAWN_TIME = 360;  // 三号 Boss（膜王）出现时间：延续 120 秒一会的等间隔，玩家好记
+// ★这三条现在都是【最早出场时刻】而不是时刻表：真正的节奏由下面的 BOSS_RESPAWN_GAP（死亡后 120 秒）决定，
+//   战斗打得越久，后面几只被推得越晚。只有一号仍然精确等于自己的 time —— 开局没有「上一只」要等
+export const BOSS_FIRST_SPAWN_TIME = 120;  // 一号 Boss（毒王）：开局 120 秒整出场
+export const BOSS_SECOND_SPAWN_TIME = 240; // 二号 Boss（海火）：不早于 240 秒
+export const BOSS_THIRD_SPAWN_TIME = 360;  // 三号 Boss（膜王）：不早于 360 秒
 
 // 上一只 Boss 死亡后到下一只 Boss 出场的间隔（毫秒）。
 // 必须有：玩家提前秒杀 Boss 时 elapsed 已经越过下一个出场时间，没有冷却就会在尸体消失的同一帧贴脸刷出来
-export const BOSS_RESPAWN_GAP = 15000;
+// ★2026-10-05 15 秒 → 120 秒（用户：打完一只要缓两分钟）。改完这条就成了主约束，time 退化成下限：
+//   出场时刻 = max(上一只死亡时刻 + 本行, 表里的 time)，而死亡时刻 = 上一只出场时刻 + 战斗时长；
+//   相邻两条 time 正好也只差 120 秒，所以只要战斗不是瞬间结束，GAP 这一项就一定压过 time。
+//   换句话说：Boss 战打得越久，后面几只被推得越晚，节奏不再是一张固定时刻表
+export const BOSS_RESPAWN_GAP = 120000;
 
 // Boss 出场表：spawner 按顺序取，一条一个 Boss；加三号 Boss 只在这里追加一行
 export const BOSS_SCHEDULE = [
@@ -255,6 +261,14 @@ export const BOSS_SCHEDULE = [
 
 // Boss 专属宝箱：Boss 死亡时随机掉表里一种（main.js dropBossLoot），拾取效果走 chestGrant.js 注册表。
 // 本轮只有毒王有匣；海火/膜王留空表 = 只掉经验爆，以后接机制往表里加行即可，掉落与 HUD 代码不用动
+// ★整条下线中（2026-10-06 用户：强度目前不合理）。回退路径只有这一个常量：改回 true →
+//   黑红匣掉落 → chestGrant 授予 → HUD 黑红计数行 → 详情页 brief，一行代码都不用再补。
+//   下面这张表和 pet 那串数值是「待发状态」不是死代码，别删、也别顺手调平衡，重做强度时先量再改。
+//   ★为什么不用「把 boss1 清空成 []」来下线：CHEST_KIND_BY_ID 是由这张表建的，清空会让
+//   预览台的「授予融合匣 / 带融合匣开局」拿到 undefined 再 def.pet 抛 TypeError，
+//   以后想在验收台里试强度就没入口了 —— 所以门钉在掉落口，表继续当数据源
+export const BOSS_CHESTS_ENABLED = false;
+
 export const BOSS_CHESTS = {
   boss1: [
     {
@@ -291,9 +305,31 @@ for (const kinds of Object.values(BOSS_CHESTS)) {
   for (const k of kinds) CHEST_KIND_BY_ID[k.id] = k;
 }
 
-// 难度成长
-export const HP_SCALE_TIME = 90;      // 该秒数后所有怪物血量提升
-export const HP_SCALE_MULT = 1.5;     // 血量提升倍数
+// 难度成长：怪物血量随时间持续上涨
+// 旧制是「90 秒后一次性 ×1.5，之后永久冻结」——刺头 90 秒和 810 秒都是 22 血。
+// 而玩家单发伤害同一局里从 10 长到 61（6.1 倍），两边落差越拉越大，后期杂兵全员一发倒，
+// 「我变强了」这件事在数值上成立、在手感上不成立，因为打什么都不用两发。
+export const HP_SCALE_TIME = 90;    // 起算秒数。在此之前一支怪都不加血，和旧制完全一致
+export const HP_RAMP_SEC = 180;     // ★每过这么多秒，倍率再 +1。180 定得比「90 秒 ×1.5」这条旧锚点温和，
+                                    //   是为了在 HP_SCALE_TIME 处严格等于 1.5：90 ÷ 180 = 0.5 → 1 + 0.5 = 1.5，
+                                    //   开局到第一次涨血这段体验一字没改，动的只有 90 秒之后那条尾巴。
+                                    //   调小 = 后期更硬，但 90 秒那一跳仍然是 1.5，前期不受影响
+export const HP_SCALE_CAP = 5;      // ★倍率上限，约 720 秒触顶。必须有：玩家的攻击/暴击在 8 分钟后基本不再涨，
+                                    //   而经验曲线还在推等级，无上限的线性成长迟早让怪血涨过任何 build 的输出，
+                                    //   并且经验不随血量提升 → 打得越来越慢却拿同样多的经验，是死循环不是难度
+                                    //   触顶时铁坨 225 血 ÷ 每发 61 = 4 发，仍然不是秒杀
+
+/**
+ * 游戏时刻（秒）→ 血量倍率，只在普通刷怪入口生效（见 spawner.spawn）。
+ * 90 秒 1.5 / 180 秒 2.0 / 360 秒 3.0 / 540 秒 4.0 / 720 秒及以后 5.0。
+ * ★Boss 与膜王菌群都不走这条路：三只 Boss 的血量是按「杂兵几乎不吸火力」反解出来的，
+ *   菌群的血量是 colonyHpMult 与 filmPerEmbed 那套速率平衡的一部分，两者被这条曲线扫到都会把已调好的局改坏。
+ */
+export function hpScaleAt(elapsed) {
+  if (elapsed < HP_SCALE_TIME) return 1;
+  const m = 1 + elapsed / HP_RAMP_SEC;
+  return m > HP_SCALE_CAP ? HP_SCALE_CAP : m;
+}
 
 // 宝箱怪刷新：概率制，幸运值是这条概率的唯一起点
 // 旧制是固定 25 秒一只（CHEST_SPAWN_INTERVAL = 25000），那张「幸运值 +1」的卡在当时等于不存在
@@ -336,6 +372,14 @@ export function chestExpectedSeconds(luck) {
   const rolls = CHEST_PITY / CHEST_ROLL_INTERVAL;
   return (1 - Math.pow(1 - p, rolls)) / p * (CHEST_ROLL_INTERVAL / 1000);
 }
+
+// 突变型刺头：刷怪时按 MUTANT_CHANCE 掷一次骰，命中的那只刺头身上叠一块红斑，击杀额外掉一颗血块。
+// 数值（hp/伤害/移速/经验/权重）与普通刺头完全一致，只多一个掉落，所以它不是一个新 type、不进图鉴
+export const MUTANT_CHANCE = 0.01;  // 掷骰概率，唯一的调节旋钮。一局血块数 ≈ 本局刺头击杀数 × 本行：
+                                    //   1% 是「一局碰得上一两次」的手感，抬到 5% 就变成满地血包、
+                                    //   回血从惊喜退化成常规资源，玩家会开始故意留残血去捡
+export const BLOOD_CLOT_HEAL = 2;   // 单颗回血量（生命上限 40）。刻意小于一下接触伤害（刺头 8）：
+                                    //   捡一颗不够挨一下，回血永远是「跑着顺手」的收益，不是可以算的账
 
 // 图鉴展示顺序 + 出现条件文案（首页怪物图鉴读取这里）
 export const CODEX_ORDER = [

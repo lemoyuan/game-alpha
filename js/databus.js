@@ -33,6 +33,7 @@ export default class DataBus {
     this.lasers = [];   // 海火的旋转光束：原点是活的 Boss，不进实体池以外的任何列表
     this.zones = [];    // 地面危害池（海火赤潮 / 膜王黏液）：坐标一次写定，只等寿命走完；两种实体都按 update/draw/isDestroyed 走，不再加列表
     this.xpGems = [];
+    this.clots = [];    // 血块（突变型刺头掉落）：和经验宝石同一条生命周期，落地不动、磁吸追人、collected 后由 main.js 回收
     this.chests = [];
     this.companions = [];
     this.bombers = [];    // 炸弹跟班（金匣第 7 种加成）：与 companions 同一条规矩，场上封顶一只，层数加的是每轮枚数
@@ -62,6 +63,7 @@ export default class DataBus {
     for (const l of this.lasers) l.update(dt, this);
     for (const z of this.zones) z.update(dt, this);
     for (const g of this.xpGems) g.update(dt, this);
+    for (const cl of this.clots) cl.update(dt, this);
     for (const c of this.chests) c.update(dt, this);
     if (this.player) {
       // ★封顶一只：player.companions 存的是「一次齐射几发」，不是跟班只数。
@@ -112,6 +114,10 @@ export default class DataBus {
 
   removeXpGem(index) {
     this.xpGems.splice(index, 1);
+  }
+
+  removeClot(index) {
+    this.clots.splice(index, 1);
   }
 
   removeChest(index) {

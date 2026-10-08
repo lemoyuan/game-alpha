@@ -25,6 +25,7 @@ export const UI = {
   bossChestHalo: 'rgba(231,76,60,0.32)', // Boss 专属匣脉冲光晕（平涂 rgba，无渐变无 shadowBlur）
   toxic: '#C15BD8',        // 中毒状态：赤潮毒素的滴落描边与跳血提示。刻意避开海火自己的青 #22d3ee（毒圈要能在自家池子里被看见）、mint（那是增益）和 red（那是伤害/生命）
   burn: '#FF6B35',         // 燃烧子弹：怪物身上的火苗与跳血字。刻意避开 gold #F5B041（HUD 那一列宝箱道具全是这个金，13px 字号下橙金不分）、red #E74C3C（那是伤害/生命）、toxic #C15BD8（那是赤潮毒素，两套 DoT 必须一眼分开）
+  blood: '#E8355C',        // 突变型刺头身上的红斑 + 掉落血块。刻意避开 red #E74C3C（那是伤害飘字，而且喷子的识别色就是它，同色会让突变体读成第二只喷子）、bossChestBand #7B1E12（那是 Boss 专属匣的暗砖红）、toxic #C15BD8（那是赤潮毒素）；往洋红偏一点才既像「血」又不和自家红撞
 };
 
 export const R_CARD = 16;   // 卡片圆角
@@ -827,6 +828,39 @@ export function itemGlyph(ctx, key, cx, cy, s) {
         ctx.lineTo(h * 0.72, h * 0.44);
         ctx.lineTo(h * 0.72, h * 0.24);
         ctx.lineTo(h * 1.05, h * 0.24);
+        ctx.closePath();
+      });
+      break;
+    case 'leech':
+      // 嗜血：奶白粗十字（回血的通用符号）+ 右上空角一颗尖朝上的血滴。
+      // ★不能画成「水滴里嵌个加号」—— 上面 burnBullets 那颗火焰的外轮廓本来就是水滴，
+      //   两格在同一条金盘上会长成一家，所以这里让十字当主体、血滴只做配角。
+      // ★十字的臂必须是「条」不是「线」：细线在 26px 金盘上会整条消失（同 pickupRange 那条箭头线的教训）
+      body(() => {
+        const a = h * 0.26; // 臂半宽
+        const e = h * 0.74; // 臂端到中心
+        ctx.beginPath();
+        ctx.moveTo(-a, -e);
+        ctx.lineTo(a, -e);
+        ctx.lineTo(a, -a);
+        ctx.lineTo(e, -a);
+        ctx.lineTo(e, a);
+        ctx.lineTo(a, a);
+        ctx.lineTo(a, e);
+        ctx.lineTo(-a, e);
+        ctx.lineTo(-a, a);
+        ctx.lineTo(-e, a);
+        ctx.lineTo(-e, -a);
+        ctx.lineTo(-a, -a);
+        ctx.closePath();
+      });
+      // 血滴一颗路径成形（尖端 + 一段大弧圆底），不拆成「三角 + 圆」两块：
+      // 两块各自描边会在交界处割出一条穿模的墨线（同炸弹跟班那颗卫星斑的规矩）
+      body(() => {
+        ctx.beginPath();
+        ctx.moveTo(h * 0.6, -h * 0.9);
+        ctx.lineTo(h * 0.771, -h * 0.688);
+        ctx.arc(h * 0.6, -h * 0.55, h * 0.22, -0.68, Math.PI + 0.68);
         ctx.closePath();
       });
       break;

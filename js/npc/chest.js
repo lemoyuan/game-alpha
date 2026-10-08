@@ -6,7 +6,8 @@ import { CHEST_GRANTS } from './chestGrant';
 
 // key 必须与 player 的属性名一致（companions 为复数）。step = 每次开匣涨多少：计数型都是 1，
 // 拾取范围涨的是像素（+1 等于没加），所以加成值一律写在 consts.js 里由这里引用
-// ★每加一种就是把七种摊平：出货率从 16.7% 掉到 14.3%，这是「进普通金匣池」这条路要付的代价
+// ★每加一种就是把上一档摊平：第 8 种进来后每种出货率从 1/7 = 14.3% 掉到 1/8 = 12.5%，
+//   这是「进普通金匣池」这条路要付的代价（燃烧子弹、炸弹跟班各付过一次，这是第三次）
 // ★导出是为了 tools/headless_check.mjs 扫一条静默失效：下面 update 里那句裸 player[b.key] += step
 //   拼错 key 不会报错，只会加到一个 undefined 属性上——开箱有 toast、HUD 无格、什么也没发生
 export const BONUSES = [
@@ -17,6 +18,7 @@ export const BONUSES = [
   { key: 'bomber', step: 1, label: '炸弹跟班 +1' },
   { key: 'burnBullets', step: 1, label: '燃烧子弹 +1' },
   { key: 'pickupRange', step: XP_PICKUP_STEP, label: `经验拾取范围 +${XP_PICKUP_STEP}` },
+  { key: 'leech', step: 1, label: '嗜血 +1' },
 ];
 
 export default class Chest extends Sprite {
