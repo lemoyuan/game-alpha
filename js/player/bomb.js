@@ -31,6 +31,9 @@ export default class Bomb extends Sprite {
     this.zMax = 18;
     this.blastT = -1;    // < 0 = 还在飞；>= 0 = 已引爆，正在放爆风
     this.damage = 0;
+    // 着色：弹体火花、落点预警环、爆风外盘三处同源。默认 UI.burn = 玩家那颗一颗没动过；
+    // 子类 Vesicle（双子的囊泡）在 init 里换成 config.boss4.stainTint，一路带到毒渍
+    this.tint = UI.burn;
     this.isDestroyed = false;
   }
 
@@ -122,7 +125,7 @@ export default class Bomb extends Sprite {
     const p = this.t / this.flyMs;
     ctx.setLineDash([12, 9]);
     ctx.lineDashOffset = -((this.t / 26) % 21);
-    ctx.strokeStyle = UI.burn;
+    ctx.strokeStyle = this.tint;
     ctx.lineWidth = 2;
     ctx.globalAlpha = Math.min(1, 0.2 + 0.4 * p);
     ctx.beginPath();
@@ -131,7 +134,7 @@ export default class Bomb extends Sprite {
     ctx.setLineDash([]);
     // 圆心一点：一圈虚线只说出"是这块地"，点上这个才说出"砸这里"
     ctx.globalAlpha = 0.35 + 0.45 * p;
-    ctx.fillStyle = UI.burn;
+    ctx.fillStyle = this.tint;
     ctx.beginPath();
     ctx.arc(this.tx, this.ty, 3, 0, Math.PI * 2);
     ctx.fill();
@@ -164,7 +167,7 @@ export default class Bomb extends Sprite {
     ctx.moveTo(r * 0.35, -r * 0.8);
     ctx.quadraticCurveTo(r * 1.1, -r * 1.2, r * 0.9, -r * 1.9);
     ctx.stroke();
-    ctx.fillStyle = UI.burn;
+    ctx.fillStyle = this.tint;
     ctx.beginPath();
     ctx.arc(r * 0.9, -r * 1.9, r * 0.34, 0, Math.PI * 2);
     ctx.fill();
@@ -190,7 +193,7 @@ export default class Bomb extends Sprite {
     const a = 1 - k;
     // arc 传负半径会抛 IndexSizeError，缩到底也留个下限（同 zone.js 那条）
     const rr = Math.max(0.5, this.blastR * (0.34 + 0.66 * k));
-    ctx.fillStyle = UI.burn;
+    ctx.fillStyle = this.tint;
     ctx.globalAlpha = 0.3 * a;
     ctx.beginPath();
     ctx.arc(this.tx, this.ty, rr, 0, Math.PI * 2);

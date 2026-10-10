@@ -172,6 +172,24 @@ export default class Player extends Sprite {
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
   }
 
+  /**
+   * 爆发伤害（双子 Boss 的 LytA 自溶爆、囊泡落地的溶血素）：独立于 takeDamage 的第二条结算通道。
+   * ★为什么不并进 takeDamage：那 1500ms 受击无敌帧是「一次撞击」的限流器，而这两下必然撞在贴身接触
+   *   刚刚刷新的那帧上（自爆的前提就是已经贴脸）。照赤潮池当年的旧账（config.js 的 poolDamage 注释），
+   *   走 takeDamage 实测整场只结算到个位数，「铺一场赤潮封走位」在数据上等于没放。
+   * ★为什么不消耗护盾：护盾挡的是「打到我身上的那一下」，一片泼过来的溶血素不是一下，和 applyPoison 同一条理由
+   * ★为什么不复用 applyPoison：applyPoison 的「重叠只取最强一片、时长取最长」会让爆发那一下（现 18，
+   *   见 config.js 的 burstDamage）覆盖住赤潮那 2 点，玩家离开毒池后还在按 18 跳——那是把两笔账记成一笔
+   * ★★调用方口径：这条通道没有无敌帧那种限流器，伤害频率只由【放它的那个人】的冷却决定，
+   *   所以数值必须自己按「每秒上限」算再除以冷却，不能照 takeDamage 的量级给。
+   *   双子初值 18 时操作台实测站桩 3.27 秒死亡（40 血），就是这个数没按这条算出来的代价
+   */
+  applyBlast(amount) {
+    const dmg = Math.max(1, amount - this.defence);
+    this.hp -= dmg;
+    if (settings.vibrate) wx.vibrateShort({ type: 'heavy' });
+  }
+
   // 回血：唯一的一处血包入口（血块，见 npc/bloodclot.js），别让掉落方直接改 this.hp。
   // 返回实际回复量而不是布尔——差 1 血时捡到一颗回 2 的血块，只该算回复了 1
   heal(amount) {

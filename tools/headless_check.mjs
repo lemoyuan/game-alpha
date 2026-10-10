@@ -189,12 +189,28 @@ if (BOSSCHEST !== undefined) {
   else fs.writeFileSync(f, code.replace(re, `export const BOSS_CHESTS_ENABLED = ${BOSSCHEST === '1' ? 'true' : 'false'}`));
 }
 
+// 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
+// ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
+//   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
+// ★光钉 time 还不够：调度门是 bossRest > GAP && elapsed > next.time，而指针要先走完 boss1/2/3 三行，
+//   每行都得等上一只死了再 +120 秒。所以 TWINS=1 还要在循环里把 bossIndex 直接按到 boss4 那一行（见下）
+const TWINS = process.env.TWINS;
+if (TWINS !== undefined) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const re = /export const BOSS_FOURTH_SPAWN_TIME = \d+/;
+  // ★同样用 re.test() 判命中，不比替换前后的字符串
+  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_FOURTH_SPAWN_TIME，TWINS=${TWINS} 这一组等于没跑`);
+  else fs.writeFileSync(f, code.replace(re, `export const BOSS_FOURTH_SPAWN_TIME = ${TWINS === '1' ? 150 : 480}`));
+}
+
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
 const {
   BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
   MONSTER_TYPES, MUTANT_CHANCE, BLOOD_CLOT_HEAL,
+  BOSS_SCHEDULE, CODEX_ORDER, BOSS_FOURTH_SPAWN_TIME,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
 const {
@@ -210,6 +226,8 @@ const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).defau
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
+const Vesicle = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'vesicle.js')))).default;
+const BossTwins = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'bossTwins.js')))).default;
 const databus = new databusMod.default();
 
 const main = new mainMod.default();
@@ -244,6 +262,8 @@ let maxBurning = 0;     // 同屏燃烧怪数峰值
 let maxTexts = 0;       // 飘字并发峰值：用来判 DAMAGE_TEXT_MAX 这道闸够不够宽
 let totalTexts = 0;     // 飘字请求总量：suppressed 只有对着这个分母才读得出严不严
 let suppressedTexts = 0; // 被上限吃掉的飘字数
+let gameOverAt = -1;    // 第一次 game over 的游戏时刻（秒），-1 = 活到了最后：
+                        //   玩家一死 main.js 就不再驱动 databus.update，这一秒之后的每一条实场读数都是冻结帧上的旧值
 
 // 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
 // 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
@@ -285,6 +305,33 @@ let clotsDropped = 0;
 let clotPeak = 0;
 let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：主循环里那条回血线路跑通过的凭据
 
+// —— 双子（四号 Boss）——
+// 期望值一律从出场表读，不在断言里硬写 2：pair 是配置项，硬写等于把「改配置要同步改测试」这条规矩反着立
+const boss4Index = BOSS_SCHEDULE.findIndex((s) => s.type === 'boss4');
+const twinPair = boss4Index >= 0 ? (BOSS_SCHEDULE[boss4Index].pair || 1) : 1;
+// 成对出场按「spawnBoss 那一帧新增的那一组」登记，不靠逐帧扫 enemys：
+// 两只同 hp、同削血节奏时会死在同一帧，逐帧数只能读到「一直 2 → 一下 0」，出场事件一次都抓不到
+const twinsGroups = [];      // 每次出场的两只（对象引用）
+let twinsPeak = 0;           // 同屏 boss4 只数峰值：pair 语义的唯一读数
+let twinsEnraged = false;    // 是否真读到过 enraged = true 的活体
+let twinsRageCd = Infinity;  // 激怒态实际生效的最小 throwCd
+let twinsPlainCd = 0;        // 平时态实际生效的最大 throwCd
+let twinsThrowReady = 0;     // 抛弹冷却「到过点」的次数（一次到点只记一遍）
+let twinsThrowBlocked = 0;   // 其中被 throwMinDist 挡下的次数：站桩测台上玩家一直贴脸，这一支就会整场 0 枚
+const twinsThrowArmed = new WeakMap(); // 上一帧是否已在到点状态：只在跳变那一帧记一次，否则每帧 +1
+let twinsBursts = 0;         // 自溶爆起爆次数（包实例的 detonateSelf）
+const twinsAlive = new Set();   // 还在场的 boss4（按对象身份登记，召唤那一帧就记）
+let twinsDeaths = 0;         // 死掉并被回收的双子只数：激怒断言的门控 —— 要"真死过一只"才谈得上丧兄
+let vesiclesThrown = 0;      // 囊泡抛枚数（包 Vesicle.prototype.init，纯检前要快照）
+let vesicleBooms = 0;        // 囊泡落地引爆次数
+let maxVesicles = 0;         // 同屏在飞囊泡枚数峰值：两兄弟同时抛时应该能到 2 枚以上
+let vesicleHits = 0;         // 囊泡真砸到玩家的次数（applyBlast 参数 = vesicleDamage）
+let burstHits = 0;           // 自溶爆真砸到玩家的次数（参数 = burstDamage）
+let blastCalls = 0;
+let blastDmg = 0;            // 结算到的总伤害：> 0 才证明第 ★1 条通道不是白写的
+const stainZonesSeen = new Set(); // 按对象身份数毒渍：zone 走对象池，长度数不出「出现过几片」
+const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶必须逐值不变，否则新池污染了旧池
+
 // 只能在刷怪入口挂钩数出场：金匣被打死后会从 enemys 里消失，数组长度同时混合了「刷出」和「死亡」；
 // player.kills 又不区分怪种。委托式包装保留原行为，只加一次记录
 {
@@ -301,6 +348,23 @@ let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：
       if (!e.mutant) continue;
       mutantSeen.add(e);
       mutantAlive.add(e);
+    }
+    return r;
+  };
+}
+
+// 成对出场只能在召唤入口这一帧抓：两只同一帧进数组，逐帧扫 enemys 数不出「哪一帧算一次出场」。
+// 委托式包装保留原行为，只把这一帧新增的 boss 存成一组给下面的断言用
+{
+  const spawner = databus.spawner;
+  const origBoss = Object.getPrototypeOf(spawner).spawnBoss;
+  spawner.spawnBoss = (db, entry) => {
+    const before = db.enemys.length;
+    const r = origBoss.call(spawner, db, entry);
+    if (entry && entry.type === 'boss4') {
+      const group = db.enemys.slice(before).filter((e) => e.isBoss);
+      twinsGroups.push(group);
+      for (const b of group) twinsAlive.add(b);
     }
     return r;
   };
@@ -327,9 +391,26 @@ let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：
 {
   const proto = Bomb.prototype;
   const origInit = proto.init;
-  proto.init = function (...args) { bombsThrown++; return origInit.apply(this, args); };
+  // ★constructor 守卫：Vesicle extends Bomb 且它的 init 第一句就是 super.init，
+  //   不加这一条的话双子抛的每一枚都会计进「玩家炸弹跟班扔了几枚」，那条报表整列被敌我混合污染
+  proto.init = function (...args) {
+    if (this.constructor === Bomb) bombsThrown++;
+    return origInit.apply(this, args);
+  };
   const origDetonate = proto.detonate;
-  proto.detonate = function (db) { bombBooms++; return origDetonate.call(this, db); };
+  proto.detonate = function (db) {
+    if (this.constructor === Bomb) bombBooms++;
+    return origDetonate.call(this, db);
+  };
+}
+
+// 囊泡另包一对：口径和上面炸弹那两条完全平行（抛枚数 / 落地引爆数），只是分母换成双子的
+{
+  const proto = Vesicle.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) { vesiclesThrown++; return origInit.apply(this, args); };
+  const origDetonate = proto.detonate;
+  proto.detonate = function (db) { vesicleBooms++; return origDetonate.call(this, db); };
 }
 
 // 血块掉落数：挂在 init 上，和上面炸弹那条一样是委托式包装（保留原行为、只加一次记录）。
@@ -376,6 +457,33 @@ for (let i = 0; i < frames; i++) {
       return healed;
     };
   }
+  // 爆发伤害的实场计数：★包实例不包原型，理由和上面 onKill 那条一样 ——
+  //   下面双子那节的纯检会直接 Player.prototype.applyBlast.call(假玩家)，挂原型会把纯检算进现场账。
+  //   按传入的 amount 分家：囊泡 = vesicleDamage、自溶爆 = burstDamage，两个数在 config 里刻意不同，
+  //   所以砸中的是哪一下读得出来；测台每帧回满血，所以 hp 掉多少量不到，只能记这条通道的结算参数
+  if (p && !p.__blastHooked) {
+    p.__blastHooked = true;
+    const orig = p.applyBlast;
+    const cfg4 = MONSTER_TYPES.boss4;
+    p.applyBlast = function (amount) {
+      blastCalls++;
+      blastDmg += Math.max(1, amount - this.defence);
+      if (amount === cfg4.vesicleDamage) vesicleHits++;
+      else if (amount === cfg4.burstDamage) burstHits++;
+      return orig.call(this, amount);
+    };
+  }
+  // 双子实例钩子：detonateSelf 只在实例上包一次（同上，纯检直接驱动原型），起爆次数才算得准
+  for (const e of databus.enemys) {
+    if (e.type !== 'boss4' || e.__burstHooked) continue;
+    e.__burstHooked = true;
+    const orig = e.detonateSelf;
+    e.detonateSelf = function (db) { twinsBursts++; return orig.call(this, db); };
+  }
+  // TWINS=1 刻意【不垫血条】：双子这两下（自溶爆 18 + 囊泡 10）不吃无敌帧，本来就是这个 Boss 唯一
+  //   能在单帧里打穿初值 40 血的攻击，垫高了就等于把这条威胁从测试台上抹掉。
+  //   实测 2026-10-10 降到 18/10 之后 TWINS=1 跑满 900 秒 game over 没触发、deaths 2、激怒照判。
+  //   将来谁把这两个数调回去、玩家因此在双子倒下之前死掉，下面第二条空跑防护会直接报错，不要回到这里加 crutch
   // ★开了 LEECH 时把每帧的回满改成「留 4 点缺口」：血每次都是满的话 heal() 恒返回 0，
   //   现场读数会永远是 0，而那个 0 和「功能根本没接上」长得一模一样
   if (p) p.hp = LEECH > 0 ? p.maxHp - 4 : p.maxHp;
@@ -413,16 +521,32 @@ for (let i = 0; i < frames; i++) {
     if (i * DT < 5) p.companions = Math.max(p.companions, 1);
     else if (databus.companions.length) { p.companions = 0; databus.companions.length = 0; }
   }
+  // TWINS=1：把 Boss 指针按到 boss4 那一行。★只钉 config 里的 time 不够 —— 指针要先走完
+  //   boss1/2/3 三行，每行都得等上一只死了再攒满 120 秒冷却，短局里那条门根本过不去，
+  //   双子一次不出场而每一条双子断言都读成"通过"，那就是空跑
+  if (TWINS === '1' && boss4Index >= 0 && databus.spawner.bossIndex < boss4Index) {
+    databus.spawner.bossIndex = boss4Index;
+  }
   // bot 站桩没输出，打不动 3000 血的 Boss：出场表会永远停在第一条，
   // 二号 Boss 的激光/赤潮分支一行都跑不到。这里按秒削 Boss 的血，让三只 Boss 在 480 秒里都轮到
-  const boss = databus.enemys.find((e) => e.isBoss);
-  if (boss && i % 60 === 0) {
+  // ★★必须遍历场上每一只 Boss：find 只削得到第一只，双子那一档第二只会一直活着，
+  //   「丧兄激怒」这条边一次都触发不到，而血条、掉落、激怒断言全部照样绿着
+  // ★游戏结束了就别削了：这段在台子外层，而 main.js 在玩家死后整段跳过 databus.update，
+  //   于是每次 takeDamage 产生的那条飘字再也没有帧去让它过期 —— 削一万下就攒一万条永久飘字，
+  //   「飘字上限太紧」量的其实是冻住的世界，不是游戏
+  const bosses = databus.isGameOver ? [] : databus.enemys.filter((e) => e.isBoss);
+  for (let bi = 0; bi < bosses.length; bi++) {
+    if (i % 60 !== 0) break;
+    // 第二只起隔秒削：两只同 hp、同倍率会死在同一帧，而 bossTwins.update 第一行就是 isDead return，
+    //   同帧双亡等于激怒一次都没发生。只在同屏 ≥2 只时才错峰，单只那几只的削血节奏一个数都不动，
+    //   film breaks / boss drops 两条基线因此可比
+    if (bi > 0 && (i / 60) % 2 !== 0) continue;
     // ★必须走 takeDamage：膜王的减伤和膜的侵蚀全在这个方法里结算，
     //   直接写 boss.hp 会让整条膜路径一帧都不跑，"没破膜"就成了测试台的问题。
     //   削血量取 maxHp/15 而不是更快的击杀节奏：这个原始 DPS 必须高过膜王
     //   「菌群全部回嵌」时的膜量回补速度，否则一局只破一次膜，
     //   破膜 → 破防窗口 → 被补回去 这条循环的后半段一行都测不到
-    boss.takeDamage(Math.ceil(boss.maxHp / 15), false, databus);
+    bosses[bi].takeDamage(Math.ceil(bosses[bi].maxHp / 15), false, databus);
   }
   // Boss 专属匣只会掉在 Boss 尸体上，bot 未必走过去 → CHEST_GRANTS 和跟班的 update/draw 一行都跑不到。
   // 每帧把匣挪到玩家脚下让它真被拾取一次：跟班约 6 DPS，相对测试台每秒削掉的 maxHp/15 可以忽略，
@@ -437,11 +561,13 @@ for (let i = 0; i < frames; i++) {
       }
     }
   }
-  const dyingBoss = boss && boss.isDead ? boss : null; // 本帧 checkCollisions 会给它结算掉落
-  if (boss && boss.filmMax !== undefined) {
-    if (boss.film > filmPeak) filmPeak = boss.film;
-    if (prevFilm > 0 && boss.film <= 0) filmBreaks++;
-    prevFilm = boss.film;
+  const dyingBosses = bosses.filter((b) => b.isDead); // 本帧 checkCollisions 会给它们结算掉落
+  // 膜量读数按「哪只带 filmMax」找，不按「场上第一只 Boss」：同屏两只时 find 盯错的会是一双眼睛
+  const filmBoss = bosses.find((b) => b.filmMax !== undefined);
+  if (filmBoss) {
+    if (filmBoss.film > filmPeak) filmPeak = filmBoss.film;
+    if (prevFilm > 0 && filmBoss.film <= 0) filmBreaks++;
+    prevFilm = filmBoss.film;
   } else {
     prevFilm = 0;
   }
@@ -455,6 +581,37 @@ for (let i = 0; i < frames; i++) {
   let burning = 0;
   for (const e of databus.enemys) if (e.burnLeft > 0) burning++;
   if (burning > maxBurning) maxBurning = burning;
+  // 双子的逐帧读数：在场只数、激怒有没有真落在一只活体上、激怒前后的 throwCd 各是多少。
+  // throwCd 记的是【实际生效值】而不是配置值：断言要比的是"兄弟死了以后它真的抛得更勤"
+  let twins = 0;
+  for (const e of databus.enemys) {
+    if (e.type !== 'boss4') continue;
+    twins++;
+    if (e.enraged) {
+      twinsEnraged = true;
+      if (e.throwCd < twinsRageCd) twinsRageCd = e.throwCd;
+    } else if (e.throwCd > twinsPlainCd) twinsPlainCd = e.throwCd;
+    // 读条期间 bossTwins.update 提前 return、throwT 停表，所以 bursting 的那些帧不算「到点」
+    const armed = !e.bursting && e.throwT >= e.throwCd;
+    if (armed && twinsThrowArmed.get(e) !== true) {
+      twinsThrowReady++;
+      if (p && Math.hypot(p.x - e.x, p.y - e.y) < e.throwMinDist) twinsThrowBlocked++;
+      twinsThrowArmed.set(e, true);
+    } else if (!armed) {
+      twinsThrowArmed.set(e, false);
+    }
+  }
+  if (twins > twinsPeak) twinsPeak = twins;
+  // 地面池按 tint 分桶：★新增一种毒渍必然把 maxZones 顶上去，只看总数就分不清是"多了一片渍"
+  //   还是"赤潮铺得比以前凶"。赤潮那一桶逐值不变才是回归的凭据
+  if (databus.zones.length) {
+    const tintCount = new Map();
+    for (const z of databus.zones) {
+      tintCount.set(z.tint, (tintCount.get(z.tint) || 0) + 1);
+      if (z.tint === MONSTER_TYPES.boss4.stainTint) stainZonesSeen.add(z);
+    }
+    for (const [t, n] of tintCount) if (n > (zoneTintPeak.get(t) || 0)) zoneTintPeak.set(t, n);
+  }
   if (databus.damageTexts.length > maxTexts) maxTexts = databus.damageTexts.length;
   if (p && p.slowLeft > 0) slowFrames++;
   // 中毒：本测试台每帧把 hp 回满，所以这里量不到掉血量，只证明状态挂上、跳血在跑
@@ -469,6 +626,12 @@ for (let i = 0; i < frames; i++) {
     databus.isPaused = false;
   }
   step();
+  // 玩家一死，main.js 就整段跳过 databus.update：怪停、飘字永不过期、Boss 也不再被回收成死亡事件。
+  // ★这条要记账并印出来：外层那段「每秒削 Boss 血」是台子自己跑的，它不知道世界已经冻住，
+  //   会接着往一条不再过期的 damageTexts 里塞字，把「飘字上限太紧」这条真断言顶红；
+  //   而 twins 那行的 deaths 0 / enraged no 也会被读成「双子什么都没干」，
+  //   实际是「玩家 3 秒就死了，之后的账没人跑」。有这一行才分得开回归和空跑
+  if (gameOverAt < 0 && databus.isGameOver) gameOverAt = i * DT;
   // 突变体从 enemys 里消失 = 本帧它的死亡结算跑完了，血块要是有掉也就在这一帧掉
   for (const m of mutantAlive) {
     if (databus.enemys.includes(m)) continue;
@@ -476,8 +639,16 @@ for (let i = 0; i < frames; i++) {
     if (!databus.isGameOver) mutantDeaths++;
   }
   if (databus.clots.length > clotPeak) clotPeak = databus.clots.length;
-  // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上
-  if (dyingBoss && !databus.enemys.includes(dyingBoss)) {
+  // 双子从 enemys 里消失 = 本帧它的死亡结算跑完了。激怒那条边要有「真死过一只」才判得下去
+  for (const t of twinsAlive) {
+    if (databus.enemys.includes(t)) continue;
+    twinsAlive.delete(t);
+    if (!databus.isGameOver) twinsDeaths++;
+  }
+  // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上。
+  // ★逐只过：双子同屏两只，只处理一只是「掉了一次的账」而不是「掉了几次的账」
+  for (const dyingBoss of dyingBosses) {
+    if (databus.enemys.includes(dyingBoss)) continue;
     bossDrops++;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
@@ -506,16 +677,25 @@ for (let i = 0; i < frames; i++) {
       break;
     }
   }
+  // 囊泡走的是同一套抛物线，但它是另一条列表：★这条漏了检查的话，双子那一路的 NaN 只会表现成"弹凭空消失"
+  for (const v of databus.vesicles) {
+    if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(v.z)) {
+      errors.push('囊泡坐标或高度出现非有限值');
+      break;
+    }
+  }
+  if (databus.vesicles.length > maxVesicles) maxVesicles = databus.vesicles.length;
   if (databus.lasers.length > maxLasers) maxLasers = databus.lasers.length;
   if (databus.zones.length > maxZones) maxZones = databus.zones.length;
   if (p && p.img) playerSpriteSrc = p.img.__src;
   if (fillStyles.has('rgba(255,238,170,0.95)')) sawFlash = true;
   if (i % 1800 === 0) {
     const b = databus.enemys.find((e) => e.isBoss);
-    console.log(`t=${(i * DT).toFixed(0)}s lvl=${p && p.level} enemies=${databus.enemys.length} kills=${p && p.kills}`
+    console.log(`t=${(i * DT).toFixed(0)}s lvl=${p && p.level} hp=${p && Math.round(p.hp)}/${p && p.maxHp} enemies=${databus.enemys.length} kills=${p && p.kills}`
       + ` boss=${b ? b.type : '-'}${b && b.state ? ':' + b.state : ''}`
       + ` film=${b && b.film !== undefined ? Math.round(b.film) : '-'}`
-      + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`);
+      + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`
+      + ` twins=${twins}${twins && twinsEnraged ? '(enraged)' : ''} vesicles=${databus.vesicles.length}`);
   }
 }
 
@@ -910,6 +1090,179 @@ const clampMs = (v) => Math.min(BOMB_FLY_MAX, Math.max(BOMB_FLY_MIN, v));
   }
 }
 
+// —— 双子（四号 Boss）：先快照实场计数，再逐条断言，最后补纯检 ——
+// ★快照必须排在纯检之前：下面的纯检会直接 new Vesicle 调 init/detonate，还会 Player.prototype.applyBlast
+//   .call(假玩家)，不先取值的话「抛了几枚、炸了几次、砸中玩家几下」会把纯检一起算进现场账
+const fieldVesicles = vesiclesThrown;
+const fieldVesicleBooms = vesicleBooms;
+const fieldBursts = twinsBursts;
+const fieldBlastCalls = blastCalls;
+const fieldBlastDmg = blastDmg;
+const fieldStains = stainZonesSeen.size;
+const twinsCfg = MONSTER_TYPES.boss4;
+
+if (boss4Index < 0) {
+  errors.push('BOSS_SCHEDULE 里没有 boss4 那一行：双子写好了类却永远不会出场，整节双子断言无从判起');
+}
+// 空跑防护：钉了 TWINS=1 却没抓到出场分组，这一组就是白跑的
+if (TWINS === '1' && boss4Index >= 0 && twinsGroups.length === 0) {
+  errors.push(`TWINS=1 跑了 ${seconds}s 却一组双子都没召唤出来：出场时刻压到 ${BOSS_FOURTH_SPAWN_TIME}s、指针按到第 ${boss4Index + 1} 行仍没走通调度门`);
+}
+// 空跑防护第二条：TWINS=1 的整条价值在「双子有几十秒可跑、至少死掉一只」，
+//   而激怒 / rage 贴图 / 掉落这三条断言都以 deaths>=1 为门控 —— 玩家先死了就是门控替代码兜了底，
+//   报表一片绿而三条断言一行都没判，这种跑次必须自己喊出来
+if (TWINS === '1' && gameOverAt >= 0 && twinsDeaths === 0) {
+  errors.push(`TWINS=1 空跑：玩家 ${gameOverAt.toFixed(1)}s 就死了（双子 ${BOSS_FOURTH_SPAWN_TIME}s 出场），一只双子都没倒下过，激怒 / rage 贴图 / 掉落三条断言这次一条都没判`);
+}
+for (let g = 0; g < twinsGroups.length; g++) {
+  const group = twinsGroups[g];
+  if (group.length !== twinPair) {
+    errors.push(`第 ${g + 1} 次双子出场只到 ${group.length} 只，出场表 pair=${twinPair}：spawnBoss 那条 count 循环没走完，或者两只没进同一帧`);
+    continue;
+  }
+  // ★漏登记 BOSS_CLASS 时 spawner 的 `|| Boss` 会兜底成毒王：血条、掉落、图鉴全绿，跑的却是冲锋 + 环形弹幕
+  for (const b of group) {
+    if (b.constructor.name !== 'BossTwins') {
+      errors.push(`boss4 出场实例的类型是 ${b.constructor.name}：BOSS_CLASS 缺 boss4 那一行，被 || Boss 兜底成了毒王`);
+      break;
+    }
+  }
+  const mirrored = group.filter((b) => b.mirror).length;
+  const marked = group.filter((b) => b.twinIndex === 1).length;
+  if (mirrored !== 1) errors.push(`一次出场的 ${group.length} 只里有 ${mirrored} 只镜像：两只会画成同一个朝向，读成「同一只的残影」`);
+  if (marked !== 1) errors.push(`一次出场的 ${group.length} 只里 twinIndex===1 的有 ${marked} 只：弟弟识别贴只该钉在一只身上`);
+}
+if (twinsGroups.length && twinsPeak !== twinPair) {
+  errors.push(`同屏双子只数峰值 ${twinsPeak}，出场表 pair=${twinPair}：成对出场没有同时到场`);
+}
+// 技能通路：一只都已经死了，说明这一对至少活了 15 秒（测台削血的节奏），三条通路都该跑过
+if (twinsDeaths >= 1) {
+  // ★「这一支可达」和「这一支发生」在站桩测台上不是一回事：throwMinDist=120，而双子贴脸后就停在
+  //   四十几像素处，抛弹冷却每 3.2 秒到一次点、每次都被这道门挡下 → 整场 0 枚是【正确行为】，
+  //   玩家一跑开就会抛（TWINS=1 那一跑实测抛出 2 枚）。所以硬断言钉的是 throwT 这条累加链有没有走通，
+  //   而不是抛出几枚；真要钉抛出与落地，交给 TWINS=1 那一跑 + 本节纯检 3 的几何往返
+  if (twinsThrowReady === 0) {
+    errors.push(`${twinsDeaths} 只双子活过一整轮，抛弹冷却却连一次都没到过点：throwT 的累加、throwCd 或 update 里那条择机没跑通`);
+  }
+  if (fieldVesicles === 0 && twinsThrowReady > twinsThrowBlocked) {
+    errors.push(`有 ${twinsThrowReady - twinsThrowBlocked} 次抛弹冷却到点时玩家已经拉开到 throwMinDist 外，却一枚囊泡都没抛出：throwVesicle 或 databus.vesicles 那条列表没接上`);
+  }
+  if (fieldVesicleBooms > fieldVesicles) errors.push(`囊泡引爆 ${fieldVesicleBooms} 次 > 抛出 ${fieldVesicles} 枚：有枚结算了两遍`);
+  if (fieldVesicles > 0 && fieldVesicleBooms === 0) errors.push(`抛出 ${fieldVesicles} 枚囊泡却一枚都没落地引爆：Vesicle.update 的滞空计时或 databus.vesicles 那条驱动没跑`);
+  if (fieldBursts === 0) errors.push('双子活过一整轮却一次自溶爆都没起爆：burstCd 或「dist <= burstRadius×1.15」那道门没生效');
+  if (fieldVesicles > 0 && fieldStains === 0) errors.push('囊泡落了地却一片毒渍都没留下：Vesicle.detonate 里那条 zone 生成没跑，「砸出一个坑」的口径塌了');
+  // ★这一条是 applyBlast 那条新通道的存在理由：整场结算不到一下，就说明第 ★1 改造是死代码
+  if (fieldBlastCalls === 0) errors.push(`双子上场过却一次都没结算到爆发伤害（抛囊泡 ${fieldVesicles} 枚、自爆 ${fieldBursts} 次）：player.applyBlast 那条通道没接上`);
+  if (fieldBlastCalls > 0 && !(fieldBlastDmg > 0)) errors.push(`applyBlast 结算了 ${fieldBlastCalls} 次却累计 0 点伤害：减防把爆发吃干了，通道等于没开`);
+}
+// 丧兄激怒：要「真死过一只」才判得下去，光看秒数会误伤短局
+if (twinsDeaths >= 1) {
+  if (!twinsEnraged) {
+    errors.push(`${twinsDeaths} 只双子已经死了，活着的那只却始终没进激怒态：spawner 的 twin 活引用没接上，或 update 里那句 isDead return 把自己该做的轮询也挡掉了`);
+  } else {
+    if (!(twinsRageCd < twinsPlainCd)) {
+      errors.push(`激怒态实际生效的 throwCd=${twinsRageCd.toFixed(0)} 没比平时态 ${twinsPlainCd.toFixed(0)} 小：倍率写成了乘法，越打越慢`);
+    }
+    if (Math.abs(twinsRageCd - twinsCfg.throwCd / twinsCfg.enrageRate) > 1) {
+      errors.push(`激怒态 throwCd 实测 ${twinsRageCd.toFixed(1)}，按配置 throwCd÷enrageRate 应为 ${(twinsCfg.throwCd / twinsCfg.enrageRate).toFixed(1)}`);
+    }
+  }
+}
+// 两张贴图都得真被画过：只写过路径没画出来，等于验收截图在看一个兜底形状
+if (twinsGroups.length && !drawnSrc.has(twinsCfg.sprite)) {
+  errors.push(`双子出场过却没画过平时态贴图 ${twinsCfg.sprite}：走的是 Enemy 的兜底形状`);
+}
+if (twinsEnraged && twinsCfg.spriteRage && !drawnSrc.has(twinsCfg.spriteRage)) {
+  errors.push(`激怒态生效了却没画过 rage 贴图 ${twinsCfg.spriteRage}：enrage() 里那句换图没落地，玩家读不到「它变了」`);
+}
+// 三套地面池靠颜色分工，撞色等于玩家分不清「踩下去会怎样」
+{
+  const others = [MONSTER_TYPES.boss2 && MONSTER_TYPES.boss2.color, MONSTER_TYPES.boss3 && MONSTER_TYPES.boss3.slimeColor, twinsCfg.color].filter(Boolean);
+  if (others.includes(twinsCfg.stainTint)) {
+    errors.push(`毒渍色 ${twinsCfg.stainTint} 和已有地面/本体识别色撞了（对照 ${others.join(' / ')}）：三套池子叠在一张图上时读不出区别`);
+  }
+}
+// 纯检 1：对象池复位 + 激怒倍率的算式本身（现场量不出「复位」这条，池化接上之后才会暴露）
+{
+  const t = new BossTwins('boss4', twinsCfg);
+  t.init(CENTER.x, CENTER.y);
+  if (t.throwCd !== twinsCfg.throwCd || t.burstCd !== twinsCfg.burstCd || t.enraged || t.twin || t.mirror || t.twinIndex !== 0) {
+    errors.push(`BossTwins.init 的复位不完整：throwCd=${t.throwCd} burstCd=${t.burstCd} enraged=${t.enraged} twin=${!!t.twin} mirror=${t.mirror} twinIndex=${t.twinIndex}`);
+  }
+  const before = { throwCd: t.throwCd, burstCd: t.burstCd, speed: t.speed };
+  t.mirror = true;
+  t.twin = { isDead: true };
+  t.enrage();
+  if (!t.enraged) errors.push('enrage() 没把 enraged 翻起来：兄弟死了以后它还是原来那只');
+  if (t.twin) errors.push('enrage() 后 twin 引用没断开：接上对象池后兄弟会被复用成一条 isDead=false 的新怪，等于「复活即再激怒一次」');
+  if (Math.abs(t.throwCd - before.throwCd / twinsCfg.enrageRate) > 1e-6) {
+    errors.push(`enrage() 后 throwCd=${t.throwCd}，应为 ${before.throwCd / twinsCfg.enrageRate}：倍率没除在冷却上`);
+  }
+  if (Math.abs(t.burstCd - before.burstCd / twinsCfg.enrageRate) > 1e-6) {
+    errors.push(`enrage() 后 burstCd=${t.burstCd}，应为 ${before.burstCd / twinsCfg.enrageRate}：只加速了抛弹，自爆还是原样`);
+  }
+  if (t.throwT > before.throwCd || t.burstT > before.burstCd) {
+    errors.push(`激怒那一刻 throwT=${t.throwT.toFixed(0)} burstT=${t.burstT.toFixed(0)} 已越过原冷却：丧兄瞬间会变成「齐射 + 自爆」双响，一点喘气的空间都不留`);
+  }
+  if (twinsCfg.spriteRage && t.img && t.img.__src !== twinsCfg.spriteRage) {
+    errors.push(`激怒后贴图是 ${t.img.__src}，应为 ${twinsCfg.spriteRage}`);
+  }
+  t.init(CENTER.x, CENTER.y);
+  if (t.enraged || t.twin || t.mirror || t.throwCd !== before.throwCd || t.burstCd !== before.burstCd
+    || Math.abs(t.speed - before.speed) > 1e-6 || (twinsCfg.spriteRage && t.img && t.img.__src !== twinsCfg.sprite)) {
+    errors.push('对象池复位不全：激怒过的那只复用出来会自带激怒态（贴图是红的、冷却是除过的、移速是乘过的）');
+  }
+}
+// 纯检 2：applyBlast 这条通道的两条口径 —— 不吃无敌帧、不消耗护盾
+{
+  const player = Object.create(Player.prototype);
+  player.x = 0; player.y = 0; player.radius = 16; player.defence = 0;
+  player.hp = 100; player.maxHp = 100; player.shield = 3; player.shieldBroken = 0;
+  player.invincibleUntil = now + 100000; // 正挂在受击无敌帧里（自爆的前提就是已经贴脸）
+  Player.prototype.applyBlast.call(player, twinsCfg.burstDamage);
+  if (player.hp !== 100 - twinsCfg.burstDamage) {
+    errors.push(`无敌帧内 applyBlast 后 hp=${player.hp}（应 ${100 - twinsCfg.burstDamage}）：这条通道又被无敌帧吞掉了，就是赤潮池那笔旧账`);
+  }
+  if (player.shield !== 3 || player.shieldBroken !== 0) {
+    errors.push(`applyBlast 吃掉了护盾（shield=${player.shield} broken=${player.shieldBroken}）：口径是护盾只挡「打到我身上的那一下」`);
+  }
+}
+// 纯检 3：囊泡的命中几何、毒渍逐字段参数、以及「打的是玩家不是怪」
+function vesicleRun(offset) {
+  const hits = [];
+  const player = { x: CENTER.x, y: CENTER.y, radius: 16, defence: 0, applyBlast(a) { hits.push(a); } };
+  const enemy = dummyEnemy(CENTER.x, CENTER.y);
+  const db = {
+    player, enemys: [enemy], zones: [], bombs: [],
+    pool: { getItemByClass: (name, Class) => new Class() },
+  };
+  const v = new Vesicle();
+  v.init(CENTER.x - 120, CENTER.y, CENTER.x + offset, CENTER.y, twinsCfg.vesicleDamage,
+    twinsCfg.stainTint, twinsCfg.vesicleBlastR, {
+      radius: twinsCfg.stainRadius, life: twinsCfg.stainLife, damage: twinsCfg.stainDamage, hold: twinsCfg.stainHold,
+    });
+  v.detonate(db);
+  return { hits, zone: db.zones[0], enemy };
+}
+{
+  const on = vesicleRun(0);
+  if (on.hits.length !== 1 || on.hits[0] !== twinsCfg.vesicleDamage) {
+    errors.push(`正砸玩家脚下结算了 ${JSON.stringify(on.hits)}（应恰好一记 ${twinsCfg.vesicleDamage}）`);
+  }
+  if (on.enemy.hits !== 0) errors.push('囊泡落地扫了 databus.enemys：detonate 整段覆写却把父类那一段也跑了，方向正好相反');
+  const edge = vesicleRun(twinsCfg.vesicleBlastR + 16 - 1);
+  const out = vesicleRun(twinsCfg.vesicleBlastR + 16 + 1);
+  if (edge.hits.length !== 1) errors.push('贴着爆风边缘内侧 1px 的玩家没被砸到：命中判定漏在「爆风半径 + 玩家半径」那一步');
+  if (out.hits.length !== 0) errors.push('爆风外 1px 的玩家被砸到了：判定没收在 blastR + radius 上');
+  const z = on.zone;
+  if (!z) {
+    errors.push('囊泡落地没有 zone 生成：那片毒渍整条不存在');
+  } else if (z.tint !== twinsCfg.stainTint || z.r0 !== twinsCfg.stainRadius || z.maxLife !== twinsCfg.stainLife
+    || z.damage !== twinsCfg.stainDamage || z.hold !== twinsCfg.stainHold || z.warnTime !== 0) {
+    errors.push(`毒渍参数不对：tint=${z.tint} r=${z.r0} life=${z.maxLife} dmg=${z.damage} hold=${z.hold} warn=${z.warnTime}`);
+  }
+}
+
 // 暂停详情页的文案探针：把八种加成挂满，逼八行 describe 各拼一次并真画出来。
 // ★这类 bug 只住在字符串里：bombDamage 收攻击力却传了整个 player，游戏照跑、数值检查全绿，
 //   只有详情页那一行写成「单枚 NaN 点」。不扫文本就永远发现不了
@@ -968,12 +1321,42 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     // 绕过 takeDamage 会跳过减伤、膜、飘字和掉落，Boss 战会被这行代码悄悄改写
     if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 e.hp：伤害必须走 Enemy.takeDamage`);
   }
+  // —— 新增的两个文件同一条规矩 ——
+  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'vesicle.js')]) {
+    const s = src(rel);
+    // ★只拦「把墙上时钟存成计时基准」这种写法：外观呼吸（Math.sin(Date.now()/260)）不算违规，
+    //   enemy.js、chest.js 里早有同类用法；但 T = Date.now() 会在三选一面板期间偷跑
+    if (/=\s*Date\.now\(\)/.test(s)) errors.push(`${rel} 把墙上时钟存成了计时基准：暂停期间 main.js 跳过 update，冷却会自己走完`);
+    // 绕过 takeDamage / applyBlast 直接改血会跳过减伤、膜、飘字和掉落
+    if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 .hp：伤害必须走 Enemy.takeDamage 或 Player.applyBlast`);
+  }
+  {
+    const s = src(path.join('npc', 'monster', 'bossTwins.js'));
+    const at = s.indexOf('draw(ctx) {');
+    if (at < 0) errors.push('bossTwins.js 里找不到 draw(ctx)：绘制那一段根本没实现');
+    else if (s.slice(at).includes('Math.random(')) {
+      errors.push('bossTwins 的绘制里出现 Math.random(：每帧换一个相位，截图不可复现，相位必须在构造期定一次');
+    }
+  }
+  // —— 出场表三处对齐：数值表、图鉴、行为类 ——
+  // ★漏登记不会崩，只会「血条写着双子的名字、跑的却是毒王的冲锋」或者「打过了图鉴却解锁不了」
+  //   行为类那一处 spawner 没有导出 BOSS_CLASS，所以由上面双子分组的 constructor.name 兜住
+  for (const entry of BOSS_SCHEDULE) {
+    if (!MONSTER_TYPES[entry.type]) {
+      errors.push(`BOSS_SCHEDULE 的 '${entry.type}' 在 MONSTER_TYPES 里没有数据块：spawnBoss 会拿 undefined 去 new`);
+    }
+    if (!CODEX_ORDER.some((c) => c.type === entry.type)) {
+      errors.push(`BOSS_SCHEDULE 的 '${entry.type}' 不在图鉴 CODEX_ORDER 里：这只打过也永远解锁不了`);
+    }
+  }
 }
 
 console.log('---');
 console.log('drawn textures:', [...drawnSrc].sort().join(', ') || '(none)');
 console.log('player texture:', playerSpriteSrc, '| rotate calls:', rotateCalls, '| muzzle flash:', sawFlash);
 console.log('peak lasers:', maxLasers, '| peak zones:', maxZones);
+console.log('peak zones by tint:', [...zoneTintPeak.entries()].sort().map(([t, n]) => `${t}=${n}`).join(' ') || '(none)',
+  `| 毒渍 tint=${MONSTER_TYPES.boss4.stainTint} 出现 ${fieldStains} 片`);
 console.log('peak film:', filmPeak, '| film breaks:', filmBreaks, '| colonies:', colonySeen.size, 'peak', maxColonies);
 console.log('slowed frames:', slowFrames, 'of', frames);
 console.log('poisoned frames:', poisonFrames, '| poison ticks:', poisonTicks);
@@ -988,6 +1371,19 @@ console.log('burn (stacks=' + BURN + '):', burnTicks, 'ticks /', burnDmg, 'dmg |
   '| pure cadence: 1层=' + burn1.ticks + '跳·' + burn1.dmg + '血, 3层=' + burn3.dmg + '血, 中途补枪=' + burnRefresh.ticks + '跳·单跳最大' + burnRefresh.maxTick);
 console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms, 'boomed | peak in flight:', maxBombs,
   '| entity peak: companion', companionPeak, 'bomber', maxBombers);
+// ★这一行要排在 twins / mutant / boss drops 之前读到：玩家中途死了就等于此后 main.js 不再驱动世界，
+//   那几行里的 0（deaths 0 / enraged no / stains 0）全是冻结帧上的旧值，不是"这条链没接上"
+console.log(gameOverAt < 0
+  ? 'game over: none —— 世界整局都在跑，下面所有实场读数全程有效'
+  : `game over: t=${gameOverAt.toFixed(1)}s —— 此后 databus.update 停摆，实场读数全部停在这一帧，任何"0"都要先按这条判`);
+// ★报表行必须读出 TWINS 钉值和这一局 boss4 的实际出场时刻：否则未来会话看到一行 0 分不清是回归还是根本没出场
+console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${BOSS_FOURTH_SPAWN_TIME}s):`,
+  `${twinsGroups.length} groups / peak ${twinsPeak} / deaths ${twinsDeaths}`,
+  `| thrown ${fieldVesicles} / boomed ${fieldVesicleBooms} / hit ${vesicleHits} / in-flight peak ${maxVesicles}`,
+  `| 抛弹 cd 到点 ${twinsThrowReady} 次（被 throwMinDist 挡 ${twinsThrowBlocked}）`,
+  `| bursts ${fieldBursts} / hit ${burstHits} | stains ${fieldStains}`,
+  `| enraged ${twinsEnraged ? 'yes' : 'no'} (throwCd 平时 ${twinsPlainCd || '-'} → 激怒 ${twinsRageCd === Infinity ? '-' : twinsRageCd.toFixed(0)})`,
+  `| blast ${fieldBlastCalls} 次 共 ${fieldBlastDmg} 点`);
 console.log('mutant (chance=' + MUTANT_CHANCE + '):', fieldMutants, 'spawned /', mutantDeaths, 'killed /', fieldDrops,
   'clots, field peak', fieldPeak, '| eaten in main loop:', clotEats,
   `| pure: 满血${clotFull.clot.collected ? '被吞' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);

@@ -229,9 +229,12 @@ export default class HomeScreen {
         return;
       }
       const role = config.boss ? 'Boss' : entry.appear;
-      label(ctx, `${config.name}（${role}）`, tx, y + 22, { size: FS.body, bold: true, color: UI.textOnLight });
-      label(ctx, config.group, tx, y + 38, { size: FS.tiny, color: UI.blue });
-      label(ctx, `血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + 54, {
+      // ★三行基线按 rh 推而不是写死 22/38/54：rh = min(66, ...) 在小屏上会被行数压下去
+      //   （CODEX_ORDER 到第 9 条时 667 高的机型只剩 55），写死的话第三行正好顶在贴纸底边上。
+      //   rh-44 / rh-28 / rh-12 在 rh=66 时逐像素等于原来那三个数，只是给矮行留了退路
+      label(ctx, `${config.name}（${role}）`, tx, y + rh - 44, { size: FS.body, bold: true, color: UI.textOnLight });
+      label(ctx, config.group, tx, y + rh - 28, { size: FS.tiny, color: UI.blue });
+      label(ctx, `血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + rh - 12, {
         size: FS.tiny, color: UI.muted,
       });
       icon(ctx, 'arrowRight', x + w - 20, cy, 14, { color: UI.textOnLight });

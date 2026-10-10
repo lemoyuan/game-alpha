@@ -100,22 +100,33 @@ export default class Hud {
     icon(ctx, 'pause', pb.x + pb.w / 2, pb.y + pb.h / 2, 14, { color: UI.ink });
 
     // Boss 顶部血条（居中，压在两列属性之上）
-    const boss = databus.enemys.find((e) => e.isBoss);
-    if (boss) {
-      const bw = Math.min(canvasW - 40, 300);
-      const bx = (canvasW - bw) / 2;
+    // ★filter 不是 find：双子同时在场有两只，find 只会拿到先出场的那一只，
+    //   第二根血条就永远画不出来——而"还剩几只"这件事只有这里说得出
+    const bosses = databus.enemys.filter((e) => e.isBoss);
+    if (bosses.length) {
+      const totalW = Math.min(canvasW - 40, 300);
       // +8 而不是 +4：药丸和血条各带 2.5px 白色外框，只让 4px 时两条白框只差 1px，
       // 血条横贯整排药丸，视觉上会连成一条粗白线
       const by = rowB + 8;
-      bar(ctx, bx, by, bw, 14, boss.hp / boss.maxHp, UI.red, { r: 7 });
-      labelMid(ctx, `BOSS ${MONSTER_TYPES[boss.type] ? MONSTER_TYPES[boss.type].name : ''}`, bx + bw / 2, by + 8, {
-        size: FS.tiny, bold: true, color: UI.textOnDark,
-      });
-      // 膜量子条（只有膜王带 filmMax）：膜最关键的时刻正是你扭头去看菌群的时候，
-      // 本体上那层壳这时候在屏幕外，所以血条下面必须再有一条。
-      // 高度不能再矮：bar() 两侧各 inset 2.5px，h<6 的时候平涂区会算成负数，只剩一圈描边
-      if (boss.filmMax) {
-        bar(ctx, bx, by + 16, bw, 8, Math.max(0, boss.film / boss.filmMax), UI.cream, { r: 4 });
+      const gap = bosses.length > 1 ? 8 : 0;
+      const bw = (totalW - gap * (bosses.length - 1)) / bosses.length;
+      for (let i = 0; i < bosses.length; i++) {
+        const boss = bosses[i];
+        const bx = (canvasW - totalW) / 2 + i * (bw + gap);
+        bar(ctx, bx, by, bw, 14, boss.hp / boss.maxHp, UI.red, { r: 7 });
+        // 成对出场时两根长得一样，不加这一字就分不清哪根在掉血。判据用 twin 字段在不在，
+        // 不用 type === 'boss4'：twinIndex 只有真双子有，别的 Boss 默认 0，靠 type 硬编会把三号也标成"兄"
+        const tag = bosses.length > 1 && 'twin' in boss ? (boss.twinIndex === 1 ? ' 弟' : ' 兄') : '';
+        const kind = MONSTER_TYPES[boss.type];
+        labelMid(ctx, `BOSS ${kind ? kind.name : ''}${tag}`, bx + bw / 2, by + 8, {
+          size: FS.tiny, bold: true, color: UI.textOnDark,
+        });
+        // 膜量子条（只有膜王带 filmMax）：膜最关键的时刻正是你扭头去看菌群的时候，
+        // 本体上那层壳这时候在屏幕外，所以血条下面必须再有一条。
+        // 高度不能再矮：bar() 两侧各 inset 2.5px，h<6 的时候平涂区会算成负数，只剩一圈描边
+        if (boss.filmMax) {
+          bar(ctx, bx, by + 16, bw, 8, Math.max(0, boss.film / boss.filmMax), UI.cream, { r: 4 });
+        }
       }
     }
 
@@ -123,7 +134,7 @@ export default class Hud {
     // 有 Boss 时血条占 rowB+8..+22（125..139），膜王还多一条膜量子条到 rowB+32（149），
     // 面板贴纸顶边画在 panelY-3，所以取 rowB+36 = 153 才啃不到膜条底边
     // 无 Boss 时没有血条也没有膜条，面板直接落在血条原本那一格 rowB+8 = 125
-    const panelY = rowB + (boss ? 36 : 8);
+    const panelY = rowB + (bosses.length ? 36 : 8);
     this.drawStats(ctx, player, panelY);
     this.drawItems(ctx, databus, panelY);
 
@@ -136,7 +147,7 @@ export default class Hud {
       const tx = canvasW / 2 - tw / 2;
       // ty 不能再写死成 90 + safeTop：那是照着「簇在 top」量的，簇一跟着胶囊下移就会啃掉血条底边。
       // 有 Boss 时横条区到 rowB+32（膜条底边）再让 10，无 Boss 时到 rowB+8 再让 10
-      const ty = rowB + (boss ? 42 : 18);
+      const ty = rowB + (bosses.length ? 42 : 18);
       sticker(ctx, tx, ty, tw, 34, { fill: UI.cream, r: R_BTN });
       labelMid(ctx, this.toastText, canvasW / 2, ty + 18, { size: FS.body, bold: true, color: UI.textOnLight });
       ctx.globalAlpha = 1;

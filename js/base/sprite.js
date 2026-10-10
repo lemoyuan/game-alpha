@@ -37,15 +37,19 @@ export default class Sprite extends Emitter {
    * 以中心为锚点绘制贴图，可选朝向旋转
    * @param {number} angle 朝向弧度；「头朝 +x（向右）」画的批次传 Math.atan2(vy, vx)，正面朝上画的批次传 0（由 SPRITE_ROTATES 决定）
    * @param {number} alpha 透明度，省略为 1
+   * @param {boolean} mirror 水平镜像；成对实体（双子 Boss 的左右两半）用同一张贴图各朝一边
    * @returns {boolean} 贴图未加载完成时返回 false，调用方回退到程序绘制的占位形状
    */
-  drawSprite(ctx, angle = 0, alpha = 1) {
+  drawSprite(ctx, angle = 0, alpha = 1, mirror = false) {
     const img = this.img;
     if (!img || !img.width || !img.height) return false;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(this.x, this.y);
     if (angle) ctx.rotate(angle);
+    // ★镜像只在这条路径里做：子类自己 ctx.scale(-1,1) 会绕过上面那句「未加载返回 false」的兜底，
+    //   贴图还没解码完时那一侧就什么都不画，而兜底形状又画在没镜像的坐标系里
+    if (mirror) ctx.scale(-1, 1);
     ctx.drawImage(img, -this.width / 2, -this.height / 2, this.width, this.height);
     ctx.restore();
     return true;

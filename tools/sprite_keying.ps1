@@ -51,6 +51,12 @@ public static class SpriteKit {
   }
 
   public static string Process(string srcPath, string dstPath, int target) {
+    return Process(srcPath, dstPath, target, 0, 0);
+  }
+
+  // cropX0/cropX1: keep only this horizontal band of the source. Used for matched sprite pairs
+  // drawn side by side in one image, where the two halves must share one drawing to swap in place.
+  public static string Process(string srcPath, string dstPath, int target, int cropX0, int cropX1) {
     Color key;
     using (var raw = new Bitmap(srcPath)) {
       var bmp = new Bitmap(raw.Width, raw.Height, PixelFormat.Format32bppArgb);
@@ -58,6 +64,7 @@ public static class SpriteKit {
       key = KeyColor(bmp);
 
       int W = bmp.Width, H = bmp.Height;
+      int cx0 = cropX0, cx1 = cropX1 > 0 ? cropX1 : W;
       var rect = new Rectangle(0, 0, W, H);
       var data = bmp.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
       byte[] px = new byte[Math.Abs(data.Stride) * H];
@@ -80,6 +87,7 @@ public static class SpriteKit {
       for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
           int i = y * s + x * 4;
+          if (x < cx0 || x >= cx1) { px[i + 3] = 0; continue; }
           double b0 = px[i], g0 = px[i + 1], r0 = px[i + 2];
           double d = Dist(r0, g0, b0, dr, dg, db);
           double a;
@@ -222,21 +230,28 @@ $jobs = @(
   @{ prefix = 'boss_giantcell';   logical = 76 }, # Haihuo: canvas is 8px larger than the hit box so the pseudopods can reach out
   @{ prefix = 'boss_endospore'; logical = 88 },
   @{ prefix = 'boss_botulinum'; logical = 76 },
-  @{ prefix = 'boss_biofilm';   logical = 96 }  # Mowang: real in-game spriteSize; radius 38 plus a 10px slime skirt
+  @{ prefix = 'boss_biofilm';   logical = 96 },  # Mowang: real in-game spriteSize; radius 38 plus a 10px slime skirt
+  # Twins boss4: both states MUST come from one drawing. Two separate renders of "the same"
+  # character always disagree on body scale, and because Process fits the content bbox to a
+  # square, that disagreement survives as a visible size/position jump on the state swap.
+  @{ prefix = 'boss_diplo_normal'; src = 'boss_diplo_pair'; logical = 60; crop = @(0, 896) },
+  @{ prefix = 'boss_diplo_rage';   src = 'boss_diplo_pair'; logical = 60; crop = @(896, 0) }
 )
 
 if (-not (Test-Path $Dst)) { New-Item -ItemType Directory -Path $Dst -Force | Out-Null }
 $done = @()
 
 foreach ($j in $jobs) {
-  $srcFile = Get-ChildItem -Path (Join-Path $Src ($j.prefix + '_*.png')) -ErrorAction SilentlyContinue |
+  $srcPrefix = if ($j.src) { $j.src } else { $j.prefix }
+  $srcFile = Get-ChildItem -Path (Join-Path $Src ($srcPrefix + '_*.png')) -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if (-not $srcFile) { Write-Warning "no source for $($j.prefix)"; continue }
+  if (-not $srcFile) { Write-Warning "no source for $($srcPrefix)"; continue }
 
   $target = $j.logical * 2   # @2x export
   $outName = $j.prefix + '.png'
   $outPath = Join-Path $Dst $outName
-  $info = [SpriteKit]::Process($srcFile.FullName, $outPath, $target)
+  $crop = if ($j.crop) { $j.crop } else { @(0, 0) }
+  $info = [SpriteKit]::Process($srcFile.FullName, $outPath, $target, [int]$crop[0], [int]$crop[1])
   Write-Host ("{0,-16} {1,3}px -> {2,4}px  {3}" -f $outName, $j.logical, $target, $info)
   $done += [pscustomobject]@{ file = $outPath; label = ($outName + ' ' + $j.logical + 'px'); logical = $j.logical }
 }

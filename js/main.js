@@ -185,6 +185,13 @@ export default class Main {
       }
     }
 
+    // 囊泡（双子 Boss）：同上一条，引爆那一帧已结算完 applyBlast 并铺好毒渍，这里只等爆风放完
+    for (let i = databus.vesicles.length - 1; i >= 0; i--) {
+      if (databus.vesicles[i].isDestroyed) {
+        databus.removeVesicle(i);
+      }
+    }
+
     // 怪物子弹：命中结算在 bullet.update 内完成，这里回收被销毁的子弹
     for (let i = databus.enemyBullets.length - 1; i >= 0; i--) {
       if (databus.enemyBullets[i].isDestroyed) {
@@ -290,6 +297,7 @@ export default class Main {
     // 炸弹压在怪之上：飞行那几帧里落点环要能被看见，引爆那一闪更要盖住整片怪，
     // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
+    for (const v of databus.vesicles) v.draw(ctx); // 同层同理由：囊泡也是抛体，落点环和爆风都要压在怪之上
     if (databus.player) {
       for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);

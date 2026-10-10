@@ -38,6 +38,10 @@ export default class DataBus {
     this.companions = [];
     this.bombers = [];    // 炸弹跟班（金匣第 7 种加成）：与 companions 同一条规矩，场上封顶一只，层数加的是每轮枚数
     this.bombs = [];      // 在飞的炸弹：一枚两阶段（抛物线飞行 → 落点引爆），爆风不另开列表、画在这同一条实体上
+    // 双子 Boss 在飞的囊泡：与 bombs 同形（继承 Bomb 的抛物线与爆风），但必须自己一条列表。
+    // ★上面那句「不再加列表」在这里破例的原因：headless 的 thrown / booms / 「一轮几枚」三条断言
+    //   口径全是「玩家自己的炸弹」，两家共用一条数组等于把道具报表读成敌我混合，而且敌方弹根本不该暴击
+    this.vesicles = [];
     this.bossPets = [];   // 迷你毒王跟班（融合匣开出）：不挂 player.companions 计数，由宝箱授予直接管理
     this.bossChests = {}; // 本局 Boss 专属匣开启记录：id → 次数，HUD 右栏读它
     this.damageTexts = [];
@@ -54,6 +58,7 @@ export default class DataBus {
     for (const b of this.enemyBullets) b.update(dt, this);
     // 炸弹排在生成它的 bomber 循环之前：同上面两条子弹循环的次序，本帧扔出的那一枚下一帧才开始飞
     for (const b of this.bombs) b.update(dt, this);
+    for (const v of this.vesicles) v.update(dt, this); // 次序同上面 bombs：本帧抛出的那一枚下一帧才开始飞
     for (const e of this.enemys) e.update(dt, this);
     // 燃烧跳血单独一遍，且必须挂在这里：Enemy.update 里放不下它——毒王 Boss 从不调 super.update，
     // 海火只在 chase、膜王只在 idle、菌群只在 lost 才调，写进 Enemy.update 等于燃烧在三只 Boss 身上失效
@@ -98,6 +103,10 @@ export default class DataBus {
   // 炸弹：引爆后还要把爆风放完（BOMB_BLAST_MS）才算 isDestroyed，回收由 main.js 现成的那批寿命循环做
   removeBomb(index) {
     this.bombs.splice(index, 1);
+  }
+
+  removeVesicle(index) {
+    this.vesicles.splice(index, 1);
   }
 
   removeEnemyBullet(index) {

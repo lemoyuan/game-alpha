@@ -21,6 +21,8 @@ export default class Enemy extends Sprite {
     this.xpValue = config.xp;      // 击杀掉落经验（0 = 不掉经验）
     this.damage = config.damage;   // 接触玩家的伤害（远程怪同时是子弹伤害）
     this.isBoss = !!config.boss;   // Boss 标记：HUD 血条、刷怪降速、图鉴文案都读它，来源和图鉴同源所以不会不一致
+    // 贴图水平镜像（双子 Boss 一左一右共用一张成对图）：只影响 drawSprite，不参与碰撞、朝向或任何判定
+    this.mirror = false;
     this.isDead = false;
     // 突变型刺头（概率见 config.js 的 MUTANT_CHANCE）：只表示「这只 basic 会额外掉一颗血块」，
     // type 仍然是 'basic'——图鉴解锁、HUD 计数、首页那张表都读 type，单列一个 type 等于凭空多出个喊不出的外号
@@ -49,6 +51,7 @@ export default class Enemy extends Sprite {
     // ★复位：和下面 burnLeft 那几条同一条对象池约定。spawner 因此必须在 init 之后才掷突变骰，
     //   放前面等于刚刷出来就被自己擦掉
     this.mutant = false;
+    this.mirror = false; // 同上：不复位就是「池里复用的第二只继承上一只的朝向」，双子以外的人也会跟着翻面
     this.hp = this.maxHp;
     this.lastAttack = 0;
     // 对象池复用约定：漏掉这三行的话，一旦接上回收就是「刚刷出来的怪自带燃烧」
@@ -173,7 +176,7 @@ export default class Enemy extends Sprite {
     const alpha = this.type === 'chest'
       ? 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 200))
       : 1;
-    if (!this.drawSprite(ctx, this.spriteAngle(), alpha)) {
+    if (!this.drawSprite(ctx, this.spriteAngle(), alpha, this.mirror)) {
       if (this.type === 'chest') {
         ctx.globalAlpha = alpha;
         ctx.fillStyle = this.color;

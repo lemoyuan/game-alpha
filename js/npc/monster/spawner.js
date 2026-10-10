@@ -2,6 +2,7 @@ import Enemy from './enemy';
 import Boss from './boss';
 import BossSeaFire from './bossSeaFire';
 import BossFilm from './bossFilm';
+import BossTwins from './bossTwins';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   hpScaleAt, MUTANT_CHANCE,
@@ -15,7 +16,10 @@ import { markEncountered } from '../../storage';
 
 // 类型 → Boss 类。映射只能放这里，不能放进 config：boss.js 会 import config，
 // config 反过来 import 类就成环，ES Module 下会解析出 undefined class
-const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm };
+// ★下面那句 `|| Boss` 兜底是这套结构里最贵的一处静默失效：漏登记不会报错，
+//   只会「用新 Boss 的数值跑毒王的冲锋」——血条、掉落、图鉴、刷怪降速全部正常。
+//   所以加一只 Boss 必须同时在这里加一行，config 那条 BOSS_SCHEDULE 才算接上
+const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm, boss4: BossTwins };
 
 // 刷怪控制器：普通怪随时间加密，宝箱怪按幸运值的概率刷新，Boss 定时出场
 export default class Spawner {
@@ -106,11 +110,33 @@ export default class Spawner {
     if (!databus.player) return;
     const config = MONSTER_TYPES[entry.type];
     const BossClass = BOSS_CLASS[entry.type] || Boss;
-    const pos = this.placeAroundPlayer(databus, config.radius, 400);
-    const boss = new BossClass(entry.type, config);
-    boss.init(pos.x, pos.y);
-    databus.enemys.push(boss);
-    markEncountered(entry.type); // 遭遇即解锁图鉴，无需击杀
+    const count = entry.pair || 1;
+    const centre = this.placeAroundPlayer(databus, config.radius, 400);
+    const group = [];
+    for (let i = 0; i < count; i++) {
+      // 成对出场：两只并排落在同一个落点两侧（双球菌态就是裂殖之后不分开，镜下像一副眼镜）。
+      // ★pairSpan 是【中心距】，同一个数还被 bossTwins.separateFromTwin 拿去当场上维持的下限——
+      //   只在这里调会出现「出生很开、追两秒就挤成一坨」（2026-10-10 实测过这一坑）
+      const span = config.pairSpan || config.radius * 2 + 6;
+      const at = { x: centre.x + (i - (count - 1) / 2) * span, y: centre.y };
+      clampToCoast(at, config.radius + 10);
+      const boss = new BossClass(entry.type, config);
+      boss.init(at.x, at.y);
+      // ★mirror / twinIndex 必须在 init 之后写：Enemy.init 会复位 mirror（对象池约定），写反了就是"永远不镜像"
+      if (count > 1) {
+        boss.mirror = i % 2 === 1;
+        boss.twinIndex = i;
+      }
+      group.push(boss);
+      databus.enemys.push(boss);
+    }
+    // 跨实体引用：全项目没有事件钩子，"兄弟死了"只能靠活引用轮询 isDead（见 bossTwins.update）。
+    // 只处理两只：pair 一旦上 3，这条边就得从"一个引用"改成"一个列表"，那时再改，不在这里预埋
+    if (group.length === 2) {
+      group[0].twin = group[1];
+      group[1].twin = group[0];
+    }
+    markEncountered(entry.type); // 遭遇即解锁图鉴，无需击杀；成对也只解锁这一条
     if (databus.hud) databus.hud.showToast(entry.toast, 2500);
   }
 

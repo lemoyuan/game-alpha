@@ -98,6 +98,8 @@
   <button data-nav="boss">召唤 Boss</button>
   <button data-nav="boss2">召唤二号 Boss（海火）</button>
   <button data-nav="boss3">召唤三号 Boss（膜王）</button>
+  <button data-nav="boss4">召唤四号 Boss（双子 · 一次两只）</button>
+  <button data-nav="twinslay">放倒一只双子（看激怒态）</button>
   <button data-nav="bosschest">Boss 专属匣（融合匣，游戏内已下线）</button>
   <button data-nav="petstart">带融合匣开局（游戏内已下线）</button>
   <button data-nav="bomberstart">带炸弹跟班开局（一坨怪）</button>
@@ -515,6 +517,19 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       spawnAround(4);
       return;
     }
+    // 激怒态验收：不打断当前局，走标准 takeDamage 通路放倒还在场的兄（掉落/经验/回收全是真的）
+    if (nav === 'twinslay') {
+      if (databus.screen !== 'game' || databus.isGameOver) startRun();
+      const victim = databus.enemys.find((e) => e.type === 'boss4');
+      if (!victim) {
+        say('场上没有双子：先点「召唤四号 Boss」');
+        return;
+      }
+      victim.takeDamage(victim.hp, false, databus);
+      const rest = databus.enemys.filter((e) => e.type === 'boss4');
+      say(`已放倒${victim.twinIndex === 1 ? '弟' : '兄'}，在场 ${rest.length} 只，下一帧起激怒态生效`);
+      return;
+    }
     if (nav === 'game') { startRun(); return; }
     if (nav === 'die') {
       // 结束「正在打的这一局」：结算面板才会带上真实的破纪录标记
@@ -522,7 +537,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'boss4' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
       startRun();
       if (nav === 'game3') {
         setElapsed(180);
@@ -548,6 +563,14 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         setElapsed(370);
         databus.spawner.bossIndex = BOSS_SCHEDULE.length;
         databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[2]);
+        spawnAround(8);
+      }
+      // 双子是「一次两只」：pair 由 spawnBoss 里读，这里不需要也不能自己循环
+      if (nav === 'boss4') {
+        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
+        setElapsed(470);
+        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
+        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[3]);
         spawnAround(8);
       }
       // Boss 专属匣：直接把 boss1 掉落表里的匣摆到玩家右侧，走过去看图标/跟班/HUD 计数
