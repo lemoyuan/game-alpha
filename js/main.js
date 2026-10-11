@@ -298,6 +298,9 @@ export default class Main {
     // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
     for (const v of databus.vesicles) v.draw(ctx); // 同层同理由：囊泡也是抛体，落点环和爆风都要压在怪之上
+    // 炮台排在三种跟随体之前：它是地面上的固定件，会跟着走的那几只和角色本人都该盖住它。
+    // ★但不在赤潮那一层：地贴压在所有实体下面，而炮台是一件立着的东西，得压在怪之上才读得出它站在那儿
+    for (const t of databus.turrets) t.draw(ctx);
     if (databus.player) {
       for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);

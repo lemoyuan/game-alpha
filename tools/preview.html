@@ -362,6 +362,9 @@ const STATS = [
   { key: 'shield', label: '护盾', step: 1 },
   { key: 'companions', label: '射击跟班', step: 1 },
   { key: 'bomber', label: '炸弹跟班', step: 1 },
+  // ★一次点几档就把几座摞在同一个点上（生成时读的都是当时的角色坐标），照片里只会看出一座。
+  //   这个入口只用来验「会开火、打得着怪」，多座分散的落位要靠走一圈、每段掉一只匣子开出来
+  { key: 'turrets', label: '炮台座数', step: 1 },
   { key: 'pickupRange', label: '拾取范围', step: 30 },
   { key: 'burnBullets', label: '燃烧子弹', step: 1 },
   { key: 'leech', label: '嗜血层数', step: 1 },

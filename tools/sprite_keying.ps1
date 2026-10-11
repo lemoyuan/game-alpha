@@ -222,6 +222,16 @@ $jobs = @(
   @{ prefix = 'companion';   logical = 22 }, # display size = COMPANION_SPRITE_SIZE in js/consts.js (hit radius stays 8)
   @{ prefix = 'bomber';      logical = 22 }, # display size = BOMBER_SPRITE_SIZE in js/consts.js (same hit radius 8)
   @{ prefix = 'vial';        logical = 22 }, # display size = VIAL_SIZE in js/consts.js. Same frame as companion/bomber on purpose: this flask body only fills 0.73 of the frame (interior 0.70), so a smaller frame would render it as loot, not as the third follower. The red liquid level is code-clipped inside the measured interior, never baked into the art.
+  # Turret: ONE drawing, split at runtime. js/player/turret.js clips this texture at the measured neck
+  # line (TURRET_PIVOT_Y) and rotates only the upper half around the gold collar, so the root-foot base
+  # stays planted while the muzzle aims. Base and head can never disagree on scale because they are the
+  # same pixels -- that is why this is not two exports (see the twins boss note below for the failure mode).
+  # Portrait composition: fit=min means the frame is 30 tall but the body only 15 wide.
+  # First source (turret-h-split) was rejected in the field: its body came out solid navy, median
+  # luminance 57 against an arena floor of ~61, so at 1x only the cream muzzle rim was visible and the
+  # turret read as a dropped pill. The family standard is a cream body with a navy outline (vial.png
+  # measures median 219), which is what turret-h2-cream reuses -- same H silhouette, fixed palette.
+  @{ prefix = 'turret';      src = 'turret-h2-cream'; logical = 30 }, # display size = TURRET_SIZE in js/consts.js
   @{ prefix = 'mob_basic';   logical = 28 },
   @{ prefix = 'mob_fast';    logical = 20 },
   @{ prefix = 'mob_tank';    logical = 44 },

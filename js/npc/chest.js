@@ -7,8 +7,8 @@ import { CHEST_GRANTS } from './chestGrant';
 // key 必须与 player 的属性名一致（companions 为复数）。step = 每次开匣涨多少：计数型都是 1，
 // 拾取范围涨的是像素（+1 等于没加），所以加成值一律写在 consts.js 里由这里引用
 // ★每加一种就是把上一档摊平：第 8 种进来后每种出货率从 1/7 = 14.3% 掉到 1/8 = 12.5%，
-//   现在第 9 种再把它们压到 1/9 = 11.1%。这是「进普通金匣池」这条路要付的代价
-//   （燃烧子弹、炸弹跟班、嗜血各付过一次，血瓶是第四次）
+//   第 9 种再压到 1/9 = 11.1%，现在第 10 种 = 1/10。这是「进普通金匣池」这条路要付的代价
+//   （燃烧子弹、炸弹跟班、嗜血、血瓶各付过一次，炮台是第五次）
 // ★导出是为了 tools/headless_check.mjs 扫一条静默失效：下面 update 里那句裸 player[b.key] += step
 //   拼错 key 不会报错，只会加到一个 undefined 属性上——开箱有 toast、HUD 无格、什么也没发生
 export const BONUSES = [
@@ -21,6 +21,10 @@ export const BONUSES = [
   { key: 'pickupRange', step: XP_PICKUP_STEP, label: `经验拾取范围 +${XP_PICKUP_STEP}` },
   { key: 'leech', step: 1, label: '嗜血 +1' },
   { key: 'vial', step: 1, label: '血瓶 +1' },
+  // ★复数 turrets 同 companions：key 必须与 player 的属性名一致，而这一种买的是「场上几座」不是「一轮几发」，
+  //   所以属性名本身就该是座数。落位不在这儿做——匣子不把坐标塞进这条没有 dispatch 的裸 += 通道，
+  //   由 databus.update 观察 player.turrets 涨了就在角色脚下补一座
+  { key: 'turrets', step: 1, label: '炮台 +1' },
 ];
 
 export default class Chest extends Sprite {

@@ -217,6 +217,8 @@ const {
   BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX,
   BOMB_CD, BOMB_BLAST_R, BOMB_BLAST_MS, BOMB_H_SPEED, BOMB_FLY_MIN, BOMB_FLY_MAX, bombDamage,
   ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
+  TURRET_CD, TURRET_RANGE, TURRET_MUZZLE_LEN, TURRET_PIVOT_Y, TURRET_BULLET_RADIUS, TURRET_BULLET_COLOR, turretDamage, BULLET_RANGE_BUFFER,
+  canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
@@ -225,6 +227,8 @@ const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).de
 const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).default;
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const BloodVial = (await import(fileUrl(path.join(COPY, 'player', 'bloodVial.js')))).default;
+const Turret = (await import(fileUrl(path.join(COPY, 'player', 'turret.js')))).default;
+const Bullet = (await import(fileUrl(path.join(COPY, 'player', 'bullet.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
 const Vesicle = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'vesicle.js')))).default;
@@ -298,6 +302,23 @@ let vialIn = 0;        // 进账累计（自增 + 满血时的溢出），按 vi
 let vialOut = 0;       // 出账累计（输送到身上的滴数），按 vialDrops 的下降沿计
 let vialOutTicks = 0;  // 出账发生在哪几帧：每 VIAL_OUT_CD 一次，这个数就是「输送这条路真跑过几次」
 let prevVialDrops = 0; // 上一帧存量：进账/出账都靠这一帧的差值，不钩 pumpVial（钩了会把纯检那几条一起计进账）
+// 炮台层数（= 场上座数）同样钉成单变量：金匣十选一里就有它，不吞掉写入的话 TURRET=0 那趟照样会长出炮台。
+// ★这一种和前面几种最不一样的地方是「不封顶」，所以峰值那条断言的期望值是 TURRET 本身，不是 1
+const TURRET = Number(process.env.TURRET || 0);
+let maxTurrets = 0;      // 场上座数峰值：这一条同时兜住「金匣真出货 + 落位链真跑通 + 没被谁偷偷封顶」
+let turretShots = 0;     // 实际开火发数。★沿判定用「上一帧 cdT 大于 0、这一帧归零」，不是「上一帧到点」：
+                         //   空转时 cdT 被钉在 TURRET_CD，而有怪持续进射程的座子每次都恰好在到点那一帧开火、
+                         //   cdT 直接回 0 —— 世界永不停在 armed=true 的帧上，拿「到点沿」当凭据会把连着打的那一整段整条漏掉。
+                         //   只判 cdT === 0 又会在玩家死后（世界冻住、cdT 停在 0）每帧重复计一次
+const turretPrevCd = new WeakMap(); // 每座上一帧的 cdT：归零沿的凭据，undefined 当作 0（出生那一帧不算开火）
+// ★落座时刻推迟到 15 秒：这台子的 bot 一开局就朝一个方向走到角落才停（touch 那两下只发一次，10 秒时角色已在
+//   (1836, 91)），而炮台的坐标一次写定。第 0 帧就落座等于把几座全丢在起点 —— 实测 480 秒 3 座 0 发，
+//   「一发未出」那条断言必红，而 fire 的整条实场链路（索敌 → 取池 → 入列 → 命中）一次都量不到。
+//   15 秒时角色已经停在怪流的中心，这几座才真在打东西
+let turretOnAt = -1;      // 实际落座的游戏时刻（秒），-1 = 还没落座
+const TURRET_AT = 15;
+let turretScanPeak = 0;  // max(座数 × 怪数)：空闲时每帧都在扫，这是索敌开销的代理指标
+let firstBossDeathAt = -1; // 首只 Boss 死亡时刻：A/B 要比的是「整条曲线」，只看炮台自己那几发看不出中期崩塌
 let volleyRounds = 0;      // 跟班齐射轮数
 const volleySizes = new Set(); // 每轮实际新增的子弹数：只应有一个取值且等于层数
 let bombsThrown = 0;   // 扔出的枚数（按 Bomb.init 计，一轮 player.bomber 枚）
@@ -306,12 +327,15 @@ let maxBombs = 0;      // 同屏在飞枚数峰值
 let maxBombers = 0;    // 场上炸弹跟班只数峰值：★恒应为 1，长到 2 就是「层数当只数」回潮
 let companionPeak = 0; // 同上，射击跟班也只该有一只
 const chestStamps = []; // 每只金匣刷出时刻（游戏秒），用来算相邻间隔
+let chestRollMax = 0;   // 全场见过的最大「距上次出货」毫秒数（spawner.chestSinceLast）
 // 突变型刺头与血块。出生按对象身份数（和 colonySeen 同一条理由：只有身份能把它和杂兵区分开），
 // 掉落数挂在 BloodClot.prototype.init 上
 const mutantSeen = new Set();
 const mutantAlive = new Set();
 let mutantDeaths = 0;
 let clotsDropped = 0;
+let clotsDroppedNear = 0; // 其中掉在磁吸半径内的那几颗：只有这些「该」被吃掉（见下面那条实场断言）
+let clotsCollected = 0;   // 真被收走几次（collected 由 false 翻 true 的那一帧计一次）
 let clotPeak = 0;
 let clotHeals = 0; // 血块真被吃掉几次（按 UI.blood 色飘字认）：主循环里那条回血线路跑通过的凭据
 
@@ -428,7 +452,30 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
 {
   const proto = BloodClot.prototype;
   const origInit = proto.init;
-  proto.init = function (...args) { clotsDropped++; return origInit.apply(this, args); };
+  proto.init = function (...args) {
+    clotsDropped++;
+    // init 的头两个实参就是落点，趁 origInit 还没改 this.x/y 之前直接对表上的玩家算距离
+    const p = databus.player;
+    if (p) {
+      const dx = args[0] - p.x;
+      const dy = args[1] - p.y;
+      if (dx * dx + dy * dy < p.pickupRange * p.pickupRange) clotsDroppedNear++;
+    }
+    return origInit.apply(this, args);
+  };
+}
+
+// 血块被收走的次数：★10-11 之后「吃掉」和「回了血」是两件事——满血照吃、heal() 返回 0、也就没有红字，
+//   所以按飘字计的那个数证明不了生命周期，只能证明「那一次身上确有缺口」。这里数 collected 的跳变本身
+{
+  const proto = BloodClot.prototype;
+  const origUpdate = proto.update;
+  proto.update = function (...args) {
+    const was = this.collected;
+    const r = origUpdate.apply(this, args);
+    if (!was && this.collected) clotsCollected++;
+    return r;
+  };
 }
 
 // 跟班一轮净加几发子弹：一轮之内没有别处会往 databus.bullets 里塞东西，所以差值就是发数。
@@ -532,6 +579,14 @@ for (let i = 0; i < frames; i++) {
     p.__vialPinned = true;
     Object.defineProperty(p, 'vial', { configurable: true, get: () => VIAL, set: () => {} });
     prevVialDrops = p.vialDrops;
+  }
+  if (turretOnAt < 0 && i * DT >= TURRET_AT) turretOnAt = i * DT;
+  // 炮台座数不管开没开都要钉：金匣十选一里就有它，不吞掉写入的话 TURRET=0 那趟照样会长出炮台，
+  // 那条「关掉等价式」量不出来，TURRET=3 那趟也会顺带开出第四、五座
+  if (p && !p.__turretPinned) {
+    p.__turretPinned = true;
+    // ★落座前恒读 0：这样第 15 秒之前既不会在起点长出座子，匣子那一下裸 += 也照样被 setter 吞掉
+    Object.defineProperty(p, 'turrets', { configurable: true, get: () => (turretOnAt < 0 ? 0 : TURRET), set: () => {} });
   }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
@@ -669,6 +724,7 @@ for (let i = 0; i < frames; i++) {
   for (const dyingBoss of dyingBosses) {
     if (databus.enemys.includes(dyingBoss)) continue;
     bossDrops++;
+    if (firstBossDeathAt < 0) firstBossDeathAt = i * DT;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
     }
@@ -693,6 +749,24 @@ for (let i = 0; i < frames; i++) {
     // 座次那条 lerp 一旦喂进非有限的朝向，瓶子会凭空从画面上消失（同 boss pet 那条的理由）
     if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) errors.push('血瓶坐标出现非有限值');
   }
+  if (databus.turrets.length > maxTurrets) maxTurrets = databus.turrets.length;
+  // 掷骰计时器走到过多远：一次匣子都没出时，这个数才是「路径在跑但没掷中」和「门根本没开」的分界
+  if (databus.spawner.chestSinceLast > chestRollMax) chestRollMax = databus.spawner.chestSinceLast;
+  for (const t of databus.turrets) {
+    if (!Number.isFinite(t.x) || !Number.isFinite(t.y) || !Number.isFinite(t.aim)) {
+      errors.push('炮台坐标或朝向出现非有限值');
+      break;
+    }
+    // update 末尾的 cdT 只有三种取值：0（这一帧打出去了）、TURRET_CD（空转钉满）、不足一拍的累加值。
+    // ★所以认一发要看「上一帧还大于 0、这一帧归零」这个下降沿，不能看上一帧是否到点：
+    //   有怪持续在射程里时它每拍都在到点的那一帧直接归零，到点沿一帧都观测不到
+    const prevCd = turretPrevCd.get(t);
+    if (t.cdT === 0 && prevCd !== undefined && prevCd > 0) turretShots++;
+    turretPrevCd.set(t, t.cdT);
+  }
+  // 索敌只在开火那一刻做，但空闲时 cdT 被钉满、这段扫描每帧都跑，所以开销上界是 座数 × 怪数
+  const turretScan = databus.turrets.length * databus.enemys.length;
+  if (turretScan > turretScanPeak) turretScanPeak = turretScan;
   // 存量按帧间差值记账：进账 = 上涨沿（自增 + 满血时的溢出，两者在实场分不开，精确拆分交给下面的纯检），
   // 出账 = 下降沿（只有 pumpVial 的输送会减它）
   const vd = p ? p.vialDrops : 0;
@@ -804,6 +878,8 @@ if (LEECHP !== undefined) {
 // 先快照：下面那段纯检会直接 new BloodClot 并调 init，不先取值的话 fieldDrops 会把纯检也算进账
 const fieldMutants = mutantSeen.size;
 const fieldDrops = clotsDropped;
+const fieldDropsNear = clotsDroppedNear;
+const fieldCollected = clotsCollected;
 const fieldPeak = clotPeak;
 const fieldHeals = clotHeals;
 if (MUT !== undefined && fieldMutants === 0) {
@@ -816,18 +892,32 @@ if (fieldDrops !== mutantDeaths) {
 if (fieldMutants && !fillStyles.has(UI.blood)) {
   errors.push(`场上出现过 ${fieldMutants} 只突变体，却没有一笔画过 UI.blood：那块血斑根本没画出来`);
 }
-// ★测试台只在每帧【顶部】把 hp 回满，而同一帧里的接触伤害排在血块 update 之前，所以场上确实存在残血窗口：
-//   掉出来的血块该被真吃掉。heals 这颗数就是「回血在主循环里真跑通了」的实场凭据
-//   （纯检那几条只驱动原型，证明不了 databus/main 接了线）
+// ★「主循环真跑通了」这条凭据要从 collected 取，不能从 heals 那颗数取：测试台每帧【顶部】把 hp 回满，
+//   只有恰好在本帧挨过一下的玩家才有缺口，而炮台会替站桩的 bot 把怪清在 220 像素外，
+//   于是出现「血块照吃了、hp 本来就满、一笔红字都没冒」这种正确但读数为 0 的局。
+//   回收生命周期只能由实场计，纯检那几条只驱动原型，证明不了 databus/main 接了线
 // ★clotHeals 那个计数器现在是两家共用：血块被吃掉的红字和嗜血回血的红字在 addDamageText 上长得
 //   一模一样（都是 +N、都是 UI.blood），分不开只能按笔数相减。嗜血每次回血必出一条红字
 //   （onKill 里 healed > 0 才画），所以减 leechProcs 是精确的，不是估的
 const clotEats = fieldHeals - leechProcs;
-if (clotEats > fieldDrops) {
-  errors.push(`血块被吃掉 ${clotEats} 次 > 掉出 ${fieldDrops} 颗：有那颗结算了两遍，回收没跟上`);
+if (clotEats > fieldCollected) {
+  errors.push(`血块回了血 ${clotEats} 次 > 被收走 ${fieldCollected} 次：有那颗结算了两遍，回收没跟上`);
 }
-if (fieldDrops > 0 && clotEats <= 0) {
-  errors.push(`掉了 ${fieldDrops} 颗血块却一颗都没被吃掉：主循环里那条回血路径没接上（纯检过了不代表 databus/main 通了）`);
+if (fieldDropsNear > 0 && fieldCollected === 0) {
+  errors.push(`磁吸半径内有 ${fieldDropsNear} 颗血块（全场掉 ${fieldDrops} 颗）却一颗都没被收走：databus 那条 clots 循环或 main.js 的回收断了（纯检过了不代表实场通了）`);
+}
+// ★为什么「回了血」不再是硬断言：测试台每帧顶部把 hp 回满，而满血时血块照吃、heal() 返回 0、不画红字
+//   （js/npc/bloodclot.js:27 那条 10-11 改的口径）。所以 clotEats 只有在「吃掉那一帧身上恰好有缺口」
+//   时才非零，那是战斗密度给的样本，不是接线的凭据。接线由上面那条 collected 兜，
+//   「残血时真回得进、差 1 血时封顶」由下面那段纯检兜
+// ★为什么还要 fieldDropsNear 这道门：血块只在 player.pickupRange 内才被吸过来（bloodclot.js:34），
+//   而任何在这圈外完成的击杀都会把那颗血块永远搁在原地——炮台把这条变成常态（它专在 220 像素外打死怪），
+//   但主角的远射本来也做得到。够不着是正确行为，不是接线断了，所以硬断言只对「落在圈里的样本」发言
+if (fieldDrops > 0 && fieldCollected > 0 && clotEats === 0) {
+  console.log(`血块收走 ${fieldCollected} 次、一次没回出血（全场满血，缺口窗口没赶上）：这条不是回归，纯检那几条才管回血量`);
+}
+if (fieldDrops > 0 && fieldDropsNear === 0) {
+  console.log(`血块 ${fieldDrops} 颗全掉在磁吸半径（${databus.player ? databus.player.pickupRange : '-'}）之外：谁在远处打死的都一样（炮台、主角的远射、跟班），这一局没有可判的回收样本`);
 }
 
 // —— 血块纯检：回多少、差 1 血时的封顶、满血时「照吃但进瓶」。这几条实场读不出数值（回血主循环里量不到具体加了几）
@@ -1010,6 +1100,90 @@ if (vialHuge.vialDrops !== 1000000 + 2) {
   if (view.level(1e6, 40) !== 1) errors.push(`超量存的液面 = ${view.level(1e6, 40)}（应 1）：显示没夹满，fillRect 会画到瓶子上面的空气里`);
 }
 
+// —— 炮台纯检：这四条全是「漏写一行不报错」的静默失效 —— 不钉冷却会补欠债、忘赋 maxRange 会继承上一发别人的射程、
+//   加了跟随逻辑就等于把「站在原地」这件道具改成第四只跟班。实场那遍只量得到打了几发，分不清是哪一种
+function turretFixture(x = 0, y = 0) {
+  const t = Object.create(Turret.prototype);
+  t.x = x; t.y = y; t.radius = 12; t.cdT = 0; t.aim = 0;
+  return t;
+}
+// 最小世界：fire() 只读 enemys 的 x/y/isDead、player 的 attack/pierce/burnBullets，和 pool.getItemByClass
+function turretStub(enemys, pool) {
+  return {
+    player: { attack: 26, pierce: 0, burnBullets: 0 },
+    enemys,
+    bullets: [],
+    pool: pool || { getItemByClass: () => new Bullet() },
+  };
+}
+// dt 一律 0.5 秒一步（= 500 毫秒，二进制精确），同上面 pumpSeconds 那条理由：1/60 累加会让「恰好到拍」偶发红
+function pumpTurret(t, db, seconds) {
+  const n = Math.round(seconds / 0.5);
+  for (let k = 0; k < n; k++) t.update(0.5, db);
+  return t;
+}
+{
+  const t = turretFixture();
+  const db = turretStub([]);
+  pumpTurret(t, db, 30);
+  if (t.cdT !== TURRET_CD) {
+    errors.push(`射程内一只怪都没有、空转 30 秒后 cdT = ${t.cdT}（应钉在 ${TURRET_CD}）：欠债没被钉掉，怪一进圈就会先补出积压的那一串`);
+  }
+  if (db.bullets.length !== 0) {
+    errors.push(`空转 30 秒打出了 ${db.bullets.length} 发：fire 里「没有目标就返回 false」那道门没生效，等于在给空气上弹药`);
+  }
+}
+{
+  const t = turretFixture();
+  const db = turretStub([]);
+  pumpTurret(t, db, 30);                            // 先空转到钉满
+  db.enemys.push({ x: 100, y: 0, radius: 10, isDead: false });
+  pumpTurret(t, db, 0.5);                            // 怪进圈之后的第一帧
+  if (db.bullets.length !== 1) {
+    errors.push(`空转 30 秒后放进一只怪，第一帧打出了 ${db.bullets.length} 发（应 1）：要么钉回的 cdT 没钉、积压的那几拍被一次补完，要么一进圈根本没开火`);
+  }
+  if (t.x !== 0 || t.y !== 0) {
+    errors.push(`打过几发之后炮台挪到了 (${t.x}, ${t.y})：它买的就是「站在原地」，任何跟随逻辑都是把这件道具写成第四只跟班`);
+  }
+  let steps = 0;
+  while (db.bullets.length < 2 && steps < 60) { pumpTurret(t, db, 0.5); steps++; }
+  const gapMs = steps * 500;
+  if (!(gapMs >= TURRET_CD && gapMs - 500 < TURRET_CD)) {
+    errors.push(`两发之间的实测间隔 ${gapMs} 毫秒没落在 ${TURRET_CD} 那一拍上（上一档 ${gapMs - 500}）：冷却门或开火后的归零有一条写歪`);
+  }
+}
+{
+  // ★池里捞出来的必须是一颗「别人用过的」弹：Bullet.init 重置 radius/color/pierce/burn，唯独不碰 maxRange，
+  //   漏赋这一行不会报错，只会让炮弹按上一发的射程飞
+  const stale = new Bullet();
+  stale.maxRange = 9999;
+  const t = turretFixture();
+  const db = turretStub([{ x: 0, y: -100, radius: 10, isDead: false }], { getItemByClass: () => stale });
+  pumpTurret(t, db, 1.5);                            // 0.5×3 帧：第三帧 cdT 攒到 1500 ≥ TURRET_CD
+  const b = db.bullets[0];
+  if (!b) {
+    errors.push('目标在正上方 100 像素处却一发没打：索敌那条平方距离比较写歪了');
+  } else {
+    if (b.maxRange !== TURRET_RANGE + BULLET_RANGE_BUFFER) {
+      errors.push(`炮弹射程 = ${b.maxRange}（应 ${TURRET_RANGE + BULLET_RANGE_BUFFER}）：这一行漏赋，弹继承的是上一发那位主人的 9999`);
+    }
+    if (b.radius !== TURRET_BULLET_RADIUS || b.color !== TURRET_BULLET_COLOR) {
+      errors.push(`炮弹外观 = r ${b.radius} / ${b.color}（应 ${TURRET_BULLET_RADIUS} / ${TURRET_BULLET_COLOR}）：三种弹要是同色同粗，画面上就分不出这发是谁打的`);
+    }
+    if (b.damage !== turretDamage(26)) {
+      errors.push(`攻 26 的单发伤害 = ${b.damage}（应 ${turretDamage(26)}）：开火方和详情页必须共用 turretDamage 那一个函数`);
+    }
+    // 出膛点在炮口（枢轴正上方 TURRET_MUZZLE_LEN），不是炮台中心：从中心出弹会让第一帧就吃掉一截射程。
+    // ★纵向基准必须是枢轴：炮口绕的是颈部那圈金环，而金环不在贴图正中（TURRET_PIVOT_Y）
+    const muzzleY = TURRET_PIVOT_Y - TURRET_MUZZLE_LEN;
+    if (Math.abs(b.x) > 1e-6 || Math.abs(b.y - muzzleY) > 1e-6) {
+      errors.push(`炮弹出膛点 = (${b.x.toFixed(2)}, ${b.y.toFixed(2)})（应 0 / ${muzzleY}）：没按炮口出膛、纵向基准用成了贴图中心，或者朝向那一路算歪了`);
+    }
+  }
+}
+if (turretDamage(0) !== 1) errors.push(`攻 0 时单发 = ${turretDamage(0)}（应 1）：保底没兜住，纯检这条路会打出 0 伤害的弹`);
+if (turretDamage(26) !== 23) errors.push(`攻 26 时单发 = ${turretDamage(26)}（应 23 = floor(26 × 0.9)）：改 TURRET_DAMAGE_RATIO 要连这条期望一起改，它是「一座 ≈ 一层射击跟班」那笔算术的凭据`);
+
 // —— 血瓶实场断言：两端都要钉住 ——
 if (VIAL === 0 && (maxVials || vialIn || vialOut)) {
   errors.push(`血瓶 0 层却量到场上 ${maxVials} 只、进账 ${vialIn} 滴、出账 ${vialOut} 滴：0 层这道门没关掉，「没这个道具」的局也在跑新代码`);
@@ -1029,6 +1203,35 @@ if (VIAL > 0 && vialExpectGain > 0 && vialIn < vialExpectGain) {
 if (VIAL > 0 && vialExpectGain > 0 && vialOutTicks === 0) {
   errors.push(`血瓶 ${VIAL} 层攒到峰值 ${vialDropsPeak} 滴却一次都没输送过：残血时那第二条节拍没跑（站桩 bot 全程满血？那这一组量不到输送，换 VIAL 之外再垫一次伤害）`);
 }
+
+// —— 炮台实场断言 ——
+// 世界跑到的时刻：玩家一死 main.js 就不再驱动 databus.update，此后 cdT 停在原地
+const turretAlive = gameOverAt < 0 ? frames * DT : gameOverAt;
+const turretActiveMs = turretOnAt < 0 ? 0 : (turretAlive - turretOnAt) / DT * Math.round(DT * 1000);
+// ★上界用 17 毫秒而不是 DT 的 16.667：main.js 的 dt 取自 stub 的 Date.now，而 step() 每帧把那只表拨 +Math.round(DT*1000)
+const turretShotBound = (Math.floor(turretActiveMs / TURRET_CD) + 1) * maxTurrets;
+const turretUtil = turretShotBound ? `${(turretShots / turretShotBound * 100).toFixed(0)}%` : '—';
+if (TURRET === 0 && (maxTurrets || turretShots)) {
+  errors.push(`炮台 0 层却量到场上 ${maxTurrets} 座、开火 ${turretShots} 发：0 层这道门没关掉，「没这个道具」的局也在跑新代码`);
+}
+// 局太短就还没落座（台子延到 TURRET_AT 秒才给层数），下面这几条要分叉掉，免得把延时读成回归
+if (TURRET > 0 && turretOnAt < 0) {
+  console.log(`炮台这局没量到：跑 ${seconds} 秒 < 落座时刻 ${TURRET_AT} 秒，座数与开火两条实场断言跳过`);
+}
+// ★这条不许照抄上面血瓶那条的 === 1：这一种的口径就是不封顶，一层一座。
+//   谁把 databus 那个 while 写成「封顶一只」，金匣开出第 2 层就静默吞掉一座
+if (TURRET > 0 && turretOnAt >= 0 && maxTurrets !== TURRET) {
+  errors.push(`炮台钉成 ${TURRET} 层，场上峰值却只到 ${maxTurrets} 座：生成条件被写成了封顶一只、加了上限，或者 player.turrets 那条属性名断了`);
+}
+if (TURRET > 0 && turretOnAt >= 0 && turretShots === 0) {
+  errors.push(`炮台 ${maxTurrets} 座、落座后又跑了 ${(turretActiveMs / 1000).toFixed(0)} 秒却一发未出：fire 的索敌、子弹入列或 databus 那条 update 循环有一条没通`);
+}
+// 节拍上界从「场上有座子之后世界跑了多久」推，不从观测沿推：★旧写法拿「到点次数」当分母，
+//   而连着打的座子分子分母一起漏，漏得最凶的那种写法（每帧都开火）恰好最不容易被看见
+if (turretShots > turretShotBound) {
+  errors.push(`开火 ${turretShots} 发超出节拍上界 ${turretShotBound}（落座后 ${(turretActiveMs / 1000).toFixed(0)} 秒 × ${maxTurrets} 座 ÷ 每 ${TURRET_CD} 毫秒一拍）：有炮弹在没到拍的时候被打出去了`);
+}
+// 远处的座子到点却一发没打是正确行为（它那一圈里就是没怪），所以利用率只做软读数、写在报表里，不硬断言
 
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
 // 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
@@ -1056,7 +1259,17 @@ const worstGap = chestGaps.length ? Math.max(...chestGaps) : 0;
 const avgGap = chestGaps.length ? chestGaps.reduce((a, b) => a + b, 0) / chestGaps.length : 0;
 // 掷骰粒度是 1 秒，所以保底触发时的真实间隔允许比 CHEST_PITY 多出这个零头
 const gapCeiling = CHEST_PITY / 1000 + 1.5;
-if (!chestStamps.length) errors.push(`${seconds}s 内一只金匣都没刷出：概率那条路径根本没跑`);
+if (!chestStamps.length) {
+  // ★「一只都没出」本身不是回归：0 幸运是每秒 4%，一局 60 秒里门在第 5 秒才开，
+  //   全空这一支尾概率 ≈ 0.96^55 ≈ 10%，而 CHEST_PITY 那条 60 秒保底正好落在窗口外、兜不到。
+  //   要钉的是掷骰那条计时器真的在走：chestSinceLast 能一路涨就说明门开了、累加在跑，
+  //   只是骰子没命中；它压根没动才是 spawner 那段接线断了
+  if (chestRollMax < CHEST_FIRST_ROLL * 1000) {
+    errors.push(`${seconds}s 内金匣一只没刷出，且掷骰计时只走到 ${(chestRollMax / 1000).toFixed(1)} 秒（首掷门在 ${CHEST_FIRST_ROLL}s）：概率那条路径根本没跑`);
+  } else {
+    console.log(`${seconds}s 内一只金匣都没刷出，但掷骰计时走到了 ${(chestRollMax / 1000).toFixed(1)} 秒：门开着、骰子没命中（0 幸运 4%/秒的天然尾概率，约 10%），不是回归`);
+  }
+}
 if (chestStamps[0] < CHEST_FIRST_ROLL) {
   errors.push(`金匣在第 ${chestStamps[0].toFixed(1)}s 就出现了，早于首次掷骰 ${CHEST_FIRST_ROLL}s`);
 }
@@ -1412,7 +1625,7 @@ function vesicleRun(offset) {
   const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
   // 一刀切写 3 不行：count 是各格自己的口径（子弹数从 1 起算、拾取范围存的是像素），
   // 全写 3 会让 pickupRange 算出负层数、被 ownedItems 当"没拾取过"滤掉，那一行就永远扫不到
-  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170, leech: 3, vial: 3 };
+  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, turrets: 3, burnBullets: 3, pickupRange: 170, leech: 3, vial: 3 };
   for (const k in OWNED) probe[k] = OWNED[k];
   probe.shieldBroken = 0;
   databus.player = probe;
@@ -1433,6 +1646,18 @@ function vesicleRun(offset) {
 }
 const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
 if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
+
+// —— 详情页排版守门：这一条在今天不报错（10 行实测底边 755 / 屏高 844），它是给未来的第 11、12 种守的门。
+//   ★ROW_H 是死的、行数是活的：加一种就是把整张卡片往下顶 50 像素，顶穿屏幕不是崩、是「点开就关不掉」
+{
+  const L = databus.pauseScreen.layout(ITEM_BAR);
+  if (L.y + L.h > canvasH) {
+    errors.push(`详情页 ${ITEM_BAR.length} 行的卡片底边 ${Math.round(L.y + L.h)} 掉出屏幕 ${canvasH}：加行数之前先给这一页做滚动或分栏`);
+  }
+  if (L.btn.y + L.btn.h > canvasH) {
+    errors.push(`详情页「继续战斗」按钮底边 ${L.btn.y + L.btn.h} 掉出屏幕 ${canvasH}：玩家点开这一页就回不去战斗`);
+  }
+}
 
 // —— 注册面扫描：这一节专治静默失效。漏一处不是崩，是 HUD 少一格、或者开箱有 toast 而什么都不涨
 {
@@ -1455,7 +1680,9 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     if (!themeSrc.includes(`case '${t.glyph}'`)) errors.push(`theme.js 的 itemGlyph 没有 '${t.glyph}' 分支：HUD 上它会被画成普通白圈`);
     if (!pauseSrc.includes(`case '${t.glyph}'`)) errors.push(`pause.js 的 describe 没有 '${t.glyph}' 分支：详情页那一行的说明是空的`);
   }
-  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js')]) {
+  // ★turret.js 进的是这一组（连 Date.now( 都不许出现），不是下面那组纯显示体：它会开火，
+  //   读墙上时钟的后果是三选一面板一关就补出积压的那几发，而这条链上的每一发都是真伤害
+  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js'), path.join('player', 'turret.js')]) {
     const s = src(rel);
     // 读墙上时钟会在三选一面板期间偷跑（main.js 那时跳过 databus.update），面板一关就连发
     if (s.includes('Date.now(')) errors.push(`${rel} 里出现 Date.now(：计时必须按 dt 累加`);
@@ -1528,7 +1755,7 @@ console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${B
   `| enraged ${twinsEnraged ? 'yes' : 'no'} (throwCd 平时 ${twinsPlainCd || '-'} → 激怒 ${twinsRageCd === Infinity ? '-' : twinsRageCd.toFixed(0)})`,
   `| blast ${fieldBlastCalls} 次 共 ${fieldBlastDmg} 点`);
 console.log('mutant (chance=' + MUTANT_CHANCE + '):', fieldMutants, 'spawned /', mutantDeaths, 'killed /', fieldDrops,
-  'clots, field peak', fieldPeak, '| eaten in main loop:', clotEats,
+  'clots（磁吸内', fieldDropsNear, '）, field peak', fieldPeak, '| eaten in main loop:', clotEats,
   `| pure: 满血${clotFull.clot.collected ? '照吃' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);
 console.log('leech (stacks=' + LEECH + ', chance=' + LEECH_CHANCE + '):', leechCalls, 'calls /', leechProcs,
   'procs /', leechHp, 'hp back (clamp-aware expect ' + leechRoom + ')',
@@ -1538,6 +1765,16 @@ console.log('vial (stacks=' + VIAL + ', gain=' + VIAL_SEC + 's, out=' + VIAL_OUT
   vialIn, 'in /', vialOut, 'out over', vialOutTicks, 'ticks | peak drops', vialDropsPeak, '| entity peak', maxVials,
   `| 存活 ${vialAlive.toFixed(0)}s ≈ 自增 ${vialExpectGain} 滴`,
   `| pure: 1层${vialGain1.vialDrops} 3层${vialGain3.vialDrops} 输送${vialPour.vialDrops}/${vialPour.hp} 欠债${vialDebt.vialDrops}/${vialDebt.hp} 到空${vialDrain.vialDrops}/${vialDrain.hp}`);
+// ★报表行必须读出 TURRET 开关：off 那趟要把「两个读数都该是 0」直接印出来，
+//   否则未来会话看到一行空字段分不清是回归还是这台子压根没开这个道具
+console.log('turret (' + (TURRET === 0 ? 'TURRET=0 → off' : `stacks=${TURRET}, cd=${TURRET_CD / 1000}s, range=${TURRET_RANGE}, 落座 ${TURRET_AT}s`) + '):',
+  TURRET === 0 ? `场上 ${maxTurrets} 座 / 开火 ${turretShots} 发（这条要两个都是 0）`
+    : `座 ${maxTurrets} / 发 ${turretShots}（节拍利用率 ${turretUtil}，上界 ${turretShotBound}）`,
+  `| 单发 ${turretDamage(26)} @攻26`,
+  `| 索敌开销峰值 座×怪 ${turretScanPeak}`,
+  `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`
+  + ` / 首只 Boss 死于 ${firstBossDeathAt < 0 ? '未出现' : `${firstBossDeathAt.toFixed(0)}s`}`,
+  '| ★台子把几座全落在同一格（bot 走到角落就停，那里正是怪流的中心）→ 这条读的是 DPS 上界；真局里匣子摊在跑过的那条路上，老座子多半在空转');
 console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
   '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,

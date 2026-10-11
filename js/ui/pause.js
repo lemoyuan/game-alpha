@@ -1,6 +1,8 @@
 import {
   canvasW, canvasH, HUD_TILE, PIERCE_DAMAGE_FALLOFF, PLAYER_INVINCIBLE,
-  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage, BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT, XP_PICKUP_RANGE,
+  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage,
+  TURRET_CD, TURRET_RANGE, turretDamage,
+  BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT, XP_PICKUP_RANGE,
 } from '../consts';
 import { safeTop } from '../render';
 import { CHEST_KIND_BY_ID } from '../npc/monster/config';
@@ -24,6 +26,8 @@ function describe(item, player) {
     case 'vial': return `每 ${VIAL_GAIN_CD / 1000} 秒存 ${player.vial} 滴，满血时溢出的回血也进瓶；现有 ${player.vialDrops} 滴，残血时每 ${VIAL_OUT_CD / 1000} 秒送 ${VIAL_OUT} 滴`;
     case 'companions': return `1 个跟班一轮射出 ${player.companions} 发，${COMPANION_ATK_SPEED} 次/秒，伤害为角色的 ${COMPANION_DAMAGE_RATIO * 100}%，不会被攻击`;
     case 'bomber': return `1 个跟班每 ${BOMB_CD / 1000} 秒往最密的一团扔 ${player.bomber} 枚，单枚 ${bombDamage(player.attack)} 点，爆风半径 ${BOMB_BLAST_R} 像素`;
+    // ★座数直接报 player.turrets：这一种层数买的就是「场上几座」，不像两条跟班那样要换算成「一轮几发」
+    case 'turrets': return `脚下留着 ${player.turrets} 座固定炮台，每 ${TURRET_CD / 1000} 秒向 ${TURRET_RANGE} 像素内最近的一怪开一炮，单发 ${turretDamage(player.attack)} 点，不跟着你走也不会被打掉`;
     case 'burnBullets': return `命中点燃 ${BURN_HOLD / 1000} 秒，每 ${BURN_TICK / 1000} 秒跳一次血，每跳 ${item.n * BURN_DMG} 点，再命中只刷新时长`;
     case 'pickupRange': return `经验宝石在 ${player.pickupRange} 像素内自动飞向你（初始 ${XP_PICKUP_RANGE}）`;
     default: return (CHEST_KIND_BY_ID[item.id] || {}).brief || '';

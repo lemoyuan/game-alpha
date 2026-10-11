@@ -36,6 +36,8 @@ export default class Player extends Sprite {
     this.shieldBroken = 0;              // 本局被打破的护盾层数，只增不减：shield + shieldBroken 才是「拾取过几层」（HUD 道具格用）
     this.companions = 0;                // 射击跟班每轮发数（宝箱：跟班+1）：★场上恒为一只，层数加的是「一次齐射几发」，不是跟班只数
     this.bomber = 0;                    // 炸弹跟班层数（宝箱：炸弹跟班+1）：场上只有一只，层数 = 一轮扔几枚。节奏与爆风在 consts.js 的 BOMB_CD/BOMB_BLAST_R
+    this.turrets = 0;                   // 场上炮台座数（宝箱：炮台+1，一层一座、不封顶）。★和上面两条跟班相反：这里层数买的是「几只」而不是「一轮几发」，
+                                        //   因为那两条的前提是实体只有一个位置，而炮台的位置就是它的内容（落位由 databus 观察这个数来做）
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变

@@ -2,6 +2,7 @@ import Pool from './base/pool';
 import Companion from './player/companion';
 import Bomber from './player/bomber';
 import BloodVial from './player/bloodVial';
+import Turret from './player/turret';
 import DamageText from './fx/damageText';
 import { settings } from './storage';
 import { DAMAGE_TEXT_MAX } from './consts';
@@ -39,6 +40,10 @@ export default class DataBus {
     this.companions = [];
     this.bombers = [];    // 炸弹跟班（金匣第 7 种加成）：与 companions 同一条规矩，场上封顶一只，层数加的是每轮枚数
     this.vials = [];      // 血瓶跟随体（金匣第 9 种加成）：同样封顶一只，层数加的是每 30 秒攒几滴；它只把存量画成液面，节拍在 Player.pumpVial
+    // 炮台（金匣第 10 种加成）：★不封顶，player.turrets 是几就落几座，位置本身就是这件道具的内容。
+    // ★必须写在 reset() 而不是构造函数：DataBus 是单例，漏了这一行会带着上一局的几座继续开火，
+    //   而新一局 player.turrets 从 0 起、生成条件永不成立，headless 又只开一局 —— 这个错一个字都不会报错
+    this.turrets = [];
     this.bombs = [];      // 在飞的炸弹：一枚两阶段（抛物线飞行 → 落点引爆），爆风不另开列表、画在这同一条实体上
     // 双子 Boss 在飞的囊泡：与 bombs 同形（继承 Bomb 的抛物线与爆风），但必须自己一条列表。
     // ★上面那句「不再加列表」在这里破例的原因：headless 的 thrown / booms / 「一轮几枚」三条断言
@@ -93,10 +98,21 @@ export default class DataBus {
         vial.y = this.player.y;
         this.vials.push(vial);
       }
+      // ★形状和上面三条不一样：那是「封顶一只」，这里一层就是一整座。
+      //   匣子那条裸 player.turrets += 1 不带坐标，所以落位只能在这里观察层数变化来做 ——
+      //   这一帧正好是角色站在匣子上被拾取的那一刻，炮台落在脚边 28px 内
+      while (this.turrets.length < this.player.turrets) {
+        const t = new Turret();
+        t.x = this.player.x;
+        t.y = this.player.y;
+        t.aim = Math.atan2(this.player.dirY, this.player.dirX);
+        this.turrets.push(t);
+      }
       for (const comp of this.companions) comp.update(dt, this);
       for (const p of this.bossPets) p.update(dt, this);
       for (const b of this.bombers) b.update(dt, this);
       for (const v of this.vials) v.update(dt, this);
+      for (const t of this.turrets) t.update(dt, this);
       this.player.update(dt, this);
     }
   }
