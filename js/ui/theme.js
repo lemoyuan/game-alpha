@@ -864,6 +864,37 @@ export function itemGlyph(ctx, key, cx, cy, s) {
         ctx.closePath();
       });
       break;
+    case 'vial': {
+      // 血瓶：细颈 + 圆底的一整条瓶身，靠底一截涂血。★主体必须是瓶形不是十字 —— leech 那格的主体就是
+      //   奶白粗十字，两格在同一条金盘上同形会长成一家（同炸弹跟班「同家庭第二成员要拉开剪影」那条教训）
+      // ★内部这一截红是本层的破例：其余剪影内部只用 ink。理由是存量是这件道具唯一的读数，而血块、
+      //   嗜血/回血红字、突变斑已经全是同一个 UI.blood，玩家一眼认得那是血；换成 ink 液面线在 17px 的盘上只会读成瓶身一道划痕
+      const nw = h * 0.2;   // 颈半宽
+      const by = h * 0.2;   // 球心
+      const br = h * 0.62;  // 球半径
+      const mouth = -h * 0.86;
+      const jy = by - Math.sqrt(br * br - nw * nw); // 颈侧与球面的交点：算出来，不写死角度
+      const path = () => {
+        ctx.beginPath();
+        ctx.moveTo(-nw, mouth);
+        ctx.lineTo(-nw, jy);
+        ctx.arc(0, by, br, Math.atan2(jy - by, -nw), Math.atan2(jy - by, nw), true); // 走远弧，短弧会把瓶口盖掉
+        ctx.lineTo(nw, mouth);
+        ctx.closePath();
+      };
+      path();
+      ctx.fillStyle = UI.cream;
+      ctx.fill();
+      ctx.save();
+      path();
+      ctx.clip();
+      ctx.fillStyle = UI.blood;
+      ctx.fillRect(-h, by + br * 0.22, h * 2, br); // 液面落在球心略偏上：再多就把整个球灌满、少了就看不出瓶里有东西
+      ctx.restore();
+      path();
+      ctx.stroke(); // 描边放最后：先描的话红面会啃掉轮廓的内半条，瓶底那圈会忽然变细
+      break;
+    }
     default:
       icon(ctx, key, 0, 0, s, { color: UI.cream });
       break;

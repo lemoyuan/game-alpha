@@ -8,7 +8,7 @@ import {
   PLAYER_CRIT_RATE, PLAYER_CRIT_MULT, PLAYER_LUCK,
   BULLET_RANGE_BUFFER, SHOT_SPREAD, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
-  POISON_TICK, BURN_DMG, LEECH_CHANCE,
+  POISON_TICK, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
@@ -39,6 +39,10 @@ export default class Player extends Sprite {
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变
+    this.vial = 0;                      // 血瓶层数（宝箱：血瓶+1）：场上恒为一只瓶子，层数 = 每 VIAL_GAIN_CD 攒几滴。★节拍恒定，同燃烧/嗜血的口径
+    this.vialDrops = 0;                 // 瓶内存量（滴）。★无上限，是定过的口径：夹住它等于让满血时的溢出重新变成白扔，那正是这件道具要治的病
+    this.vialGainT = 0;                 // 距下一次自增的毫秒数（dt 累加，见 pumpVial）：不用 Date.now，三选一面板开着时要跟着冻住
+    this.vialOutT = 0;                  // 距下一次输送的毫秒数：只在「残血且瓶里有货」时才累加，其余时候钉回 0（否则一残血就连吐几滴）
     this.lastAttack = 0;                // 上次攻击时间戳（内部用）
     this.invincibleUntil = 0;           // 受击无敌截止时间戳（内部用）
     this.slowMult = 1;                  // 当前移速倍率（1 = 未被减速），由黏液洼写入 applySlow
@@ -73,6 +77,8 @@ export default class Player extends Sprite {
         this.poisonTickLeft = 0;
       }
     }
+
+    this.pumpVial(dt); // 和上面中毒同一条 dt 尺：面板开着时（main.js 跳过 update）两条一起冻住
 
     const dir = databus.joystick ? databus.joystick.getDirection() : { x: 0, y: 0 };
     let moveX = 0;
@@ -190,16 +196,22 @@ export default class Player extends Sprite {
     if (settings.vibrate) wx.vibrateShort({ type: 'heavy' });
   }
 
-  // 回血：唯一的一处血包入口（血块，见 npc/bloodclot.js），别让掉落方直接改 this.hp。
+  // 回血：唯一的一处血包入口（血块，见 npc/bloodclot.js；嗜血，见下面 onKill），别让掉落方直接改 this.hp。
   // 返回实际回复量而不是布尔——差 1 血时捡到一颗回 2 的血块，只该算回复了 1
+  // ★溢出这一段是血瓶唯一的进货口：两条来源都从这里过，所以「存几滴」只有一条公式，不会两边算歪。
+  //   this.vial > 0 必须显式判：没这件道具时浪费照旧吞掉（10-11 定的口径），也防住往 undefined 上 += 造出 NaN 存量
   heal(amount) {
     const before = this.hp;
     this.hp = Math.min(this.hp + amount, this.maxHp);
-    return this.hp - before;
+    const healed = this.hp - before;
+    const waste = amount - healed;
+    if (waste > 0 && this.vial > 0) this.vialDrops += waste;
+    return healed;
   }
 
   // 嗜血：击杀结算点（main.js 每确认一次击杀调一次）。返回实际回复量，0 表示这一杀什么都没回
-  // ★满血照掷、白白浪费是定过的口径：不判 hp < maxHp，也不留「存着下次再触发」的缓冲。
+  // ★满血照掷是定过的口径：不判 hp < maxHp，也不留「存着下次再触发」的缓冲。
+  //   这一下到底进不进瓶由 heal() 判（10-11 加了血瓶），onKill 这边不该多知道这件事
   //   唯一的短路是层数为 0 —— 那不是「满血浪费」，是这件道具还没拾取到，掷了连回多少都没有
   onKill(databus) {
     if (this.leech <= 0) return 0;
@@ -207,6 +219,38 @@ export default class Player extends Sprite {
     const healed = this.heal(this.leech);
     if (healed > 0) databus.addDamageText(this.x, this.y - this.radius, `+${healed}`, false, UI.blood);
     return healed;
+  }
+
+  // 血瓶（金匣第 9 种）两条节拍都在这儿，实体 js/player/bloodVial.js 只负责把存量画出来：
+  // 计时留在 player 身上才吃得到 main.js 那道 isPaused 门（面板开着时整条 update 被跳过），
+  // 挂在实体上就等于两套时钟，三选一期间瓶子照走、身上的不走的对不上账
+  pumpVial(dt) {
+    if (this.vial <= 0) return; // 没这层道具就整条短路：不空转两个累加器，也不会「将来捡到瓶子时瞬间吐出攒了几分钟的滴」
+    const ms = dt * 1000;
+
+    // 自增：满不满血都在攒，这是玩家口中的那句「每 30 秒血瓶 +1」，层数买的是每跳几滴
+    this.vialGainT += ms;
+    if (this.vialGainT >= VIAL_GAIN_CD) {
+      this.vialGainT -= VIAL_GAIN_CD; // 是减不是清零：掉帧攒出几秒时不许把余数扔掉，否则慢帧里这条 30 秒会越拖越长
+      this.vialDrops += this.vial;
+    }
+
+    // 输送只在「身上有缺口 且 瓶里有货」时走。★两个条件任一不成立都必须把 vialOutT 钉回 0：
+    //   累加排在这道门之后，所以满血期间它不会自己长，能留下的只有「挨打攒到一半的那几百毫秒」——
+    //   不清零的话下次残血第一口会提前冒出（最多提前整整一秒），玩家数的「一秒一口」就成了错觉
+    const full = this.hp >= this.maxHp;
+    const empty = this.vialDrops <= 0;
+    if (full || empty) {
+      this.vialOutT = 0;
+      return;
+    }
+
+    this.vialOutT += ms;
+    if (this.vialOutT < VIAL_OUT_CD) return;
+    this.vialOutT -= VIAL_OUT_CD;
+    const out = Math.min(VIAL_OUT, this.vialDrops, this.maxHp - this.hp);
+    this.vialDrops -= out;
+    this.heal(out); // 走 heal()：out 已按缺口夹过，heal 里的 waste 恒为 0，不会自己攒回自己
   }
 
   // 一次只结一级：面板关掉时 upgrade.js 会再调 addXp(0) 把溢出经验接着结算成下一张卡。

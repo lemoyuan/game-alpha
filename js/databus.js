@@ -1,6 +1,7 @@
 import Pool from './base/pool';
 import Companion from './player/companion';
 import Bomber from './player/bomber';
+import BloodVial from './player/bloodVial';
 import DamageText from './fx/damageText';
 import { settings } from './storage';
 import { DAMAGE_TEXT_MAX } from './consts';
@@ -37,6 +38,7 @@ export default class DataBus {
     this.chests = [];
     this.companions = [];
     this.bombers = [];    // 炸弹跟班（金匣第 7 种加成）：与 companions 同一条规矩，场上封顶一只，层数加的是每轮枚数
+    this.vials = [];      // 血瓶跟随体（金匣第 9 种加成）：同样封顶一只，层数加的是每 30 秒攒几滴；它只把存量画成液面，节拍在 Player.pumpVial
     this.bombs = [];      // 在飞的炸弹：一枚两阶段（抛物线飞行 → 落点引爆），爆风不另开列表、画在这同一条实体上
     // 双子 Boss 在飞的囊泡：与 bombs 同形（继承 Bomb 的抛物线与爆风），但必须自己一条列表。
     // ★上面那句「不再加列表」在这里破例的原因：headless 的 thrown / booms / 「一轮几枚」三条断言
@@ -85,9 +87,16 @@ export default class DataBus {
         bomber.y = this.player.y;
         this.bombers.push(bomber);
       }
+      if (this.player.vial > 0 && !this.vials.length) {
+        const vial = new BloodVial();
+        vial.x = this.player.x;
+        vial.y = this.player.y;
+        this.vials.push(vial);
+      }
       for (const comp of this.companions) comp.update(dt, this);
       for (const p of this.bossPets) p.update(dt, this);
       for (const b of this.bombers) b.update(dt, this);
+      for (const v of this.vials) v.update(dt, this);
       this.player.update(dt, this);
     }
   }

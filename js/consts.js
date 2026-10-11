@@ -85,6 +85,18 @@ export const LEECH_CHANCE = 0.005;  // 触发概率，唯一的调节旋钮。�
                                     //   所以概率只有这一个数、不随层数变，详情页那句「有 0.5% 几率回 N 点血」才始终成立。
                                     //   一局期望回血 ≈ kills × 本行 × 层数（实测 480 秒满 build 约 786 击杀 → 1 层约 4 口、3 层约 12 血）。
                                     //   调大它 = 回血从「偶尔一口」变成常态，玩家会开始主动挨一下再去杀一只换回来，那是另一种玩法
+
+// 血瓶（宝箱道具）：满血时溢出的回血存进瓶里；瓶子每 VIAL_GAIN_CD 自己再攒几滴；残血时每秒送 1 滴到身上
+export const VIAL_GAIN_CD = 30000;  // 自增节拍（毫秒）：每 30 秒 +层数 滴。★节拍恒定，层数买的是「每跳几滴」，同 BURN_DMG/嗜血 的口径
+                                    //   1 层 = 2 滴/分钟、3 层 = 6 滴/分钟；一局 15 分钟约 30/90 滴，而 maxHp 只有 40 ——
+                                    //   它真正的价值不是这条白送的水流，是把「满血时本该扔掉的那几口」变成有形状的储备
+export const VIAL_OUT_CD = 1000;    // 输送节拍：残血时每 1 秒送一次。★不随层数变，也不随 maxHp 变：玩家能预判「一秒一口」，
+                                    //   这个读得出的节拍就是这件道具的承诺本身，动它等于把储备变成第二条嗜血
+export const VIAL_OUT = 1;          // 每跳送几滴。单独成一个数：pumpVial 的夹取式同时读「节拍 / 每跳几滴 / 余额 / 缺口」四样，
+                                    //   留一个字面 1 会让「改输送速率」变成改逻辑
+export const VIAL_SPRITE = 'images/entity/vial.png'; // 血瓶跟随体贴图：奶沙色瓶身 + 深蓝描边 + 细颈圆肚，和 companion.png / bomber.png 同一批语言。★瓶里那一截血面不在这张图上，是代码按存量裁剪叠上去的（见 bloodVial.js）——它是读数，不是外观
+export const VIAL_SIZE = 22;        // 显示边长（逻辑像素）。★2026-10-11 出图后从 20 抬到 22：原本「小一圈」是给代码画的瓶形定的（它是容器、不是第三只会动作的跟班），换贴图后那条理由不成立了——实测这张图描边外沿横向只占画框 0.80、内腔只占 0.70，20 格下血面容器才 14px，而射击跟班的膜体 16.5、炸弹跟班的弹体 16，它会读成一件掉落物而不是跟班。22 格下内腔 15.5px，三只才视觉等大（同 BOMBER_SPRITE_SIZE 那条「显示边长相同≠视觉等大」的反向用法：这里要用的是外框相同、内腔更小，所以得抬一格）
+
 export const DAMAGE_TEXT_MAX = 160; // 伤害飘字并发上限。★这个数不是拍的：实测 480 秒满 build（bot 每帧抽卡、786 击杀）的并发峰值是零燃烧 120 条、三层燃烧 112 条。曾经按 60 定，结果常态吃掉约 4% 的伤害数字，热闹时段普攻会「不掉字」；按 120 定又刚好压在零燃烧那条尾巴上，最热的几帧照样丢字。它只该兜失控，不该参与常态调度
 
 export const XP_BASE = 10;              // 经验曲线基数
@@ -151,18 +163,20 @@ export const UPGRADES = [
   { key: 'luck',     label: '幸运值',   desc: '+1',   value: 1, icon: 'clover', tint: 'mint' },
 ];
 
-// 战斗 HUD 右侧道具栏与暂停详情页共用的花名册：只列金匣那七种加成，Boss 专属匣由 hud.js 现从
-// BOSS_CHESTS 算（以后加匣只动 config 表，这里不用跟）。glyph 见 js/ui/theme.js 的 itemGlyph
+// 战斗 HUD 右侧道具栏与暂停详情页共用的花名册：只列金匣那几种加成（与 npc/chest.js 的 BONUSES 一一对应，
+// headless 的注册面扫描会硬比两边条数），Boss 专属匣由 hud.js 现从 BOSS_CHESTS 算（以后加匣只动 config 表，这里不用跟）。
+// glyph 见 js/ui/theme.js 的 itemGlyph
 // ★count 返回的是「拾取了几层」而不是属性值本身：子弹数从 1 起算、拾取范围存的是像素，
 //   直接拿属性值当角标会让 0 层的道具也显示一个数字，而且 1 层和 2 层看起来一样
-// ★只有护盾要把破掉的层数加回来：它是全部加成里唯一会被消耗的一种，读裸值会让这一格在你挨第一下时
-//   整块消失、右边几格跟着集体左移，而这正是 HUD 上最不该跳版的一栏
+// ★只有护盾要把破掉的层数加回来：它是全部加成里唯一会被消耗「层数」的一种，读裸值会让这一格在你挨第一下时
+//   整块消失、右边几格跟着集体左移，而这正是 HUD 上最不该跳版的一栏（血瓶消耗的是瓶里存量、不是层数，所以不在这儿）
 export const ITEM_BAR = [
   { glyph: 'bulletCount', name: '子弹数', color: 'gold', count: (p) => p.bulletCount - 1 },
   { glyph: 'pierce', name: '穿透', color: 'gold', count: (p) => p.pierce },
   { glyph: 'shield', name: '护盾', color: 'gold', count: (p) => p.shield + p.shieldBroken },
-  // 紧跟护盾：这两格都是「活下来」的道具，挨在一起才看得出分工 —— 一个挡掉那一下，一个把血补回来
+  // 紧跟护盾：这三格都是「活下来」的道具，挨在一起才看得出分工 —— 一个挡掉那一下，一个把血补回来，一个把补不完的血存着
   { glyph: 'leech', name: '嗜血', color: 'gold', count: (p) => p.leech },
+  { glyph: 'vial', name: '血瓶', color: 'gold', count: (p) => p.vial },
   { glyph: 'companions', name: '跟班', color: 'gold', count: (p) => p.companions },
   // 紧跟在跟班后面：两种跟班挨在一起，HUD 上才看得出「一个打枪的、一个扔弹的」是两件事
   { glyph: 'bomber', name: '炸弹跟班', color: 'gold', count: (p) => p.bomber },

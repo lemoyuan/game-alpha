@@ -24,9 +24,9 @@ export default class BloodClot extends Sprite {
   update(dt, databus) {
     const player = databus.player;
     if (!player) return;
-    // ★满血时既不磁吸也不吞：开局就是满血（PLAYER_MAX_HP），要是在这儿也收掉，
-    //   第一颗血块几乎必然白送——而两秒后玩家可能就残血了。留在原地当备用的血包
-    if (player.hp >= player.maxHp) return;
+    // ★满血也照吃、也照吸（10-11 改的口径）：原来这里整块 return 是为了不把开局第一颗血块白送，
+    //   但血瓶进来之后「身上放不下的血」本身就有了去处，留一颗在原地当备用血包反而把那条通道堵死了。
+    //   没捡到血瓶的玩家仍然纯浪费——那是没道具的应有代价，不该由这颗血块来兜
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
@@ -37,12 +37,10 @@ export default class BloodClot extends Sprite {
       this.y += (dy / dist) * speed * dt;
     }
     if (dist < player.radius + this.radius) {
+      this.collected = true;
       const healed = player.heal(this.value);
-      // 回复量为 0 就不收：宁可让它继续躺在场上，也不要吃掉一颗而什么都不给
-      if (healed > 0) {
-        this.collected = true;
-        databus.addDamageText(this.x, this.y, `+${healed}`, false, UI.blood);
-      }
+      // 飘字只在身上真回了血时才画：溢出去的那一截进了瓶子，在脚下冒一个「+2」的红字是假反馈
+      if (healed > 0) databus.addDamageText(this.x, this.y, `+${healed}`, false, UI.blood);
     }
   }
 

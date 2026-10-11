@@ -221,6 +221,7 @@ $jobs = @(
   @{ prefix = 'player_idle'; logical = 42 },
   @{ prefix = 'companion';   logical = 22 }, # display size = COMPANION_SPRITE_SIZE in js/consts.js (hit radius stays 8)
   @{ prefix = 'bomber';      logical = 22 }, # display size = BOMBER_SPRITE_SIZE in js/consts.js (same hit radius 8)
+  @{ prefix = 'vial';        logical = 22 }, # display size = VIAL_SIZE in js/consts.js. Same frame as companion/bomber on purpose: this flask body only fills 0.73 of the frame (interior 0.70), so a smaller frame would render it as loot, not as the third follower. The red liquid level is code-clipped inside the measured interior, never baked into the art.
   @{ prefix = 'mob_basic';   logical = 28 },
   @{ prefix = 'mob_fast';    logical = 20 },
   @{ prefix = 'mob_tank';    logical = 44 },

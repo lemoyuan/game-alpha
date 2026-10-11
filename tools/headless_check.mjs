@@ -216,7 +216,7 @@ const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js'
 const {
   BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX,
   BOMB_CD, BOMB_BLAST_R, BOMB_BLAST_MS, BOMB_H_SPEED, BOMB_FLY_MIN, BOMB_FLY_MAX, bombDamage,
-  ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE,
+  ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
@@ -224,6 +224,7 @@ const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).de
 // 这几件实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
 const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).default;
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
+const BloodVial = (await import(fileUrl(path.join(COPY, 'player', 'bloodVial.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
 const Vesicle = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'vesicle.js')))).default;
@@ -288,6 +289,15 @@ let leechProcs = 0;     // 实际回了血（返回值 > 0）的次数
 let leechHp = 0;        // 累计回复量
 let leechRoom = 0;      // 按「一口 = 层数、封顶取剩余额」应得的回复量：现场那 4 点缺口会被同帧多杀吃掉，
 let leechRoomProcs = 0; //   所以断言比的是这两个「算得出来的期望」，不是一句 procs === kills
+// 血瓶层数同样钉成单变量：金匣九选一里就有它，不吞掉写入的话 VIAL=0 那趟照样会长出层数，
+// 那条「关掉等价式」根本量不出来。★存量 vialDrops 不钉 —— 它正是这一组要量的因变量
+const VIAL = Number(process.env.VIAL || 0);
+let maxVials = 0;      // 场上血瓶只数峰值：★恒应为 1，长到 2 就是「层数当只数」回潮
+let vialDropsPeak = 0; // 存量峰值：无上限那条口径的凭据，也是「液面钉满」那一段的触发依据
+let vialIn = 0;        // 进账累计（自增 + 满血时的溢出），按 vialDrops 的上涨沿计
+let vialOut = 0;       // 出账累计（输送到身上的滴数），按 vialDrops 的下降沿计
+let vialOutTicks = 0;  // 出账发生在哪几帧：每 VIAL_OUT_CD 一次，这个数就是「输送这条路真跑过几次」
+let prevVialDrops = 0; // 上一帧存量：进账/出账都靠这一帧的差值，不钩 pumpVial（钩了会把纯检那几条一起计进账）
 let volleyRounds = 0;      // 跟班齐射轮数
 const volleySizes = new Set(); // 每轮实际新增的子弹数：只应有一个取值且等于层数
 let bombsThrown = 0;   // 扔出的枚数（按 Bomb.init 计，一轮 player.bomber 枚）
@@ -486,7 +496,9 @@ for (let i = 0; i < frames; i++) {
   //   将来谁把这两个数调回去、玩家因此在双子倒下之前死掉，下面第二条空跑防护会直接报错，不要回到这里加 crutch
   // ★开了 LEECH 时把每帧的回满改成「留 4 点缺口」：血每次都是满的话 heal() 恒返回 0，
   //   现场读数会永远是 0，而那个 0 和「功能根本没接上」长得一模一样
-  if (p) p.hp = LEECH > 0 ? p.maxHp - 4 : p.maxHp;
+  // VIAL 同理：输送那条节拍只在「残血」时才走，全程钉满的话 vialOutTicks 恒为 0，
+  //   而这份 0 和「pumpVial 压根没接上」同样分不开
+  if (p) p.hp = (LEECH > 0 || VIAL > 0) ? p.maxHp - 4 : p.maxHp;
   if (p) p.luck = LUCK; // 金匣概率是幸运的单变量函数，钉住它才谈得上量间隔
   // 燃烧层数不能照抄 luck 那种「每帧顶部赋值」：金匣的 player[key] += step 就发生在同一帧的
   // chests.update 里、排在 player.update 之前，赋值会漏出一帧。漏出不要紧，燃烧能在怪身上烧满 5 秒，
@@ -513,6 +525,13 @@ for (let i = 0; i < frames; i++) {
   if (p && !p.__leechPinned) {
     p.__leechPinned = true;
     Object.defineProperty(p, 'leech', { configurable: true, get: () => LEECH, set: () => {} });
+  }
+  // 血瓶层数同理钉死。★顺带在这一帧重新播种 prevVialDrops：这一段只在一个新 player 上跑一次，
+  //   而存量属于那个新对象；不播种的话跨局那一下「存量从 N 掉回 0」会被下面的差值计成一笔出账
+  if (p && !p.__vialPinned) {
+    p.__vialPinned = true;
+    Object.defineProperty(p, 'vial', { configurable: true, get: () => VIAL, set: () => {} });
+    prevVialDrops = p.vialDrops;
   }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
@@ -669,6 +688,21 @@ for (let i = 0; i < frames; i++) {
   }
   if (databus.bombs.length > maxBombs) maxBombs = databus.bombs.length;
   if (databus.bombers.length > maxBombers) maxBombers = databus.bombers.length;
+  if (databus.vials.length > maxVials) maxVials = databus.vials.length;
+  for (const v of databus.vials) {
+    // 座次那条 lerp 一旦喂进非有限的朝向，瓶子会凭空从画面上消失（同 boss pet 那条的理由）
+    if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) errors.push('血瓶坐标出现非有限值');
+  }
+  // 存量按帧间差值记账：进账 = 上涨沿（自增 + 满血时的溢出，两者在实场分不开，精确拆分交给下面的纯检），
+  // 出账 = 下降沿（只有 pumpVial 的输送会减它）
+  const vd = p ? p.vialDrops : 0;
+  const vDelta = vd - prevVialDrops;
+  prevVialDrops = vd;
+  if (!Number.isFinite(vd)) errors.push(`瓶内存量出现非有限值 ${vd}：heal() 大概往 undefined 上加过数`);
+  if (vd < 0) errors.push(`瓶内存量出现负数 ${vd}：输送没按余额夹取，无上限那条口径被写歪了`);
+  if (vDelta > 0) vialIn += vDelta;
+  else if (vDelta < 0) { vialOut += -vDelta; vialOutTicks++; }
+  if (vd > vialDropsPeak) vialDropsPeak = vd;
   if (databus.companions.length > companionPeak) companionPeak = databus.companions.length;
   for (const b of databus.bombs) {
     // z 是抛物线算出来的视觉高度，它一旦非有限，落影与弹体会在同一帧双双消失
@@ -796,11 +830,14 @@ if (fieldDrops > 0 && clotEats <= 0) {
   errors.push(`掉了 ${fieldDrops} 颗血块却一颗都没被吃掉：主循环里那条回血路径没接上（纯检过了不代表 databus/main 通了）`);
 }
 
-// —— 血块纯检：回多少、差 1 血时的封顶、满血那道门。这三条实场读不出数值（回血主循环里量不到具体加了几）
-function clotRun(hp, maxHp, dist) {
+// —— 血块纯检：回多少、差 1 血时的封顶、满血时「照吃但进瓶」。这几条实场读不出数值（回血主循环里量不到具体加了几）
+function clotRun(hp, maxHp, dist, vial = 0) {
   const player = Object.create(Player.prototype);
   player.x = 0; player.y = 0; player.radius = 14; player.pickupRange = 90;
   player.hp = hp; player.maxHp = maxHp;
+  // ★手搓的 player 没有 Player 构造期那些血瓶自有属性，必须显式给：heal() 要读 vial 判「进不进瓶」，
+  //   不给就是 undefined，那条 if 恰好为假、测试通过，但量的其实不是「0 层」而是「字段不存在」
+  player.vial = vial; player.vialDrops = 0; player.vialGainT = 0; player.vialOutT = 0;
   const texts = [];
   const db = { player, addDamageText(x, y, damage, isCrit, color) { texts.push({ damage, color }); } };
   const clot = new BloodClot();
@@ -810,12 +847,20 @@ function clotRun(hp, maxHp, dist) {
   return { player, clot, texts, moved: Math.hypot(clot.x - sx, clot.y - sy) };
 }
 const clotFull = clotRun(40, 40, 10);      // 满血，而且已经贴到接触距离里了
+const clotFullBank = clotRun(40, 40, 10, 1); // 同样满血、但有 1 层血瓶：那一整颗该变成瓶里的两滴
 const clotHurt = clotRun(20, 40, 10);      // 残血，接触即回
-const clotEdge = clotRun(39, 40, 10);      // 只差 1 血：吃一颗回 2 的，应该只结算 1
+const clotEdge = clotRun(39, 40, 10, 1);   // 只差 1 血、带血瓶：吃一颗回 2 的，身上结 1、瓶里存 1
 const clotNear = clotRun(20, 40, 60);      // 在磁吸半径内、还没碰上
 const clotFar = clotRun(20, 40, 120);      // 磁吸半径外：该一动不动
-if (clotFull.clot.collected || clotFull.player.hp !== 40 || clotFull.moved !== 0 || clotFull.texts.length) {
-  errors.push(`满血时那颗血块被吃了/被吸动了（collected=${clotFull.clot.collected} moved=${clotFull.moved.toFixed(1)}）：开局第一颗血块会白送`);
+// 10-11 这条整条反写：满血不再「不磁吸不吞」，而是照吸照吞、身上不动、也不许飘字
+if (!clotFull.clot.collected || clotFull.player.hp !== 40 || clotFull.texts.length || clotFull.moved === 0) {
+  errors.push(`满血那颗没照吃/还在原地（collected=${clotFull.clot.collected} moved=${clotFull.moved.toFixed(1)} 飘字 ${clotFull.texts.length} 条）：血瓶改了口径，满血也该吸过来吞掉，但身上没回血就不许冒红字`);
+}
+if (clotFull.player.vialDrops !== 0) {
+  errors.push(`0 层血瓶却存下 ${clotFull.player.vialDrops} 滴：没这件道具时满血溢出必须纯浪费`);
+}
+if (clotFullBank.player.vialDrops !== BLOOD_CLOT_HEAL) {
+  errors.push(`满血吃一颗回 ${BLOOD_CLOT_HEAL} 的血块，瓶里却存了 ${clotFullBank.player.vialDrops} 滴（应 ${BLOOD_CLOT_HEAL}）：heal() 那段溢出收集没接上，或者夹错成了回复量`);
 }
 if (!clotHurt.clot.collected || clotHurt.player.hp !== 22) {
   errors.push(`残血拾取后 hp=${clotHurt.player.hp}（应 22）、collected=${clotHurt.clot.collected}：回 BLOOD_CLOT_HEAL 那条没生效`);
@@ -825,6 +870,9 @@ if (clotHurt.texts.length !== 1 || clotHurt.texts[0].damage !== `+${BLOOD_CLOT_H
 }
 if (clotEdge.player.hp !== 40 || (clotEdge.texts[0] || {}).damage !== '+1') {
   errors.push(`差 1 血时吃了回 2 的血块，hp=${clotEdge.player.hp}、字面=${clotEdge.texts[0] && clotEdge.texts[0].damage}：封顶或飘字取的不是实际回复量`);
+}
+if (clotEdge.player.vialDrops !== 1) {
+  errors.push(`差 1 血吃一颗回 2 的，瓶里存了 ${clotEdge.player.vialDrops} 滴（应 1）：半程拆分那一段算错，等于把回复量也存了一遍`);
 }
 if (!(clotNear.moved > 0) || clotNear.clot.collected || clotNear.player.hp !== 20) {
   errors.push(`磁吸没跑（移动 ${clotNear.moved.toFixed(1)}px）或者还没碰上就结算了：拾取范围这条改不了体验`);
@@ -844,10 +892,11 @@ if (clotFar.moved !== 0) {
 // —— 嗜血纯检：这一条才是「0.5% / 一口 N 血 / 满血浪费」三条口径的凭据。
 //   现场样本证不了概率（0.5% 下 900 秒只期望几口，跑一万次也报不出「恰好 0.5%」），
 //   所以把 Math.random 钉到两端、直接驱动原型，一次一条口径
-function leechRun(stacks, hp, maxHp) {
+function leechRun(stacks, hp, maxHp, vial = 0) {
   const player = Object.create(Player.prototype);
   player.x = 0; player.y = 0; player.radius = 14;
   player.hp = hp; player.maxHp = maxHp; player.leech = stacks;
+  player.vial = vial; player.vialDrops = 0; player.vialGainT = 0; player.vialOutT = 0;
   const texts = [];
   const db = { addDamageText(x, y, damage, isCrit, color) { texts.push({ damage, color }); } };
   const healed = Player.prototype.onKill.call(player, db);
@@ -855,12 +904,13 @@ function leechRun(stacks, hp, maxHp) {
 }
 const prevRandom = Math.random;
 const canForce = LEECH_CHANCE > 0; // LEECHP=0 那趟里 `0 >= 0` 也算不命中，必触发那几条无从证明，直接跳过
-let leechOne; let leechA; let leechB; let leechC; let leechE; let leechD;
+let leechOne; let leechA; let leechB; let leechC; let leechE; let leechD; let leechBank;
 Math.random = () => 0;
 leechOne = leechRun(1, 10, 40);
 leechA = leechRun(3, 10, 40);
 leechB = leechRun(3, 39, 40);
 leechC = leechRun(3, 40, 40);
+leechBank = leechRun(3, 40, 40, 1);
 leechE = leechRun(0, 10, 40);
 Math.random = () => 1;
 leechD = leechRun(10, 10, 40);
@@ -878,8 +928,12 @@ if (canForce) {
   if (leechB.player.hp !== 40 || leechB.healed !== 1 || (leechB.texts[0] || {}).damage !== '+1') {
     errors.push(`差 1 血时触发一口 3 血，hp=${leechB.player.hp}、返回 ${leechB.healed}、字面=${(leechB.texts[0] || {}).damage}：封顶或飘字报的不是实际回复量`);
   }
-  if (leechC.healed !== 0 || leechC.player.hp !== 40 || leechC.texts.length !== 0) {
-    errors.push(`满血触发返回 ${leechC.healed}、飘字 ${leechC.texts.length} 条：口径 2 是「照掷、白白浪费」，不该有红字这种假反馈`);
+  if (leechC.healed !== 0 || leechC.player.hp !== 40 || leechC.texts.length !== 0 || leechC.player.vialDrops !== 0) {
+    errors.push(`满血触发返回 ${leechC.healed}、飘字 ${leechC.texts.length} 条、存量 ${leechC.player.vialDrops} 滴：0 层血瓶时口径仍是「照掷、白白浪费」，既不该有红字也不该凭空存出血`);
+  }
+  if (leechBank.healed !== 0 || leechBank.player.hp !== 40 || leechBank.texts.length !== 0
+    || leechBank.player.vialDrops !== 3) {
+    errors.push(`满血带 1 层血瓶触发一口 3 血：hp=${leechBank.player.hp}、返回 ${leechBank.healed}、飘字 ${leechBank.texts.length}、存量 ${leechBank.player.vialDrops}（应 40/0/0/3）：那一口该整份进瓶，身上不动也不许冒红字`);
   }
   if (leechE.healed !== 0 || leechE.player.hp !== 10 || leechE.texts.length !== 0) {
     errors.push(`0 层也回了血（${leechE.healed}）：leech <= 0 那道短路没生效，下面那条关掉等价式不成立`);
@@ -887,6 +941,93 @@ if (canForce) {
 }
 if (leechD.healed !== 0 || leechD.player.hp !== 10 || leechD.texts.length !== 0) {
   errors.push(`掷不中还是回了血（${leechD.healed}）：LEECH_CHANCE 那道门形同虚设`);
+}
+
+// —— 血瓶纯检：两条节拍（每 VIAL_GAIN_CD 按层数自增 / 残血每 VIAL_OUT_CD 送 VIAL_OUT 滴）+ 满血不攒欠债 +
+//   输送到空即停 + 按缺口夹 + 无上限 + 液面显示数学。
+//   ★实场那两笔进账（自增、满血溢出）在 vialDrops 上长得一模一样、分不开，精确数值只能这样按帧推
+function vialFixture(vial, hp, maxHp, drops = 0) {
+  const p = Object.create(Player.prototype);
+  p.x = 0; p.y = 0; p.radius = 14;
+  p.vial = vial; p.vialDrops = drops; p.vialGainT = 0; p.vialOutT = 0;
+  p.hp = hp; p.maxHp = maxHp;
+  return p;
+}
+// dt 一律取 0.5 秒（= 500 毫秒，二进制精确）：用 1/60 的话 60 帧累加成 30000.000000000004 或 29999.9999…，
+// 「恰好第 N 帧跳」这种断言会偶发红，而且跳点前后的余数也会跟着抖
+function pumpSeconds(p, seconds) {
+  const n = Math.round(seconds / 0.5);
+  for (let k = 0; k < n; k++) Player.prototype.pumpVial.call(p, 0.5);
+  return p;
+}
+const VIAL_SEC = VIAL_GAIN_CD / 1000; // 自增节拍（秒），下面每一条期望值都由它和 VIAL_OUT_CD 推
+const vialOff = pumpSeconds(vialFixture(0, 20, 40, 5), VIAL_SEC * 3);   // 0 层：三个跳点一个都不该走
+const vialGain1 = pumpSeconds(vialFixture(1, 40, 40), VIAL_SEC);        // 满血 1 层、正好一个跳点
+const vialGain3 = pumpSeconds(vialFixture(3, 40, 40), VIAL_SEC * 2);    // 满血 3 层、两个跳点
+const vialPour = pumpSeconds(vialFixture(1, 30, 40, 4), 3);              // 残血有货：3 秒该送 3 滴
+const vialDebt = vialFixture(1, 30, 40, 3);                              // 欠债夹具，下面按帧演一段真事
+pumpSeconds(vialDebt, 0.5);                                              // 残血半秒：vialOutT 攒到 500，还没到拍点
+vialDebt.hp = vialDebt.maxHp;                                            // 捡了一颗血块回满
+pumpSeconds(vialDebt, 3);                                                // 满血站 3 秒：那半个节拍该被钉回 0
+vialDebt.hp = 20;                                                        // 再挨出一身缺口
+pumpSeconds(vialDebt, 0.5);                                              // 回到残血的第一帧
+if (vialDebt.vialDrops !== 3 || vialDebt.hp !== 20) {
+  errors.push(`满血前留了半个节拍、满血站 3 秒后再残血半秒：存量 ${vialDebt.vialDrops}、hp ${vialDebt.hp}（应 3 / 20）：vialOutT 没被钉回 0，那 500 毫秒的余数让第一口提前一整拍冒出，玩家数的「一秒一口」变成「一挨打就先吐一口」`);
+}
+pumpSeconds(vialDebt, 0.5);                                              // 第二帧正好到拍点：只许送 1 滴
+const vialDrain = pumpSeconds(vialFixture(1, 10, 40, 2), 5);            // 瓶里只有 2 滴：送完就该停
+const vialGap = pumpSeconds(vialFixture(1, 39, 40, 5), 3);              // 只差 1 血：按缺口夹，不灌溢出
+const vialHuge = pumpSeconds(vialFixture(1, 40, 40, 1e6), VIAL_SEC * 2); // 无上限：1e6 滴不该被截断
+if (vialOff.vialDrops !== 5 || vialOff.hp !== 20 || vialOff.vialGainT !== 0 || vialOff.vialOutT !== 0) {
+  errors.push(`0 层却量到存量 ${vialOff.vialDrops}、hp ${vialOff.hp}、计时 ${vialOff.vialGainT}/${vialOff.vialOutT}：vial <= 0 那道短路没生效，下面那条关掉等价式不成立`);
+}
+if (vialGain1.vialDrops !== 1) {
+  errors.push(`1 层站满 ${VIAL_SEC} 秒存量 = ${vialGain1.vialDrops}（应 1）：自增买的是「每跳几滴 = 层数」，节拍或单位量写歪了`);
+}
+if (vialGain3.vialDrops !== 6 || vialGain3.vialGainT !== 0) {
+  errors.push(`3 层站满 ${VIAL_SEC * 2} 秒存量 = ${vialGain3.vialDrops}（应 6）、余数 ${vialGain3.vialGainT}（应 0）：层数没乘进自增，或者跳点把余数清零了`);
+}
+if (vialPour.vialDrops !== 1 || vialPour.hp !== 33) {
+  errors.push(`残血 3 秒后存量 ${vialPour.vialDrops}、hp ${vialPour.hp}（应送 3 滴 → 存量 1 / hp 33）：输送节拍 VIAL_OUT_CD 或每跳 VIAL_OUT 不是一条一口`);
+}
+if (vialDebt.vialDrops !== 2 || vialDebt.hp !== 21) {
+  errors.push(`清过半个节拍之后第二帧：存量 ${vialDebt.vialDrops}、hp ${vialDebt.hp}（应 2 / 21）：要么复位把节拍一起清死了（永远不出货），要么第一帧那条提前冒出的口把节奏挪了半拍`);
+}
+if (vialDrain.vialDrops !== 0 || vialDrain.hp !== 12) {
+  errors.push(`瓶里 2 滴送完后存量 ${vialDrain.vialDrops}、hp ${vialDrain.hp}（应 0 / 12）：没按余额夹取，或者空瓶还在继续送`);
+}
+if (vialGap.vialDrops !== 4 || vialGap.hp !== 40) {
+  errors.push(`只差 1 血、瓶里 5 滴，站 3 秒后存量 ${vialGap.vialDrops}、hp ${vialGap.hp}（应 4 / 40）：输送没按缺口夹，把满血后的余量也算进了一次跳点`);
+}
+if (vialHuge.vialDrops !== 1000000 + 2) {
+  errors.push(`存量 1e6 滴站 ${VIAL_SEC * 2} 秒后 = ${vialHuge.vialDrops}（应 1000002）：无上限那条口径被 clamp 掉了，满血时的溢出又开始白扔`);
+}
+{
+  const view = new BloodVial();
+  if (view.level(0, 40) !== 0) errors.push(`空瓶的液面 = ${view.level(0, 40)}（应 0）：一滴都没有却画着有存货`);
+  if (view.level(1, 40) !== 0.14) errors.push(`1 滴的液面 = ${view.level(1, 40)}（应夹到下限 0.14）：1/40 = 0.025 画出来不到半像素，玩家会读成瓶子没收到东西`);
+  if (view.level(20, 40) !== 0.5) errors.push(`半瓶的液面 = ${view.level(20, 40)}（应 0.5）：量纲不是 maxHp`);
+  if (view.level(1e6, 40) !== 1) errors.push(`超量存的液面 = ${view.level(1e6, 40)}（应 1）：显示没夹满，fillRect 会画到瓶子上面的空气里`);
+}
+
+// —— 血瓶实场断言：两端都要钉住 ——
+if (VIAL === 0 && (maxVials || vialIn || vialOut)) {
+  errors.push(`血瓶 0 层却量到场上 ${maxVials} 只、进账 ${vialIn} 滴、出账 ${vialOut} 滴：0 层这道门没关掉，「没这个道具」的局也在跑新代码`);
+}
+if (maxVials > 1) {
+  errors.push(`场上出现过 ${maxVials} 只血瓶：databus 那条封顶没写，层数被当成了只数`);
+}
+if (VIAL > 0 && maxVials === 0) {
+  errors.push(`血瓶 ${VIAL} 层场上却一只都没生成：databus 的生成条件或 player.vial 属性名断了`);
+}
+// 期望进账按「这一局世界真跑了多久」推：玩家一死 main.js 就不再驱动 update，此后既不自增也不输送
+const vialAlive = gameOverAt < 0 ? frames * DT : gameOverAt;
+const vialExpectGain = Math.floor(vialAlive / VIAL_SEC) * VIAL;
+if (VIAL > 0 && vialExpectGain > 0 && vialIn < vialExpectGain) {
+  errors.push(`血瓶 ${VIAL} 层、存活 ${vialAlive.toFixed(0)} 秒，进账却只有 ${vialIn} 滴（自增就该 ≥ ${vialExpectGain}）：Player.update 里那句 pumpVial 没接上或早退`);
+}
+if (VIAL > 0 && vialExpectGain > 0 && vialOutTicks === 0) {
+  errors.push(`血瓶 ${VIAL} 层攒到峰值 ${vialDropsPeak} 滴却一次都没输送过：残血时那第二条节拍没跑（站桩 bot 全程满血？那这一组量不到输送，换 VIAL 之外再垫一次伤害）`);
 }
 
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
@@ -1263,7 +1404,7 @@ function vesicleRun(offset) {
   }
 }
 
-// 暂停详情页的文案探针：把八种加成挂满，逼八行 describe 各拼一次并真画出来。
+// 暂停详情页的文案探针：把九种加成挂满，逼九行 describe 各拼一次并真画出来。
 // ★这类 bug 只住在字符串里：bombDamage 收攻击力却传了整个 player，游戏照跑、数值检查全绿，
 //   只有详情页那一行写成「单枚 NaN 点」。不扫文本就永远发现不了
 {
@@ -1271,7 +1412,7 @@ function vesicleRun(offset) {
   const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
   // 一刀切写 3 不行：count 是各格自己的口径（子弹数从 1 起算、拾取范围存的是像素），
   // 全写 3 会让 pickupRange 算出负层数、被 ownedItems 当"没拾取过"滤掉，那一行就永远扫不到
-  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170, leech: 3 };
+  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, burnBullets: 3, pickupRange: 170, leech: 3, vial: 3 };
   for (const k in OWNED) probe[k] = OWNED[k];
   probe.shieldBroken = 0;
   databus.player = probe;
@@ -1321,8 +1462,10 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     // 绕过 takeDamage 会跳过减伤、膜、飘字和掉落，Boss 战会被这行代码悄悄改写
     if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 e.hp：伤害必须走 Enemy.takeDamage`);
   }
-  // —— 新增的两个文件同一条规矩 ——
-  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'vesicle.js')]) {
+  // —— 新增的三个文件同一条规矩 ——
+  // bloodVial.js 有意放这一组而不是上面那组「连 Date.now( 都不许出现」：它是纯显示实体、
+  //   两条节拍都不在它身上，瓶身那圈呼吸必须用墙上时钟，逻辑却照样受 isPaused 门管制
+  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'vesicle.js'), path.join('player', 'bloodVial.js')]) {
     const s = src(rel);
     // ★只拦「把墙上时钟存成计时基准」这种写法：外观呼吸（Math.sin(Date.now()/260)）不算违规，
     //   enemy.js、chest.js 里早有同类用法；但 T = Date.now() 会在三选一面板期间偷跑
@@ -1386,11 +1529,15 @@ console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${B
   `| blast ${fieldBlastCalls} 次 共 ${fieldBlastDmg} 点`);
 console.log('mutant (chance=' + MUTANT_CHANCE + '):', fieldMutants, 'spawned /', mutantDeaths, 'killed /', fieldDrops,
   'clots, field peak', fieldPeak, '| eaten in main loop:', clotEats,
-  `| pure: 满血${clotFull.clot.collected ? '被吞' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);
+  `| pure: 满血${clotFull.clot.collected ? '照吃' : '未吞'} 残血hp${clotHurt.player.hp} 封顶hp${clotEdge.player.hp}(${clotEdge.texts[0] && clotEdge.texts[0].damage})`);
 console.log('leech (stacks=' + LEECH + ', chance=' + LEECH_CHANCE + '):', leechCalls, 'calls /', leechProcs,
   'procs /', leechHp, 'hp back (clamp-aware expect ' + leechRoom + ')',
   `| 一局 ${fieldKills} 杀 ≈ ${(fieldKills * LEECH_CHANCE).toFixed(1)} 口 = 1层 ${(fieldKills * LEECH_CHANCE).toFixed(1)} 血 / 3层 ${(fieldKills * LEECH_CHANCE * 3).toFixed(1)} 血`,
   `| pure: ${canForce ? `1层${leechOne.healed} 3层${leechA.healed} 封顶${leechB.healed} 满血${leechC.healed} 0层${leechE.healed}` : '跳过（LEECHP=0 钉死不触发）'}`);
+console.log('vial (stacks=' + VIAL + ', gain=' + VIAL_SEC + 's, out=' + VIAL_OUT_CD / 1000 + 's×' + VIAL_OUT + '):',
+  vialIn, 'in /', vialOut, 'out over', vialOutTicks, 'ticks | peak drops', vialDropsPeak, '| entity peak', maxVials,
+  `| 存活 ${vialAlive.toFixed(0)}s ≈ 自增 ${vialExpectGain} 滴`,
+  `| pure: 1层${vialGain1.vialDrops} 3层${vialGain3.vialDrops} 输送${vialPour.vialDrops}/${vialPour.hp} 欠债${vialDebt.vialDrops}/${vialDebt.hp} 到空${vialDrain.vialDrops}/${vialDrain.hp}`);
 console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
   '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,

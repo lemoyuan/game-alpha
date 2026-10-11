@@ -302,6 +302,7 @@ export default class Main {
       for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);
       for (const b of databus.bombers) b.draw(ctx);
+      for (const v of databus.vials) v.draw(ctx); // 血瓶排在三种跟随体最后：它是这三格里唯一要往瓶外贴数字的，压在最上层才不会被同伴的描边切掉
       databus.player.draw(ctx);
     }
     for (const t of databus.damageTexts) t.draw(ctx);
