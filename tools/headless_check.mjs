@@ -28,6 +28,9 @@ let rotateCalls = 0;
 let nonFinite = 0;
 // 画出来的每一句文案。数值算错但被拼进字符串时，NaN 不会经过任何数值检查，只能靠这份文本扫
 const drawnTexts = new Set();
+// 本帧画出来的文案：每帧 step() 前清空。drawnTexts 只答得了「整局画过没有」，
+// 而「+x 逐行错开」要答的是「每一句第一次出现在第几帧」——那必须有一份按帧的账本
+const frameTexts = new Set();
 
 function makeCtx() {
   const state = {
@@ -66,7 +69,7 @@ function makeCtx() {
     fillRect(...a) { check('fillRect', a); },
     strokeRect(...a) { check('strokeRect', a); },
     clearRect(...a) { check('clearRect', a); },
-    fillText(t, ...a) { check('fillText', a); drawnTexts.add(String(t)); },
+    fillText(t, ...a) { check('fillText', a); drawnTexts.add(String(t)); frameTexts.add(String(t)); },
     strokeText(t, ...a) { check('strokeText', a); },
     measureText() { return { width: 10 }; },
     createLinearGradient() { return { addColorStop() {} }; },
@@ -189,6 +192,18 @@ if (BOSSCHEST !== undefined) {
   else fs.writeFileSync(f, code.replace(re, `export const BOSS_CHESTS_ENABLED = ${BOSSCHEST === '1' ? 'true' : 'false'}`));
 }
 
+// Boss 掉落道具（巨细胞核）的开关：这一件默认是开的，所以 BOSSDROP=0 才是「反常」那一组，
+// 用途和上面那条正好相反 —— 钉住「关掉之后场上一个都不出现、属性一点都不涨」（见下面的两端断言）
+const BOSSDROP = process.env.BOSSDROP;
+if (BOSSDROP !== undefined) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const re = /export const BOSS_DROPS_ENABLED = \w+/;
+  // ★同样用 re.test() 判命中：BOSSDROP=0 那一组本来就不改字符串，比前后会假报「没命中」
+  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_DROPS_ENABLED，BOSSDROP=${BOSSDROP} 这一组等于没跑`);
+  else fs.writeFileSync(f, code.replace(re, `export const BOSS_DROPS_ENABLED = ${BOSSDROP === '1' ? 'true' : 'false'}`));
+}
+
 // 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
 // ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
 //   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
@@ -207,17 +222,22 @@ if (TWINS !== undefined) {
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
 const databusMod = await import(fileUrl(path.join(COPY, 'databus.js')));
 const {
-  BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
+  BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_DROPS, BOSS_DROPS_ENABLED, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
   MONSTER_TYPES, MUTANT_CHANCE, BLOOD_CLOT_HEAL,
-  BOSS_SCHEDULE, CODEX_ORDER, BOSS_FOURTH_SPAWN_TIME,
+  BOSS_SCHEDULE, CODEX_ORDER, BOSS_FOURTH_SPAWN_TIME, CHEST_KIND_BY_ID,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
+const { CHEST_GRANTS } = await import(fileUrl(path.join(COPY, 'npc', 'chestGrant.js')));
+// HUD 左栏那七行的 key：BOSS_DROPS 的 boost 不许有落在这七行之外的项（见下面的注册面扫描）
+const { STAT_ROWS } = await import(fileUrl(path.join(COPY, 'ui', 'hud.js')));
+const STAT_KEYS = STAT_ROWS.map((r) => r.key);
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
 const {
   BURN_TICK, BURN_HOLD, BURN_DMG, DAMAGE_TEXT_MAX,
   BOMB_CD, BOMB_BLAST_R, BOMB_BLAST_MS, BOMB_H_SPEED, BOMB_FLY_MIN, BOMB_FLY_MAX, bombDamage,
   ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
   TURRET_CD, TURRET_RANGE, TURRET_MUZZLE_LEN, TURRET_PIVOT_Y, TURRET_BULLET_RADIUS, TURRET_BULLET_COLOR, turretDamage, BULLET_RANGE_BUFFER,
+  STAT_CORE_BOOST, statBoostText, STAT_POP_STAGGER, STAT_POP_MS, UPGRADES, LEVEL_UP_BONUS,
   canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
@@ -235,7 +255,105 @@ const Vesicle = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'vesicle
 const BossTwins = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'bossTwins.js')))).default;
 const databus = new databusMod.default();
 
+// —— Boss 掉落道具「巨细胞核」的账本 ——
+// ★声明必须排在下面装钩子之前：钩子在紧接着的第一次 step() 里就可能被调到，
+//   let 的暂时性死区会让那一刻抛 ReferenceError，而不是安静地少记一笔
+let statPopCalls = 0;          // popStats 总调用次数：三个来源（核心/升级/选卡）加在一起
+let corePopCalls = 0;          // 其中加成包 === STAT_CORE_BOOST 的 = 拾取了几截核心
+let levelPopCalls = 0;         // 其中 === LEVEL_UP_BONUS 的 = 升了几级（身份比对象，不比内容）
+let cardPopCalls = 0;          // 其中单 key 且 key 在 UPGRADES 里的 = 选了几张卡
+let releaseCalls = 0;          // releaseStatPops 被调几次 = 三选一关了几扇门
+let heldLeaks = 0;             // 面板开着却被立即盖章的条数：这些飘字会整段死在黑遮罩后面
+let stuckHeld = 0;             // 面板没开却被挂起的条数：永远等不到 release，左栏会少弹字
+const strayPopBoosts = [];     // 三个来源都认不出的加成包：有新的属性写入点没登记进这本账
+const statPopBoosts = [];      // 核心那几次传进来的加成包，用来验「弹的字和落的属性是同一份数据」
+let coreBoostCalls = 0;        // player.applyBoost(STAT_CORE_BOOST) 的次数
+const coreBoostMismatch = [];  // 加前加后求差 ≠ 加成包的项，逐条留下好定位是哪个 key 断的
+let sawStatChest = false;      // 场上是否出现过带 boost 的匣（掉落道具）：关掉开关时这条必须一直 false
+let sawPetChest = false;       // 场上是否出现过带 pet 的匣（休眠的专属匣）：同上
+const popFirstFrame = new Map(); // 每句 +x 文案第一次被画出来是第几帧：错开那条断言读这个，不读「有没有画过」
+let popQueueLen = -1;          // 拾取当帧 popStats 排进队列的条数（-1 = 还没拾取过）
+let popSpread = -1;            // 拾取当帧队列首尾 t0 的跨度，应等于 (行数-1) × STAT_POP_STAGGER
+let popFrame0Texts = null;     // 拾取当帧画出来的文案集合
+let popAtFrame = -1;           // 第一次拾取发生在主循环第几帧：错开断言的零点
+
+// 挑三句「只可能由这七行飘字画出来」的文案当探针。★用 statBoostText 现算而不是写死字符串：
+//   改了格式化函数的话，写死的那三句会一句都匹配不上，断言静默退化成空跑而不是报错。
+// 挑这三句的理由：atkSpeed/critRate 带单位、speed 是 +8，三句和八张三选一卡的 desc
+//   （+10 / +15% / +3 / +2 / +0.3次 / +30 / +10% / +1）一个都不撞；
+//   而 attack 的 +2、luck 与 defence 的 +1 会被卡片污染，所以不拿它们做 1:1 计数
+const POP_TEXTS = ['atkSpeed', 'critRate', 'speed'].map((k) => statBoostText(k, STAT_CORE_BOOST[k]));
+
+// ★上面那段「一个都不撞」不能只写在注释里：三选一卡是本测试台自己每帧自动点掉的（up.pick(0)），
+//   一旦哪天 STAT_CORE_BOOST 或卡片数值被调到撞车，按帧账本会把卡片的字记成飘字的账，
+//   错开那条断言会「看着通过、其实在量别的东西」—— 这是最坏的一种假绿，所以在这里静态钉死
+for (const t of POP_TEXTS) {
+  const hit = UPGRADES.find((u) => u.desc === t);
+  if (hit) {
+    errors.push(`+x 探针文案 '${t}' 和三选一卡「${hit.label}」的 desc 撞车：`
+      + `本台每帧自动点卡，drawnTexts/frameTexts 分不清这个字是谁画的，错开断言会退化成空跑。`
+      + `换一句独有的探针（带单位的行最稳），或改卡面文案`);
+  }
+}
+// 升级成长与选卡现在也弹 +x，它们画出来的文案同样不许和探针撞。成长包是静态的；加法卡的增量也是静态的；
+// ★乘算移速卡的增量随当前移速变、枚举不了，但它 = round(speed×0.15)，speed 从 170 起只增不减 → 增量 ≥ 25.5，
+//   与三句探针（+0.1/秒 / +3% / +8）天然不相交，这条靠下界保证而不是靠枚举
+for (const src of [LEVEL_UP_BONUS, ...UPGRADES.filter((u) => !u.mult).map((u) => ({ [u.key]: u.value }))]) {
+  for (const [k, v] of Object.entries(src)) {
+    const t = statBoostText(k, v);
+    if (POP_TEXTS.includes(t)) {
+      errors.push(`+x 探针文案 '${t}' 和「${k} 加 ${v}」这次弹字撞车：升级/选卡的飘字会被记成核心的账`);
+    }
+  }
+}
+
 const main = new mainMod.default();
+// 「巨细胞核」弹字链的实场计数：★包实例不包原型，理由和下面 leech/blast 那两条一样。
+//   DataBus 是单例（databus.js:14 那句 if (instance) return instance），所以这里的 databus 就是
+//   main.js 内部那一个，hud 在 Main 构造函数里已经建好，这一钩子装得上
+const origPopStats = databus.hud.popStats;
+databus.hud.popStats = function (boost, held) {
+  statPopCalls++;
+  const before = databus.hud.statPops.length;
+  const r = origPopStats.call(this, boost, held);
+  const isCore = boost === STAT_CORE_BOOST;
+  const isLevel = boost === LEVEL_UP_BONUS;
+  const isCard = !isCore && !isLevel && Object.keys(boost).length === 1
+    && UPGRADES.some((u) => u.key === Object.keys(boost)[0]);
+  // hold 的方向校验按来源核对声明：核心是场面上拾取的，必须立即弹；成长/选卡发生在面板会话内，
+  //   必须挂起等关面板。★不读 upgradeScreen.visible 去猜：同一帧里「升级开面板」可能先于「踩匣」，
+  //   猜会把核心误挂起——held 是调用方的声明，声明错了就是调用方的 bug
+  const expectHeld = !isCore;
+  if (isCore || isLevel || isCard) {
+    if (held !== expectHeld) heldLeaks++;
+    // ★不在这里判「挂起但面板没开」：关面板分支是先落 visible=false 再结溢出经验，
+    //   那一级的成长声明 held 时新面板还没 show()，按调用瞬间判会假红。终态检查在下面兜
+  }
+  if (isCore) {
+    corePopCalls++;
+    statPopBoosts.push(boost);
+    // 拾取当帧的结构快照：只量本次新入队的条目。★不能读整条队列——上一扇三选一关门释放的
+    //   升级/选卡飘字可能还没过期（700ms + 错开），读整队会把「七行」量成十几行
+    if (popQueueLen < 0) {
+      const added = databus.hud.statPops.slice(before);
+      popQueueLen = added.length;
+      const t0s = added.map((x) => x.t0);
+      popSpread = t0s.length ? Math.max(...t0s) - Math.min(...t0s) : 0;
+    }
+  } else if (isLevel) {
+    levelPopCalls++;
+  } else if (isCard) {
+    cardPopCalls++;
+  } else {
+    strayPopBoosts.push(boost);
+  }
+  return r;
+};
+const origReleaseStatPops = databus.hud.releaseStatPops;
+databus.hud.releaseStatPops = function () {
+  releaseCalls++;
+  return origReleaseStatPops.call(this);
+};
 main.startRequested = true;
 step();
 
@@ -259,7 +377,8 @@ let prevPoisonTick = 0;
 let bossDrops = 0;   // Boss 死亡掉落结算次数
 let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就一直是 false）
 let maxPets = 0;
-let sawBossChest = false; // 场上是否出现过带 kindDef 的专属匣：下线期间这条必须一直 false
+// ★原先这里有一个 sawBossChest（「场上出现过带 kindDef 的匣」）。它已经拆成上面那对 sawPetChest / sawStatChest：
+//   Boss 掉落道具上线后，带 kindDef 的匣有两种，混成一笔账会让「专属匣已下线」那条断言假红
 const colonySeen = new Set(); // 按对象身份数菌群：小怪会被回收复用，只有 home 能把它和杂兵区分开
 let burnTicks = 0;      // 燃烧跳血次数（按飘字颜色识别，比逐帧比对时钟可靠）
 let burnDmg = 0;        // 燃烧累计造成的伤害
@@ -514,6 +633,30 @@ for (let i = 0; i < frames; i++) {
       return healed;
     };
   }
+  // 「巨细胞核」的属性落账：只在传进来的正是 STAT_CORE_BOOST 那一个对象时计数。
+  // ★比对象身份而不是比内容：config.js 与这里 import 的是同一个 consts.js 模块实例（Node 的 ESM 缓存），
+  //   身份相等才说明「弹字读的那份数据」和「落属性的那份数据」是同一个引用，改一个数两边一起动。
+  //   applyLevelBonus 走的是 LEVEL_UP_BONUS，不会被这一条误计
+  // ★量法是「调用前后各取一次再求差」，不是「整局首尾相减」：升级的 LEVEL_UP_BONUS 同样在动
+  //   attack/critRate/attackRange/speed 这四项，首尾相减会把升级的账算到掉落道具头上
+  if (p && !p.__boostHooked) {
+    p.__boostHooked = true;
+    const orig = p.applyBoost;
+    // ★必须转发全部参数：databus 是左栏 +x 的触发通道、held 是「立即弹还是挂起」的声明，
+    //   钩子少接一个就会把对应行为吞掉，断言全红而游戏代码其实没病
+    p.applyBoost = function (bonus, databus, held) {
+      if (bonus !== STAT_CORE_BOOST) return orig.call(this, bonus, databus, held);
+      coreBoostCalls++;
+      const before = {};
+      for (const k of Object.keys(STAT_CORE_BOOST)) before[k] = this[k];
+      const r = orig.call(this, bonus, databus, held);
+      for (const k of Object.keys(STAT_CORE_BOOST)) {
+        const got = Math.round((this[k] - before[k]) * 1000) / 1000;
+        if (got !== STAT_CORE_BOOST[k]) coreBoostMismatch.push(`${k}: 期望 +${STAT_CORE_BOOST[k]}，实得 +${got}`);
+      }
+      return r;
+    };
+  }
   // 爆发伤害的实场计数：★包实例不包原型，理由和上面 onKill 那条一样 ——
   //   下面双子那节的纯检会直接 Player.prototype.applyBlast.call(假玩家)，挂原型会把纯检算进现场账。
   //   按传入的 amount 分家：囊泡 = vesicleDamage、自溶爆 = burstDamage，两个数在 config 里刻意不同，
@@ -622,17 +765,20 @@ for (let i = 0; i < frames; i++) {
     //   破膜 → 破防窗口 → 被补回去 这条循环的后半段一行都测不到
     bosses[bi].takeDamage(Math.ceil(bosses[bi].maxHp / 15), false, databus);
   }
-  // Boss 专属匣只会掉在 Boss 尸体上，bot 未必走过去 → CHEST_GRANTS 和跟班的 update/draw 一行都跑不到。
+  // Boss 匣只会掉在 Boss 尸体上，bot 未必走过去 → CHEST_GRANTS 和跟班/飘字的 update/draw 一行都跑不到。
   // 每帧把匣挪到玩家脚下让它真被拾取一次：跟班约 6 DPS，相对测试台每秒削掉的 maxHp/15 可以忽略，
-  // 不会改写 film breaks 这条基线。★专属匣已整条下线（BOSS_CHESTS_ENABLED = false）时场上不会有
-  // kindDef 的匣，这段自然一行都不做；它只在 BOSSCHEST=1 那一跑里负责保证「授予链真被跑到」
+  // 不会改写 film breaks 这条基线。
+  // ★两种带 kindDef 的匣都要挪（休眠的专属匣、上线的掉落道具），但记账必须分家：
+  //   kindDef.pet → sawPetChest（下线期间必须恒 false，BOSSCHEST=1 那一跑才为 true）
+  //   kindDef.boost → sawStatChest（默认就该为 true，BOSSDROP=0 那一跑必须恒 false）
+  //   共用一个标志的后果是新道具一上线就把「专属匣已下线却还在场上掉出来」顶红，而那条其实在说另一件事
   if (p) {
     for (const c of databus.chests) {
-      if (c.kindDef) {
-        sawBossChest = true;
-        c.x = p.x;
-        c.y = p.y;
-      }
+      if (!c.kindDef) continue;
+      if (c.kindDef.pet) sawPetChest = true;
+      if (c.kindDef.boost) sawStatChest = true;
+      c.x = p.x;
+      c.y = p.y;
     }
   }
   const dyingBosses = bosses.filter((b) => b.isDead); // 本帧 checkCollisions 会给它们结算掉落
@@ -699,7 +845,23 @@ for (let i = 0; i < frames; i++) {
     up.pick(0);
     databus.isPaused = false;
   }
+  // 逐帧文案账本要在 step() 之前清：step() 内部一路 update + render，清晚了就把上一帧的字也算进这一帧
+  frameTexts.clear();
   step();
+  // —— 「巨细胞核」那七行 +x 的按帧账本 ——
+  // ★只在核心拾取发生之后才开始记：三选一卡片与升级成长现在也弹 +x，拾取前的字不该算进飘字的账
+  //   （本例挑的三句和八张卡的 desc、四级成长的文案都不撞，POP_TEXTS 声明处那条静态检查把这件事钉住了）
+  if (corePopCalls > 0) {
+    for (const t of POP_TEXTS) {
+      if (!popFirstFrame.has(t) && frameTexts.has(t)) popFirstFrame.set(t, i);
+    }
+  }
+  // 拾取首帧的绘制快照：这一帧画面上出现了哪些文案，用来钉「逐行错开」的判别式（当帧只该有第一行）。
+  // 队列结构快照（几行 / 首尾跨度）已在 popStats 钩子里量过，这里只记零点帧
+  if (popAtFrame < 0 && corePopCalls > 0) {
+    popFrame0Texts = new Set(frameTexts);
+    popAtFrame = i;
+  }
   // 玩家一死，main.js 就整段跳过 databus.update：怪停、飘字永不过期、Boss 也不再被回收成死亡事件。
   // ★这条要记账并印出来：外层那段「每秒削 Boss 血」是台子自己跑的，它不知道世界已经冻住，
   //   会接着往一条不再过期的 damageTexts 里塞字，把「飘字上限太紧」这条真断言顶红；
@@ -729,10 +891,19 @@ for (let i = 0; i < frames; i++) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
     }
     // ★这条只在开关为 true 时成立：专属匣已整条下线，表非空却查不到匣是设计如此，不是掉了
+    // ★判据必须是 c.kindDef.pet 而不是 c.kindDef：boss1 现在同时会掉「掉落道具」那种匣，
+    //   笼统地判「有没有带 kindDef 的匣」会被另一只遮住，这条就永远绿 —— 绿得毫无信息量
     if (BOSS_CHESTS_ENABLED) {
       const table = BOSS_CHESTS[dyingBoss.type];
-      if (table && table.length && !databus.chests.some((c) => c.kindDef)) {
+      if (table && table.length && !databus.chests.some((c) => c.kindDef.pet)) {
         errors.push(`boss ${dyingBoss.type} 死亡没掉专属匣`);
+      }
+    }
+    // 掉落道具的同一条：表非空却查不到带 boost 的匣，就是掉落口那道门或表本身断了
+    if (BOSS_DROPS_ENABLED) {
+      const table = BOSS_DROPS[dyingBoss.type];
+      if (table && table.length && !databus.chests.some((c) => c.kindDef.boost)) {
+        errors.push(`boss ${dyingBoss.type} 死亡没掉落道具（表里有 ${table.length} 种，场上一个带 boost 的匣都没有）`);
       }
     }
   }
@@ -808,8 +979,10 @@ for (let i = 0; i < frames; i++) {
 }
 
 // —— Boss 专属匣的两端断言：下线期间「整条不可达」，翻回 true 时「授予链真能跑通」 ——
+// ★读的是 sawPetChest（带 kindDef.pet 的匣），不是「任何带 kindDef 的匣」：
+//   后者现在恒为真（Boss 掉落道具默认上线），拿它当判据这条会永远红，而红的原因和它想说的完全无关
 if (!BOSS_CHESTS_ENABLED) {
-  if (sawBossChest) {
+  if (sawPetChest) {
     errors.push('专属匣已下线却还在场上掉出来：main.js 的门没钉住，或者还有第二个掉落口没关');
   }
   if (maxPets) {
@@ -817,6 +990,106 @@ if (!BOSS_CHESTS_ENABLED) {
   }
 } else if (bossDrops > 0 && !sawPet) {
   errors.push(`开关翻回 true、也死了 ${bossDrops} 只 Boss，却没有一只跟班：掉落→拾取→授予→bossPet 断了一环，"改回 true 即恢复"不成立`);
+}
+
+// —— Boss 掉落道具「巨细胞核」的两端断言 ——
+// 这一件默认是开的，所以「关掉」那一端才是反常组：它要证明的是 main.js 那道门真的钉得住，
+// 而不是「反正没人调用所以看不见」。两端都要跑，只跑一端等于没跑（同 2026-10-06 那条教训）
+if (!BOSS_DROPS_ENABLED) {
+  if (sawStatChest) errors.push('掉落道具已关掉却还在场上掉出来：main.js 的 BOSS_DROPS_ENABLED 那道门没钉住，或者还有第二个掉落口');
+  if (corePopCalls) errors.push(`掉落道具已关掉却弹过 ${corePopCalls} 次核心 +x：CHEST_GRANTS.core_cmv 被掉落以外的地方调用了`);
+  if (coreBoostCalls) errors.push(`掉落道具已关掉却给玩家加过 ${coreBoostCalls} 次全属性：applyBoost 还有别的调用口`);
+  if (databus.bossChests.core_cmv) errors.push(`掉落道具已关掉但 HUD 计数里有 core_cmv ×${databus.bossChests.core_cmv}：右栏会凭空多出一格`);
+} else {
+  // 空跑防护：一只 Boss 都没死时，上面/下面这些零与「没接上」长得一模一样，必须显式说出来
+  if (bossDrops === 0) {
+    errors.push(`掉落道具开着却整局没有一只 Boss 死亡（bossDrops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
+  } else {
+    if (!sawStatChest) errors.push(`死了 ${bossDrops} 只 Boss，场上却从没出现过带 boost 的匣：掉落口没接上（表里 boss1 有 ${BOSS_DROPS.boss1.length} 种）`);
+    if (!corePopCalls) errors.push('匣出现过却没弹一次 +x：拾取→CHEST_GRANTS.core_cmv→applyBoost→hud.popStats 断了一环');
+    if (coreBoostCalls !== corePopCalls) {
+      errors.push(`属性加了 ${coreBoostCalls} 次、核心 +x 弹了 ${corePopCalls} 次：授予函数里两步不同源，玩家会看到「弹了字没涨属性」或反过来`);
+    }
+    if (coreBoostMismatch.length) {
+      errors.push(`全属性加成没逐项落对：${coreBoostMismatch.slice(0, 4).join(' | ')}`);
+    }
+    if (!statPopBoosts.every((b) => b === STAT_CORE_BOOST)) {
+      errors.push('弹字拿到的加成包不是 STAT_CORE_BOOST 那一个对象：config 表里的 boost 被复制过一份，改数值只有一半地方跟着动');
+    }
+    const owned = databus.bossChests.core_cmv || 0;
+    if (owned !== corePopCalls) {
+      errors.push(`HUD 计数 core_cmv ×${owned} 与拾取次数 ${corePopCalls} 对不上：右栏那格与暂停页那行会少报/多报`);
+    }
+    // 排版结构：七行都进了队列、首尾 t0 的跨度正好是 (行数-1) × 错开。
+    // ★这一条与绘制无关，所以「字被画到屏幕外」它照样绿 —— 它钉的是 popStats 的排队逻辑本身
+    const wantRows = Object.keys(STAT_CORE_BOOST).length;
+    if (popQueueLen !== wantRows) {
+      errors.push(`拾取当帧只排进 ${popQueueLen} 条 +x（加成包有 ${wantRows} 项）：有属性涨了却没弹字，或者弹了不属于面板的行`);
+    }
+    if (popSpread !== (wantRows - 1) * STAT_POP_STAGGER) {
+      errors.push(`+x 首尾错开 ${popSpread}ms，应为 (行数-1)×STAT_POP_STAGGER = ${(wantRows - 1) * STAT_POP_STAGGER}ms`);
+    }
+    // 绘制事实（判别式那一条）：拾取当帧只可能有第一行。
+    // ★必须真的有区分度 —— 把 STAT_POP_STAGGER 改成 0，七行会全挤在这一帧，下面这条就该红；
+    //   不红说明这条断言在空跑，那比没有断言更糟（它会让人以为错开被验过了）
+    if (popFrame0Texts) {
+      const leaked = POP_TEXTS.filter((t) => popFrame0Texts.has(t));
+      if (leaked.length) {
+        errors.push(`拾取当帧就画出了 ${leaked.join(' ')}：这三行分别排在第 2/4/5 位，t0 都晚于当帧，`
+          + `出现即说明「逐行错开」没生效（STAT_POP_STAGGER 被改成 0 了？），七行会同时糊在面板右侧`);
+      }
+    }
+    // 三句探针都要真被画出来，且首现帧号严格递增、相邻间隔不短于一个错开档。
+    // ★读「第几帧首现」而不是「有没有画过」：drawnTexts 只答得了后者，
+    //   而七行同时弹出与逐行弹出在「有没有画过」这个问法下答案完全一样
+    const STEP_MS = Math.round(DT * 1000); // 每帧推进的墙上时钟毫秒数，step() 里那个 Math.round
+    const minGapFrames = Math.floor(STAT_POP_STAGGER / STEP_MS); // 80/17 = 4 帧
+    const missing = POP_TEXTS.filter((t) => !popFirstFrame.has(t));
+    if (missing.length) {
+      errors.push(`这几行 +x 整局都没被画出来：${missing.join(' ')}。要么 drawStatPops 没接到绘制循环，要么字被画到了屏幕外`);
+    } else {
+      const offs = POP_TEXTS.map((t) => popFirstFrame.get(t) - popAtFrame);
+      for (let k = 1; k < offs.length; k++) {
+        if (offs[k] <= offs[k - 1]) {
+          errors.push(`+x 出场顺序倒了：${POP_TEXTS[k - 1]} 在第 ${offs[k - 1]} 帧、${POP_TEXTS[k]} 在第 ${offs[k]} 帧。`
+            + `面板行序是 攻击/攻速/射程/暴击/移速/幸运/防御，飘字必须照这个序从上往下弹（hud.js 的 STAT_ROWS 被改过序？）`);
+        } else if (offs[k] - offs[k - 1] < minGapFrames) {
+          errors.push(`${POP_TEXTS[k - 1]} → ${POP_TEXTS[k]} 只隔了 ${offs[k] - offs[k - 1]} 帧（应 ≥ ${minGapFrames} 帧 = STAT_POP_STAGGER ${STAT_POP_STAGGER}ms）：错开被压扁了，肉眼看是同时弹`);
+        }
+      }
+      // 上界：最后一句不能晚于「整段动画结束」那一刻，否则说明 drawStatPops 的过期判定把还在播的条目提前摘了、
+      //   玩家看到的是弹到一半就断。界由真实常量推出来，不写死帧数
+      const endFrame = Math.ceil(((wantRows - 1) * STAT_POP_STAGGER + STAT_POP_MS) / STEP_MS);
+      const lastOff = offs[offs.length - 1];
+      if (lastOff > endFrame) {
+        errors.push(`最后一句 +x 迟到第 ${lastOff} 帧才首现，晚于整段动画的结束帧 ${endFrame}：条目被提前摘掉了`);
+      }
+    }
+  }
+}
+
+// —— 左栏 +x 的全源断言：升级成长与三选一选卡现在也走同一条飘字链 ——
+// ★这三条与 BOSS_DROPS 开关无关，放在两端断言之外：掉落关着的那一局照样升级、照样选卡，
+//   如果只有核心会弹字，说明 applyBoost 的漏斗还有没收进来的写入点
+if (seconds >= 300 && gameOverAt < 0) {
+  // 1 级开局、每升一级 level +1， harness 不从外部写等级，所以 level-1 就是升过几次。
+  // ★在这里读而不是报表处读：再往下的纯检只驱动夹具实例，不动活体玩家，但早读早安心
+  const levelUps = databus.player.level - 1;
+  if (!levelPopCalls) errors.push('整局升过级却没弹一次升级 +x：applyLevelBonus 没把 databus 传进 applyBoost，成长这笔加成是哑的');
+  if (!cardPopCalls) errors.push('整局选过卡却没弹一次选卡 +x：upgrade.js 的 pick 没走 applyBoost 通道，卡片这笔加成是哑的');
+  if (!releaseCalls) errors.push('三选一关过门却没释放过一次挂起的 +x：upgrade.js 关闭路径漏了 releaseStatPops，暂存的字永远不弹');
+  if (levelPopCalls !== levelUps) {
+    errors.push(`升到 ${levelUps} 级却只弹了 ${levelPopCalls} 次成长 +x：有某一级没走 applyLevelBonus（addXp 被旁路了？）`);
+  }
+}
+if (heldLeaks) errors.push(`${heldLeaks} 次 popStats 的 held 声明与来源不符：核心被挂起（玩家要等下一扇面板关才看得到字），或成长/选卡被立即弹（700ms 整段死在黑遮罩后面）`);
+if (strayPopBoosts.length) {
+  errors.push(`popStats 收到 ${strayPopBoosts.length} 次认不出来源的加成包（首例 keys: ${Object.keys(strayPopBoosts[0]).join('/')}）：`
+    + `有新的属性写入点没登记进这本账，它的 +x 不会被来源断言覆盖`);
+}
+stuckHeld = databus.hud.statPops.filter((p) => p.t0 === null).length;
+if (stuckHeld && !databus.upgradeScreen.visible) {
+  errors.push(`面板已关闭却还有 ${stuckHeld} 条挂起的 +x 没释放：releaseStatPops 漏了一条关闭路径（或有人在面板外声明了 held=true 却再没开过面板）`);
 }
 
 // —— 炸弹跟班实场断言 ——
@@ -1643,16 +1916,31 @@ function vesicleRun(offset) {
   for (const t of ITEM_BAR) {
     if (!drawnTexts.has(t.name)) errors.push(`详情页没画出「${t.name}」这一行：ITEM_BAR 有格但 describe 走不到它`);
   }
+  // Boss 掉落道具那一行走的是同一条 ownedItems()，但它是「拾取过才占位」，所以门要挂在持有上：
+  // 关掉开关、或整局没打到 boss1 时这一行本来就不该出现，无条件硬查会变成假红
+  for (const k of Object.values(BOSS_DROPS).flat()) {
+    if ((databus.bossChests[k.id] || 0) > 0 && !drawnTexts.has(k.name)) {
+      errors.push(`详情页没画出「${k.name}」这一行：拾取了 ${databus.bossChests[k.id]} 次，ownedItems 却没把它收进卡片`);
+    }
+  }
 }
 const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
 if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
 
-// —— 详情页排版守门：这一条在今天不报错（10 行实测底边 755 / 屏高 844），它是给未来的第 11、12 种守的门。
+// —— 详情页排版守门：这一条在今天不报错（11 行实测底边 813 / 屏高 844），它是给未来那几行守的门。
 //   ★ROW_H 是死的、行数是活的：加一种就是把整张卡片往下顶 50 像素，顶穿屏幕不是崩、是「点开就关不掉」
 {
-  const L = databus.pauseScreen.layout(ITEM_BAR);
+  // 最坏行数 = 金匣那 10 格 + BOSS_DROPS 全表（「巨细胞核」1 行），两处都归 ownedItems() 收进同一张卡
+  // ★刻意不含 BOSS_CHESTS 那 1 行：专属匣整条下线中（BOSS_CHESTS_ENABLED = false），游戏内不可达。
+  //   哪天把它翻回 true，这张卡就是 12 行 = 底边 863 > 844，「继续战斗」按钮整个掉出屏幕 ——
+  //   到那时先给这一页做滚动或分栏，别指望这条断言能替你省下这一步
+  const worstRows = [
+    ...ITEM_BAR.map((t) => ({ id: t.glyph, name: t.name })),
+    ...Object.values(BOSS_DROPS).flat().map((k) => ({ id: k.id, name: k.name })),
+  ];
+  const L = databus.pauseScreen.layout(worstRows);
   if (L.y + L.h > canvasH) {
-    errors.push(`详情页 ${ITEM_BAR.length} 行的卡片底边 ${Math.round(L.y + L.h)} 掉出屏幕 ${canvasH}：加行数之前先给这一页做滚动或分栏`);
+    errors.push(`详情页最坏 ${worstRows.length} 行的卡片底边 ${Math.round(L.y + L.h)} 掉出屏幕 ${canvasH}：加行数之前先给这一页做滚动或分栏`);
   }
   if (L.btn.y + L.btn.h > canvasH) {
     errors.push(`详情页「继续战斗」按钮底边 ${L.btn.y + L.btn.h} 掉出屏幕 ${canvasH}：玩家点开这一页就回不去战斗`);
@@ -1679,6 +1967,30 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   for (const t of ITEM_BAR) {
     if (!themeSrc.includes(`case '${t.glyph}'`)) errors.push(`theme.js 的 itemGlyph 没有 '${t.glyph}' 分支：HUD 上它会被画成普通白圈`);
     if (!pauseSrc.includes(`case '${t.glyph}'`)) errors.push(`pause.js 的 describe 没有 '${t.glyph}' 分支：详情页那一行的说明是空的`);
+  }
+  // —— Boss 掉落道具（BOSS_DROPS）的注册面 ——
+  // ★这里刻意不查 pause.js 的 case：boss 掉落物走的是 describe 的 default 分支，白读 kindDef.brief，
+  //   给它加 case 反而是两处文案。同理 icon 复用 theme.js 已有的分支，不新建
+  for (const kinds of Object.values(BOSS_DROPS)) {
+    for (const k of kinds) {
+      if (!CHEST_KIND_BY_ID[k.id]) {
+        errors.push(`BOSS_DROPS 的 '${k.id}' 不在 CHEST_KIND_BY_ID 里：chest.init 会把 kindDef 置 null，`
+          + `这只匣子会被当成普通金匣开（随机加一项），不是掉落道具`);
+      }
+      if (!CHEST_GRANTS[k.id]) {
+        errors.push(`CHEST_GRANTS 没有注册 '${k.id}'：chest.js 那句裸 CHEST_GRANTS[kind](databus) 会在拾取瞬间抛 TypeError`);
+      }
+      if (!themeSrc.includes(`case '${k.icon}'`)) {
+        errors.push(`theme.js 的 itemGlyph 没有 '${k.icon}' 分支：右栏道具格里它会被画成普通白圈`);
+      }
+      if (!k.brief) errors.push(`BOSS_DROPS 的 '${k.id}' 没有 brief：详情页那一行是空的`);
+      for (const key of Object.keys(k.boost || {})) {
+        if (!STAT_KEYS.includes(key)) {
+          errors.push(`BOSS_DROPS '${k.id}' 的 boost 有 '${key}'，不在 HUD 面板那七行里：`
+            + `这项会悄悄涨（或加到 undefined 上）却没有对应的 +x 行可弹，玩家看不见`);
+        }
+      }
+    }
   }
   // ★turret.js 进的是这一组（连 Date.now( 都不许出现），不是下面那组纯显示体：它会开火，
   //   读墙上时钟的后果是三选一面板一关就补出积压的那几发，而这条链上的每一发都是真伤害
@@ -1730,9 +2042,19 @@ console.log('peak zones by tint:', [...zoneTintPeak.entries()].sort().map(([t, n
 console.log('peak film:', filmPeak, '| film breaks:', filmBreaks, '| colonies:', colonySeen.size, 'peak', maxColonies);
 console.log('slowed frames:', slowFrames, 'of', frames);
 console.log('poisoned frames:', poisonFrames, '| poison ticks:', poisonTicks);
+// ★「stat drop」那一段必须读出 BOSS_DROPS_ENABLED 本身，不能只印拾取次数：
+//   只印次数的话，未来会话看到「拾取 0 次」分不清是「开关被关了」还是「授予链断了」——
+//   这正是 2026-10-06 专属匣下线那次踩的坑（报表恒印 off，被当成回归查了半天）
 console.log('boss drops:', bossDrops, '| boss chest:', BOSS_CHESTS_ENABLED
-  ? `on (${sawBossChest ? 'dropped' : 'NOT dropped'} / pet ${sawPet ? 'granted' : 'NO'} / peak pets ${maxPets})`
-  : `off (${sawBossChest ? '泄漏' : '0 只匣'} / peak pets ${maxPets})`);
+  ? `on (${sawPetChest ? 'dropped' : 'NOT dropped'} / pet ${sawPet ? 'granted' : 'NO'} / peak pets ${maxPets})`
+  : `off (${sawPetChest ? '泄漏' : '0 只匣'} / peak pets ${maxPets})`,
+  '| stat drop:', BOSS_DROPS_ENABLED
+    ? `on (${sawStatChest ? 'dropped' : 'NOT dropped'} / 拾取 ${corePopCalls} 次 / 每次 ${popQueueLen < 0 ? '-' : popQueueLen} 行`
+      + ` / 错开 ${popSpread < 0 ? '-' : popSpread + 'ms'} / applyBoost ${coreBoostCalls} 次`
+      + ` / 注：chestsOpened 连 Boss 匣一起 +1，结算页「宝箱」芯片从此含它)`
+    : `off (${sawStatChest ? '泄漏' : '0 只匣'} / 拾取 ${corePopCalls} 次)`,
+  '| +x 全源: 升级', levelPopCalls, '/ 选卡', cardPopCalls, '/ 释放', releaseCalls,
+  `/ 总弹 ${statPopCalls} | hold 泄漏 ${heldLeaks} / 挂死 ${stuckHeld}`);
 console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
   '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
   '| first:', chestStamps.length ? chestStamps[0].toFixed(1) + 's' : '-');

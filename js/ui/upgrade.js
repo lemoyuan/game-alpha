@@ -56,11 +56,11 @@ export default class UpgradeScreen {
     const opt = this.options[index];
     if (!opt) return;
     const player = this._databus.player;
-    if (opt.mult) {
-      player[opt.key] = Math.round(player[opt.key] * (1 + opt.value) * 100) / 100;
-    } else {
-      player[opt.key] += opt.value;
-    }
+    // 乘算卡（移速 +15%）先算出目标值再折成增量交给 applyBoost：左栏 +x 飘字由它统一触发，
+    // 报的是这一张卡真加了多少（170 基数上读作 +25.5），与面板那行的像素/秒同单位
+    const before = player[opt.key];
+    const next = opt.mult ? Math.round(before * (1 + opt.value) * 100) / 100 : before + opt.value;
+    player.applyBoost({ [opt.key]: Math.round((next - before) * 100) / 100 }, this._databus, true);
     if (opt.key === 'maxHp') {
       player.hp = Math.min(player.hp + opt.value, player.maxHp);
     }
@@ -80,6 +80,10 @@ export default class UpgradeScreen {
         // 一颗 Boss 宝石（300~600 经验）够跨好几级，而 addXp 每次只结一级：
         // 面板关掉后把剩下的溢出经验接着结算成下一张卡，否则经验条会永远停在 "590/170" 这种填不满的样子
         this._databus.player.addXp(0, this._databus);
+        // 释放排在 addXp 之后、且只在没开新面板时做：连升几级时先放的那批会被下一扇面板的
+        // 黑遮罩整段盖住（实测几乎看不见），攒到最后一扇关门一起放，玩家才真看得到这几级给了什么。
+        // 攒下的同行条目由 releaseStatPops 合并求和，不会叠成一坨
+        if (!this.visible && this._databus.hud) this._databus.hud.releaseStatPops();
       }
       return;
     }

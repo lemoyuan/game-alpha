@@ -59,7 +59,9 @@ export default class Chest extends Sprite {
       if (this.kindDef) {
         // Boss 专属匣：效果走注册表，以后加新匣只填 config 表 + 注册一行，不动这个文件
         CHEST_GRANTS[this.kind](databus);
-        if (databus.hud) databus.hud.showToast(`开启「${this.kindDef.name}」`);
+        // quiet 的匣子不弹这条 toast：它画在左栏面板正上方（hud.js:150），2 秒的存活期会把
+        // 「巨细胞核」那七行 +x 的前几行整段盖住——而那七行说的正是同一件事，两条提示重叠只留一条
+        if (!this.kindDef.quiet && databus.hud) databus.hud.showToast(`开启「${this.kindDef.name}」`);
       } else {
         const b = BONUSES[Math.floor(Math.random() * BONUSES.length)];
         player[b.key] += b.step;

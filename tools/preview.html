@@ -90,6 +90,8 @@
   <button data-nav="grantpet">授予融合匣（游戏内已下线）</button>
   <button data-nav="chestpet">摆一只 Boss 融合匣（游戏内已下线）</button>
   <button data-nav="chestplain">摆一只普通金匣</button>
+  <button data-nav="grantcore">授予巨细胞核（全属性 +x 动画）</button>
+  <button data-nav="chestcore">在脚下摆一只 Boss 掉落匣</button>
   <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
   <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
@@ -496,8 +498,8 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       say('预设已清空，回到游戏初始值');
       return;
     }
-    // 宝箱道具三条不打断正在打的局：只有停在首页或已结算时才新开一局
-    if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain') {
+    // 宝箱道具这几条不打断正在打的局：只有停在首页或已结算时才新开一局
+    if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain' || nav === 'grantcore' || nav === 'chestcore') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { clampToCoast } = await import('./js/arena/coast.js');
       const { default: Chest } = await import('./js/npc/chest.js');
@@ -515,6 +517,16 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       } else if (nav === 'chestpet') {
         place('pet_cmv');
         say('Boss 融合匣已摆在右前方');
+      } else if (nav === 'grantcore') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        CHEST_GRANTS.core_cmv(databus); // 绕过掉落，直接走授予链：属性落地 + 左栏七行弹字是同一份数据
+        const p = databus.player;
+        say(`巨细胞核已授出（第 ${databus.bossChests.core_cmv} 截）：攻 ${p.attack} / 攻速 ${p.atkSpeed} / 射程 ${p.attackRange}`
+          + ` / 暴 ${Math.round(p.critRate * 100)}% / 移 ${Math.floor(p.effectiveSpeed())} / 运 ${p.luck} / 防 ${p.defence}`
+          + '，左栏正在逐行弹 +x');
+      } else if (nav === 'chestcore') {
+        place('core_cmv');
+        say('Boss 掉落匣已摆在右前方：走过去踩，拾取那帧起左栏逐行弹 +x（这只 quiet，不弹开箱 toast）');
       } else {
         place(); // 不传 kind = 走七种随机加成的普通金匣
         say('普通金匣已摆在右前方');

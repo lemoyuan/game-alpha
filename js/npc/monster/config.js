@@ -11,6 +11,9 @@
 //                bulletSpeed/bulletRadius/bulletColor=怪物子弹参数
 // 攻速改为1.0次/秒后，整体血量/伤害已下调
 
+// ★这是本文件唯一的 import，只为文件末尾 BOSS_DROPS 表引用加成包。依赖链是 config → consts → render，不成环
+import { STAT_CORE_BOOST } from '../../consts';
+
 // 贴图朝向约定：true = 按「头朝右（+x）」出图，运行时旋转到玩家方向
 //               false = 按「正面朝上」出图，不旋转（当前这批 Q 版贴图）
 // 换贴图批次时改这一个开关即可，见 js/base/sprite.js 的 drawSprite
@@ -390,13 +393,40 @@ export const BOSS_CHESTS = {
              //   以后往这里加行要先想清楚"死一只掉一个"还是"死第二只才掉"——那是两种完全不同的强度
 };
 
+// Boss 掉落道具：与上面的专属匣是两张平行的表、两道各自独立的门（掉落口见 main.js dropBossLoot，
+// 拾取效果同样走 chestGrant.js 注册表，皮肤与 HUD 计数也完全复用，所以这里只有数据没有新代码路径）
+// ★为什么不把这一件直接塞回 BOSS_CHESTS.boss1：那张表整条下线中（2026-10-06 用户判定跟班强度不合理），
+//   挂上去等于跟着一起不可达；反过来把 BOSS_CHESTS_ENABLED 翻回 true，又会连带放出一只在中期曲线里
+//   是地基的跟班。所以门必须分开钉：专属匣要不要回来是另一件事，和这一件无关
+export const BOSS_DROPS_ENABLED = true;
+
+export const BOSS_DROPS = {
+  boss1: [
+    {
+      id: 'core_cmv', name: '巨细胞核', icon: 'cellfuse', // 复用休眠融合匣的图标：多核巨细胞本身就读成「一整只都变大」，和全属性的语义正好对上
+      // 不弹「开启「X」」toast：那条 toast 画在左栏面板正上方（hud.js:150），2 秒的存活期会把
+      // 前三行 +x 整段盖住，而七行动画已经把同一件事说得更清楚。门在 chest.js 的 kindDef.quiet
+      quiet: true,
+      brief: '毒王的一截核心：攻击 / 攻速 / 射程 / 暴击 / 移速 / 幸运 / 防御全部抬一档',
+      fact: 'HCMV 感染后会把宿主细胞的代谢整个重编程——拉高糖酵解与原料摄取给病毒复制供料，被感染的细胞因此膨大成含好几个核的「巨细胞」。这一截核心沿用同一套逻辑：不特化某一项，而是把整套属性一起往上抬',
+      // ★数值一律写在 consts.js 的 STAT_CORE_BOOST，这里只挂引用：hud.js 弹飘字、player.applyBoost 落属性、
+      //   headless 断言三处都读同一个对象，改一个数三处同步，不会出现「面板涨了飘字没涨」
+      boost: STAT_CORE_BOOST,
+    },
+  ],
+  boss2: [], boss3: [], boss4: [], // 空表 = 这只 Boss 没有掉落道具，以后接机制往表里加行，掉落口与 HUD 都不用动
+};
+
 // Boss 死亡的经验爆拆成几颗宝石：最大余数法拆分，总量精确等于 Boss 经验值，只改表现不改经济
 export const BOSS_XP_GEMS = 12;
 
 // 宝箱种类 id → 定义的扁平索引：chest.js / chestGrant.js / hud.js 都从这里查，不再各自遍历表
+// ★两张表都进这一个索引，所以下游那几处查表代码（含 pause.js 详情页的 default 分支）一行都不用改
 export const CHEST_KIND_BY_ID = {};
-for (const kinds of Object.values(BOSS_CHESTS)) {
-  for (const k of kinds) CHEST_KIND_BY_ID[k.id] = k;
+for (const table of [BOSS_CHESTS, BOSS_DROPS]) {
+  for (const kinds of Object.values(table)) {
+    for (const k of kinds) CHEST_KIND_BY_ID[k.id] = k;
+  }
 }
 
 // 难度成长：怪物血量随时间持续上涨

@@ -1,6 +1,9 @@
-import { canvasW, xpForLevel, ITEM_BAR, HUD_TILE, PAUSE_BTN } from '../consts';
+import {
+  canvasW, xpForLevel, ITEM_BAR, HUD_TILE, PAUSE_BTN,
+  STAT_POP_STAGGER, STAT_POP_MS, STAT_POP_RISE, statBoostText,
+} from '../consts';
 import { safeTop, capsuleBottom } from '../render';
-import { MONSTER_TYPES, BOSS_CHESTS } from '../npc/monster/config';
+import { MONSTER_TYPES, BOSS_CHESTS, BOSS_DROPS } from '../npc/monster/config';
 import { UI, FS, R_BTN, sticker, bar, badge, chip, icon, itemGlyph, label, labelMid } from './theme';
 
 const P = 12; // HUD 与屏幕边缘的安全间距
@@ -22,8 +25,8 @@ export function pauseButtonRect() {
   return { x: canvasW - P - PAUSE_BTN, y: hudRowTop(), w: PAUSE_BTN, h: PAUSE_BTN };
 }
 
-// 本局已持有的道具：金匣七种按 ITEM_BAR 的固定顺序，Boss 专属匣追在后面
-// （循环 BOSS_CHESTS 全表，以后加匣这里和 HUD 都不用动），0 层的不占位。
+// 本局已持有的道具：金匣十种按 ITEM_BAR 的固定顺序，Boss 专属匣与 Boss 掉落道具追在后面
+// （循环那两张表，以后加匣这里和 HUD 都不用动），0 层的不占位。
 // HUD 的道具栏和暂停详情页共用这一份，两处的顺序和层数才不会各算各的
 export function ownedItems(databus) {
   const player = databus.player;
@@ -32,25 +35,91 @@ export function ownedItems(databus) {
     const n = it.count(player);
     if (n > 0) items.push({ id: it.glyph, glyph: it.glyph, name: it.name, n, color: UI[it.color] });
   }
-  for (const kinds of Object.values(BOSS_CHESTS)) {
-    for (const k of kinds) {
-      const n = databus.bossChests[k.id] || 0;
-      if (n > 0) items.push({ id: k.id, glyph: k.icon, name: k.name, n, color: UI.bossChestBand });
+  // ★两张表共用 databus.bossChests 这一个 id→次数 的 map，所以这段循环对两边是同一段代码，
+  //   暂停页详情那行也是白读 CHEST_KIND_BY_ID[id].brief（pause.js:33 的 default 分支），两处都不用为新道具加分支
+  for (const table of [BOSS_CHESTS, BOSS_DROPS]) {
+    for (const kinds of Object.values(table)) {
+      for (const k of kinds) {
+        const n = databus.bossChests[k.id] || 0;
+        if (n > 0) items.push({ id: k.id, glyph: k.icon, name: k.name, n, color: UI.bossChestBand });
+      }
     }
   }
   return items;
 }
+
+// 左栏属性面板的七行。★这张表提到模块级是为了让「拾取 Boss 掉落道具」的 +x 飘字知道每个 key 住在第几行：
+//   飘字存的是行号而不是像素 y —— panelY 会跟着「有没有 Boss 血条 / 刘海高度」动（见下面 draw 里的 panelY），
+//   存死 y 的话血条一出没，飘字就飘到别的行上去了
+// ★value 必须是函数：表在模块加载时求值一次，写成字面量等于把开局那一帧的属性永久定死
+// ★导出的唯一读者是 tools/headless_check.mjs 的注册面扫描：它拿这张表当「面板上有哪七行」的权威，
+//   去校验 Boss 掉落道具的 boost key 全都落在行内 —— 拼错的 key 会悄悄涨属性却没有 +x 行可弹
+export const STAT_ROWS = [
+  { key: 'attack',      icon: 'gun',    label: '攻击', value: (p) => p.attack },
+  // 0.1 连加会攒出 1.9000000000000001 这类浮点噪声，显示前收进两位小数
+  { key: 'atkSpeed',    icon: 'bolt',   label: '攻速', value: (p) => `${Math.round(p.atkSpeed * 100) / 100}/秒` },
+  { key: 'attackRange', icon: 'target', label: '射程', value: (p) => p.attackRange },
+  { key: 'critRate',    icon: 'star',   label: '暴击', value: (p) => `${Math.round(p.critRate * 100)}%` },
+  // 读实际生效值：踩进黏液时这个数字会自己掉下去，离开后再涨回来（升级加的是 player.speed，不受影响）
+  { key: 'speed',       icon: 'boot',   label: '移速', value: (p) => Math.floor(p.effectiveSpeed()) },
+  { key: 'luck',        icon: 'clover', label: '幸运', value: (p) => p.luck },
+  { key: 'defence',     icon: 'shield', label: '防御', value: (p) => p.defence },
+];
 
 // 战斗 HUD：全部走 ui/theme.js 的贴纸图元，信息量与换皮前完全一致，只是收进面板
 export default class Hud {
   constructor() {
     this.toastText = '';
     this.toastUntil = 0;
+    // 待播 / 在播的 +x 飘字：{ row, key, v, text, t0 }。★Hud 是单例、活过 DataBus.reset()，
+    //   所以每局开局要由 main.js 显式清空，否则上一局最后那几条会飘进新一局
+    this.statPops = [];
   }
 
   showToast(text, duration = 2000) {
     this.toastText = text;
     this.toastUntil = Date.now() + duration;
+  }
+
+  // 左栏七行从上到下逐行弹 +x。来源有三个，全部汇到 Player.applyBoost 那一个漏斗：
+  //   升级自动成长、三选一选卡、Boss 掉落道具（chestGrant.js 的 core_cmv）
+  // ★文本按加成包直接格式化，不存「加前的属性值」去求差：移速那行面板读的是 effectiveSpeed()，
+  //   踩在黏液里求差会算出 0 甚至负数，而玩家要看到的是「这笔加成给了我多少」
+  // ★t0 带上行序偏移就是「错开」的全部实现：绘制端只判 age < 0 跳过，不需要额外状态机
+  popStats(boost, held) {
+    const now = Date.now();
+    STAT_ROWS.forEach((row, i) => {
+      const v = boost[row.key];
+      if (v === undefined) return; // 加成包没覆盖这一行就不弹，表与包不必永远等长
+      // held = 三选一面板正开着：先挂起（t0 留 null，绘制端跳过），等面板关闭调 releaseStatPops 统一盖章。
+      // ★不挂起的话，升级成长与选卡这两笔加成发生在面板打开期间，700ms 的飘字会整段死在黑遮罩后面，
+      //   玩家关掉面板时字早就没了——等于这两笔永远没有动画
+      this.statPops.push({ row: i, key: row.key, v, text: statBoostText(row.key, v), t0: held ? null : now + i * STAT_POP_STAGGER });
+    });
+  }
+
+  // 面板关闭那一刻把挂起的 +x 按行序重新盖章开弹。一次暂存里可能混着好几笔
+  // （一级成长四行 + 刚选的那张卡一行，连升几级还会更多），在这里合成一条从上到下的完整瀑布
+  // ★同一行攒了多条就合并求和再格式化：连升三级各 +1 攻击，释放时读作一条 +3，
+  //   比三条 +1 叠在两像素的垂直差里清楚——行与 key 一一对应，所以同行求和不会串量纲
+  releaseStatPops() {
+    const held = this.statPops.filter((p) => p.t0 === null);
+    if (!held.length) return;
+    const byRow = new Map();
+    for (const p of held) {
+      const m = byRow.get(p.row);
+      if (m) m.v = Math.round((m.v + p.v) * 100) / 100;
+      else byRow.set(p.row, p);
+    }
+    const rows = [...byRow.keys()].sort((a, b) => a - b);
+    const keep = new Set(rows.map((r) => byRow.get(r)));
+    const now = Date.now();
+    rows.forEach((row, i) => {
+      const p = byRow.get(row);
+      p.text = statBoostText(p.key, p.v);
+      p.t0 = now + i * STAT_POP_STAGGER;
+    });
+    this.statPops = this.statPops.filter((p) => p.t0 !== null || keep.has(p));
   }
 
   // 半透明底板：不画白边和硬投影，避免战斗中每帧多堆两层填充
@@ -156,26 +225,37 @@ export default class Hud {
 
   // 左栏角色属性：图标 + 数值，收进半透明底板（右栏已换成道具格，见 drawItems）
   drawStats(ctx, player, y) {
-    const rows = [
-      { icon: 'gun', label: '攻击', value: player.attack },
-      // 0.3 连加会攒出 1.9000000000000001 这类浮点噪声，显示前收进两位小数
-      { icon: 'bolt', label: '攻速', value: `${Math.round(player.atkSpeed * 100) / 100}/秒` },
-      { icon: 'target', label: '射程', value: player.attackRange },
-      { icon: 'star', label: '暴击', value: `${Math.round(player.critRate * 100)}%` },
-      // 读实际生效值：踩进黏液时这个数字会自己掉下去，离开后再涨回来（升级加的是 player.speed，不受影响）
-      { icon: 'boot', label: '移速', value: Math.floor(player.effectiveSpeed()) },
-      { icon: 'clover', label: '幸运', value: player.luck },
-      { icon: 'shield', label: '防御', value: player.defence },
-    ];
     const w = 100;
     const rh = 17;
-    this.panel(ctx, P, y, w, rows.length * rh + 8);
-    rows.forEach((row, i) => {
+    this.panel(ctx, P, y, w, STAT_ROWS.length * rh + 8);
+    STAT_ROWS.forEach((row, i) => {
       const ry = y + 8 + i * rh;
       icon(ctx, row.icon, P + 14, ry + 6, 14, { color: UI.blue });
       label(ctx, row.label, P + 27, ry + 11, { size: FS.tiny, color: UI.muted });
-      label(ctx, `${row.value}`, P + w - 8, ry + 11, { size: FS.tiny, bold: true, color: UI.textOnDark, align: 'right' });
+      label(ctx, `${row.value(player)}`, P + w - 8, ry + 11, { size: FS.tiny, bold: true, color: UI.textOnDark, align: 'right' });
     });
+    this.drawStatPops(ctx, y, w, rh);
+  }
+
+  // 拾取 Boss 掉落道具后那七条 +x：贴在面板右沿外（x = P + w + 4 = 116，面板右边界 112）左对齐往画面里长。
+  // ★不叠在数值上：数值此刻已经变了，两层字挤在 100px 宽的面板里会糊成一片，而「变了多少」正是要读清的那个
+  // ★不会撞上右栏道具格：那批格子右对齐，10 格时最左格圆心在 233，而这里最宽的「+0.1/秒」从 116 起约到 150
+  // 倒序遍历：过期条目要 splice，正序遍历会跳过紧邻的下一条
+  drawStatPops(ctx, y, w, rh) {
+    if (!this.statPops.length) return;
+    const now = Date.now();
+    for (let i = this.statPops.length - 1; i >= 0; i--) {
+      const pop = this.statPops[i];
+      if (pop.t0 === null) continue; // 还挂起着（三选一面板没关）：不画、也不过期，等 releaseStatPops 盖章
+      const age = now - pop.t0;
+      if (age < 0) continue; // 还没轮到这一行（逐行错开 STAT_POP_STAGGER）
+      if (age > STAT_POP_MS) { this.statPops.splice(i, 1); continue; }
+      const t = age / STAT_POP_MS;
+      ctx.globalAlpha = 1 - t * t; // 同 damageText 的淡出曲线：前段留得住字，末段才快速收干净
+      label(ctx, pop.text, P + w + 4, y + 8 + pop.row * rh + 11 - STAT_POP_RISE * t,
+        { size: FS.tiny, bold: true, color: UI.gold });
+      ctx.globalAlpha = 1;
+    }
   }
 
   // 右栏道具栏：只画已持有，一排最多 HUD_TILE.perRow 格，超出向下续排，整块右对齐。

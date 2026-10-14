@@ -236,5 +236,34 @@ export const LEVEL_UP_BONUS = {
   speed: 5,         // 移速 +5
 };
 
+// Boss 掉落道具「巨细胞核」的全属性包：只动 HUD 左栏面板那 7 项（见 ui/hud.js 的 STAT_ROWS），
+// ★刻意不含 maxHp —— 生命上限画在血条那一块而不在面板里，涨它就没有对应的 +x 行可弹。
+// 量级是「轻」档 ≈ 每项三分之一张三选一卡，对照上面 UPGRADES：
+//   attack+3 / atkSpeed+0.3 / attackRange+30 / critRate+0.1 / speed+15% / luck+1 / defence+2
+// ★speed 这里是加算不是乘算：+8 ≈ 170 基数上 15% 的三分之一，走的是 Player.applyBoost 的统一通道。
+//   luck/defence 只有半张卡（卡本身就只有 +1/+2，再切就没意义了），这两项故意偏轻
+export const STAT_CORE_BOOST = {
+  attack: 2,        // 攻击力 +2
+  atkSpeed: 0.1,    // 攻速 +0.1 次/秒
+  attackRange: 10,  // 射程 +10
+  critRate: 0.03,   // 暴击率 +3%
+  speed: 8,         // 移速 +8
+  luck: 1,          // 幸运 +1
+  defence: 1,       // 防御 +1
+};
+
+// 拾取后左栏逐行弹 +x 的动画节拍
+export const STAT_POP_STAGGER = 80;  // 逐行错开的毫秒：7 行全弹完 480ms，才读得出「从上到下一行行跳」而不是一片同时闪
+export const STAT_POP_MS = 700;      // 单条存活毫秒：短于错开的 8~9 倍看着断，长过 1 秒会和三选一面板抢注意力
+export const STAT_POP_RISE = 18;     // 上浮像素：略高于面板行距 17，才读得出这条字「离开了自己那一行」
+
+// 加成 → 飘字文本。按 key 分派而不是统一 `+${v}`：攻速与暴击在面板上带单位（x/秒、x%），
+// 飘字必须跟着带，否则「+0.1」读不出是 0.1 什么、和旁边那行「+10」混在一起像同一量纲
+export function statBoostText(key, v) {
+  if (key === 'critRate') return `+${Math.round(v * 100)}%`;
+  if (key === 'atkSpeed') return `+${v}/秒`;
+  return `+${v}`;
+}
+
 export const canvasW = canvasWidth;
 export const canvasH = canvasHeight;

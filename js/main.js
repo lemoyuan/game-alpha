@@ -13,7 +13,9 @@ import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import BloodClot from './npc/bloodclot';
 import Chest from './npc/chest';
-import { BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_XP_GEMS, BLOOD_CLOT_HEAL } from './npc/monster/config';
+import {
+  BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_DROPS, BOSS_DROPS_ENABLED, BOSS_XP_GEMS, BLOOD_CLOT_HEAL,
+} from './npc/monster/config';
 import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
@@ -55,6 +57,7 @@ export default class Main {
     databus.player = new Player();
     databus.spawner.reset();
     databus.hud.toastUntil = 0; // 丢掉上一局残留的提示
+    databus.hud.statPops.length = 0; // 同理：Hud 是单例、活过 reset()，上一局最后那几条 +x 会飘进新一局
     databus.upgradeScreen.visible = false;
     databus.pauseScreen.visible = false;
     this.clearJoystick();
@@ -65,6 +68,7 @@ export default class Main {
   backToHome() {
     databus.reset(); // reset 后 screen === 'home'
     databus.hud.toastUntil = 0;
+    databus.hud.statPops.length = 0; // 同 start()：Hud 单例活过 reset()，残留的 +x 会飘进下一局
     databus.upgradeScreen.visible = false;
     databus.pauseScreen.visible = false;
     this.clearJoystick();
@@ -243,9 +247,12 @@ export default class Main {
     }
   }
 
-  // Boss 死亡专属回报：一圈经验宝石（必掉）+ 一只专属匣（已整条下线，见 config 的 BOSS_CHESTS_ENABLED）。
+  // Boss 死亡专属回报：一圈经验宝石（必掉）+ 至多两件带 kind 的匣（专属匣、掉落道具，各有一道门）。
   // 宝石用最大余数法拆，总量精确等于 Boss 经验值，只改表现不改经济。
-  // ★门只钉在这一个掉落口：带 kind 的匣除这里以外只有预览台一个来源，所以游戏内整条不可达，
+  // ★两道门各自独立、别合并成一个开关：专属匣整条下线中（config 的 BOSS_CHESTS_ENABLED = false，
+  //   2026-10-06 用户判定那只跟班强度不合理），而掉落道具是上线的（BOSS_DROPS_ENABLED = true）。
+  //   合成一个开关的后果是「想放回掉落道具就得连带放出跟班」，那正是当初分开建两张表要避开的
+  // ★门只钉在这一个掉落口：带 kind 的匣除这里以外只有预览台一个来源，所以开关一关游戏内整条不可达，
   //   HUD 的黑红计数行和详情页那行读的都是 databus.bossChests（恒空），自然不占位，不必各自再钉一遍。
   //   经验爆刻意留在门外：那是 Boss 战的经济收益，和「匣的强度」无关
   dropBossLoot(e) {
@@ -255,6 +262,20 @@ export default class Main {
         const kind = kinds[Math.floor(Math.random() * kinds.length)];
         const chest = databus.pool.getItemByClass('chest', Chest);
         chest.init(e.x, e.y, kind.id);
+        databus.chests.push(chest);
+      }
+    }
+    // Boss 掉落道具（当前只有 boss1 的「巨细胞核」，拾取效果见 chestGrant.js）
+    if (BOSS_DROPS_ENABLED) {
+      const kinds = BOSS_DROPS[e.type];
+      if (kinds && kinds.length) {
+        const kind = kinds[Math.floor(Math.random() * kinds.length)];
+        // ★必须收回海岸线内：匣子没有磁吸，只有走过去踩得到（chest.js 的 dist 判定），
+        //   掉到 playable 区域外就永远捡不到。上面那段休眠的专属匣用的是裸 e.x/e.y —— 那是它下线前就有的坑，别照抄
+        const spot = { x: e.x, y: e.y };
+        clampToCoast(spot, 6);
+        const chest = databus.pool.getItemByClass('chest', Chest);
+        chest.init(spot.x, spot.y, kind.id);
         databus.chests.push(chest);
       }
     }

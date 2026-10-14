@@ -263,17 +263,31 @@ export default class Player extends Sprite {
     if (this.xp >= needed) {
       this.xp -= needed;
       this.level++;
-      this.applyLevelBonus();
+      this.applyLevelBonus(databus); // held 由它自己声明为 true：这笔成长属于紧接着打开的那扇面板
       databus.isPaused = true;
       databus.upgradeScreen.show(databus);
     }
   }
 
-  // 升级自动全属性成长，在三选一之外额外叠加；保留两位小数避免攻速/暴击出现浮点尾数
-  applyLevelBonus() {
-    for (const key of Object.keys(LEVEL_UP_BONUS)) {
-      this[key] = Math.round((this[key] + LEVEL_UP_BONUS[key]) * 100) / 100;
+  // 「一包加成」的统一入口：升级自动成长、三选一选卡、Boss 掉落道具（chestGrant.js 的 core_cmv）
+  // 共用这一套四舍五入，也共用「落完属性就弹 +x」这一个触发口——谁加的属性谁负责弹字，
+  // 不会出现「属性涨了没动画」或「弹了字没涨属性」的断链
+  // ★保留两位小数不是显示层的事：0.1/0.02 这类值连加会攒出 1.9000000000000001 的浮点尾数，
+  //   面板显示前那次 Math.round 只是遮症状，属性本身还是脏的（暴击率参与掷骰时会带着尾数走）
+  // key 必须与 Player 的属性名完全一致，否则写入静默落到一个 undefined 属性上——headless 的注册面扫描专治这个
+  // held 由调用方声明，不在这里猜 upgradeScreen.visible：同一帧里「宝石经验升级开面板」可能先于
+  //   「踩到匣子」发生，靠猜会把核心那笔飘字误挂起到下一扇面板去。规则很简单——
+  //   面板会话内发生的两笔（升级成长、选卡）传 true，场面上拾取的核心传 false
+  applyBoost(bonus, databus, held) {
+    for (const key of Object.keys(bonus)) {
+      this[key] = Math.round((this[key] + bonus[key]) * 100) / 100;
     }
+    if (databus && databus.hud) databus.hud.popStats(bonus, held);
+  }
+
+  // 升级自动全属性成长，在三选一之外额外叠加。held 恒 true：addXp 紧接着就开面板，这笔字必须等关面板再弹
+  applyLevelBonus(databus) {
+    this.applyBoost(LEVEL_UP_BONUS, databus, true);
   }
 
   draw(ctx) {
