@@ -1,5 +1,6 @@
 import Sprite from '../base/sprite';
 import Bullet from './bullet';
+import LaserCross from './laserCross';
 import {
   PLAYER_RADIUS, PLAYER_SPEED, PLAYER_MAX_HP, PLAYER_SPRITE, PLAYER_SPRITE_SIZE,
   PLAYER_MUZZLE_LEN, PLAYER_MUZZLE_FLASH,
@@ -9,6 +10,7 @@ import {
   BULLET_RANGE_BUFFER, SHOT_SPREAD, xpForLevel, LEVEL_UP_BONUS,
   XP_PICKUP_RANGE,
   POISON_TICK, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
+  LASER_CROSS_CD,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
@@ -38,6 +40,12 @@ export default class Player extends Sprite {
     this.bomber = 0;                    // 炸弹跟班层数（宝箱：炸弹跟班+1）：场上只有一只，层数 = 一轮扔几枚。节奏与爆风在 consts.js 的 BOMB_CD/BOMB_BLAST_R
     this.turrets = 0;                   // 场上炮台座数（宝箱：炮台+1，一层一座、不封顶）。★和上面两条跟班相反：这里层数买的是「几只」而不是「一轮几发」，
                                         //   因为那两条的前提是实体只有一个位置，而炮台的位置就是它的内容（落位由 databus 观察这个数来做）
+    this.laserCross = 0;                // 海火核心层数（Boss 掉落道具，见 config 的 BOSS_DROPS.boss2）：每次真正掉血放出一根旋转十字光束。
+                                        //   ★层数只买「每次结算几点伤害」，节拍 / 束长 / 束数全部钉死在 consts 的 LASER_CROSS_*——
+                                        //   十字是这件道具图标许下的形状，八层的它就不叫十字了
+    this.laserCrossT = 0;               // 距下一次可触发的毫秒数（dt 累加，同下面 vialGainT 那条）：★不用 Date.now，
+                                        //   三选一面板开着时 main.js 整条跳过 databus.update，墙上时钟会照走，
+                                        //   后果是「选卡那几秒攒出一根免费十字」，关门瞬间白放一发
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变
@@ -64,6 +72,9 @@ export default class Player extends Sprite {
     // 无敌帧用 Date.now() 是因为它是「伤害源的限流器」，不是持续时间，两者不要照抄彼此
     this.slowLeft = Math.max(0, this.slowLeft - dt * 1000);
     if (this.slowLeft === 0) this.slowMult = 1; // 归零必须复位倍率，否则下次只上弱黏液会继承旧的强值
+
+    // 海火核心的触发冷却：和上面减速、下面血瓶同一把 dt 尺，所以三选一面板开着时一起冻住
+    this.laserCrossT = Math.max(0, this.laserCrossT - dt * 1000);
 
     // 中毒：同样的 dt 时钟，但走自己这条路结算——不碰 takeDamage，所以不吃受击无敌帧、也不被护盾挡。
     // 无敌帧是「一次撞击」的限流器，护盾挡的是「一次攻击」，毒素既不被撞完也不该被盾白吞
@@ -167,7 +178,7 @@ export default class Player extends Sprite {
     return this.slowLeft > 0 ? this.speed * this.slowMult : this.speed;
   }
 
-  takeDamage(amount, now) {
+  takeDamage(amount, now, databus) {
     if (now < this.invincibleUntil) return;
     this.invincibleUntil = now + PLAYER_INVINCIBLE;
     if (this.shield > 0) {
@@ -178,6 +189,28 @@ export default class Player extends Sprite {
     const dmg = Math.max(1, amount - this.defence);
     this.hp -= dmg;
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
+    this.fireLaserCross(databus);
+  }
+
+  /**
+   * 海火核心（Boss 掉落道具）唯一的触发口：只有「真的掉血了」才放十字。
+   * ★三条不触发的路各有理由，别顺手合并：
+   *   无敌帧压掉的那一下没受伤、护盾挡掉的那一下也没受伤 —— 护盾和这件都是「活下来」的道具，
+   *   但一个管挡、一个管反击，挡掉的那一下不该顺便送一次输出（否则两件叠起来就是"挨打白赚"）；
+   *   applyBlast（双子自溶爆、囊泡溶血素）和中毒跳血那两条根本不走 takeDamage，所以也不触发 ——
+   *   那两条是「不吃无敌帧」的通道，接上触发等于站进毒里白嫖常驻十字，
+   *   把这件道具从「挨打的反击」翻成「越中毒越强」的反向激励，而正确玩法（躲开每一刀）反而拿最少输出
+   */
+  fireLaserCross(databus) {
+    if (this.laserCross <= 0 || this.laserCrossT > 0 || !databus) return;
+    this.laserCrossT = LASER_CROSS_CD;
+    const cross = databus.pool.getItemByClass('laserCross', LaserCross);
+    // 起始朝向取角色当前朝向（它本来就是上一发子弹对准目标算出来的），所以这根十字是从"你正盯着的那边"转出去的。
+    // ★不在这里索敌：朝向只在触发那一刻定一次，之后按固定角速度转，同「子弹不得追踪/拐弯」那条规则
+    cross.x = this.x;
+    cross.y = this.y;
+    cross.init(this.laserCross, Math.atan2(this.dirY, this.dirX));
+    databus.laserCrosses.push(cross);
   }
 
   /**

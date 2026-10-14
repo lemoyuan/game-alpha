@@ -42,7 +42,7 @@ export default class EnemyBullet extends Sprite {
     const dx = player.x - this.x;
     const dy = player.y - this.y;
     if (dx * dx + dy * dy < (this.radius + player.radius) ** 2) {
-      player.takeDamage(this.damage, Date.now());
+      player.takeDamage(this.damage, Date.now(), databus); // 第三个参数见 Player.fireLaserCross
       this.isDestroyed = true;
     }
   }

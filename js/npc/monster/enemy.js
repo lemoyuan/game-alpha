@@ -94,9 +94,12 @@ export default class Enemy extends Sprite {
   // 减伤类机制（膜王的 EPS 膜）覆写这个方法，不要再去 bullet.js 里加特判
   // color 只服务飘字着色（燃烧跳血传 UI.burn）；子类覆写时必须把它透传给 super.takeDamage，
   // 否则漏的那一只怪身上燃烧跳字会退回白色，其余全是橙色——局部错、默认对，冒烟测试查不出来
-  takeDamage(dmg, isCrit, databus, color) {
+  takeDamage(dmg, isCrit, databus, color, silent) {
     this.hp -= dmg;
-    databus.addDamageText(this.x, this.y - this.radius, dmg, isCrit, color);
+    // silent 只服务十字激光：一轮扫射同时压住几十只怪，逐只跳字会把飘字池（DAMAGE_TEXT_MAX=160）灌满，
+    //   玩家自己的普攻数字反而一条都看不到。实测 420 秒站桩局：光束占掉全部飘字的 95.2%、28.7% 的数字被上限吃掉。
+    //   光束本身就是这根的反馈，所以它掉血不掉字。★和 color 同一条规矩：子类覆写必须透传，漏了就是局部静默
+    if (!silent) databus.addDamageText(this.x, this.y - this.radius, dmg, isCrit, color);
     if (this.hp <= 0) this.isDead = true;
   }
 

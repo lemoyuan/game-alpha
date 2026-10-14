@@ -32,6 +32,50 @@ export const TURN_WARN = 120;
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+/**
+ * 光束本体的三层描边：外晕 → 主束 → 内芯。禁渐变禁 shadowBlur（见 ART.md 第三节）。
+ * ★导出是给友方那一根用的（js/player/laserCross.js「海火核心」放的就是这招）：敌我共用一条画法，
+ *   宽度的三个比例才不会出现「Boss 那根看着比我的粗」这种两边各算一次的结果。
+ *   判定宽度 = 主束 beamW，外晕故意只多 35% —— 晕再宽就是在画一条不存在的安全间隙，
+ *   玩家会照着晕的边缘走位，然后被主束打到。
+ * @param {number} a 整体亮度 0~1（淡出段传递减到 0 的值；蓄力段不走这里，走 paintTelegraph）
+ */
+export function paintBeam(ctx, ox, oy, ux, uy, len, beamW, tint, a) {
+  const ex = ox + ux * len;
+  const ey = oy + uy * len;
+  ctx.lineCap = 'round';
+
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = beamW * 1.35;
+  ctx.globalAlpha = clamp01(a * 0.16);
+  strokeBeam(ctx, ox, oy, ex, ey);
+
+  ctx.lineWidth = beamW;
+  ctx.globalAlpha = clamp01(a * 0.5);
+  strokeBeam(ctx, ox, oy, ex, ey);
+
+  ctx.strokeStyle = UI.cream;
+  ctx.lineWidth = beamW * 0.26;
+  ctx.globalAlpha = clamp01(a * 0.95);
+  strokeBeam(ctx, ox, oy, ex, ey);
+}
+
+// 蓄力那根细瞄准线：宽度与颜色比例和主束同源，节奏（脉动、渐亮）各家自己定
+export function paintTelegraph(ctx, ox, oy, ux, uy, len, tint, a) {
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = clamp01(a);
+  strokeBeam(ctx, ox, oy, ox + ux * len, oy + uy * len);
+}
+
+function strokeBeam(ctx, x0, y0, x1, y1) {
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+}
+
 export default class Laser extends Sprite {
   constructor() {
     super(null, 0, 0, 0, 0);
@@ -119,7 +163,7 @@ export default class Laser extends Sprite {
     // 命中后不置 isDestroyed：激光是持续伤害源，靠角色 500ms 无敌帧限流
     // （照抄 enemyBullet 的"命中即回收"会得到一根只响一次的激光）
     if (player && this.hits(player)) {
-      player.takeDamage(this.damage, Date.now());
+      player.takeDamage(this.damage, Date.now(), databus); // databus 是给角色那根十字激光的：见 Player.fireLaserCross
     }
   }
 
@@ -145,17 +189,9 @@ export default class Laser extends Sprite {
 
   // 蓄力：一根脉动的细瞄准线 + 眼里聚光的点，明确表达"这条线现在还不疼"
   drawTelegraph(ctx) {
-    const ex = this.ox + this.ux * this.len;
-    const ey = this.oy + this.uy * this.len;
     const pulse = Math.abs(Math.sin(this.phaseT / 90));
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = this.tint;
-    ctx.lineWidth = 1.5;
-    ctx.globalAlpha = clamp01(0.18 + 0.34 * pulse);
-    ctx.beginPath();
-    ctx.moveTo(this.ox, this.oy);
-    ctx.lineTo(ex, ey);
-    ctx.stroke();
+    paintTelegraph(ctx, this.ox, this.oy, this.ux, this.uy, this.len, this.tint, 0.18 + 0.34 * pulse);
+    // 光根只有 Boss 那一侧有：奶白点在"眼"里聚起来，友方那一根的原点是角色自己，画上去只会糊住脸
     ctx.globalAlpha = clamp01(0.35 + 0.6 * (this.phaseT / this.telegraph));
     ctx.fillStyle = UI.cream;
     ctx.beginPath();
@@ -163,36 +199,11 @@ export default class Laser extends Sprite {
     ctx.fill();
   }
 
-  // 扫射/淡出：三层 lineCap='round' 描边叠出"外晕—主束—内芯"，禁渐变禁 shadowBlur（见 ART.md 第三节）
+  // 扫射/淡出：三层描边见模块级 paintBeam
   drawBeam(ctx) {
-    let a = 1;
-    if (this.phase === 2) a = 1 - this.phaseT / this.fade;
-    const ex = this.ox + this.ux * this.len;
-    const ey = this.oy + this.uy * this.len;
-
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = this.tint;
-    ctx.lineWidth = this.beamW * 1.35; // 外晕：纯视觉，但比判定宽出一圈就是骗人，倍数压到 1.35
-    ctx.globalAlpha = clamp01(a * 0.16);
-    this.strokeBeam(ctx, ex, ey);
-
-    ctx.lineWidth = this.beamW;
-    ctx.globalAlpha = clamp01(a * 0.5);
-    this.strokeBeam(ctx, ex, ey);
-
-    ctx.strokeStyle = UI.cream;
-    ctx.lineWidth = this.beamW * 0.26;
-    ctx.globalAlpha = clamp01(a * 0.95);
-    this.strokeBeam(ctx, ex, ey);
-
+    const a = this.phase === 2 ? 1 - this.phaseT / this.fade : 1;
+    paintBeam(ctx, this.ox, this.oy, this.ux, this.uy, this.len, this.beamW, this.tint, a);
     if (this.phase === 1 && this.owner.warnTurn) this.drawTurnArrows(ctx, a);
-  }
-
-  strokeBeam(ctx, ex, ey) {
-    ctx.beginPath();
-    ctx.moveTo(this.ox, this.oy);
-    ctx.lineTo(ex, ey);
-    ctx.stroke();
   }
 
   // 换向预告：三枚人字箭头指向"下一段要扫回来的方向"（当前转向的反方向）

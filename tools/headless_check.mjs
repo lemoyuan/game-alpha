@@ -204,6 +204,24 @@ if (BOSSDROP !== undefined) {
   else fs.writeFileSync(f, code.replace(re, `export const BOSS_DROPS_ENABLED = ${BOSSDROP === '1' ? 'true' : 'false'}`));
 }
 
+// 海火核心（十字激光）单独一头旋钮：LASER=0 把副本里 BOSS_DROPS.boss2 那一行挪到一个表不读的兄弟键上，
+// 于是这一件在游戏内整条不可达，而 id 仍然进 CHEST_KIND_BY_ID（建表循环吃的是 Object.values，兄弟键也在内）——
+// 这样「关掉」那一端只掐掉掉落与触发，注册面扫描照旧覆盖它，不会把「表里删了一行」和「门没钉住」混报。
+// ★为什么不复用 BOSSDROP：那道门管的是整张表，翻到 0 会把巨细胞核一起掐掉，A/B 读到的就不是这一件的账
+const LASER = process.env.LASER;
+if (LASER !== undefined && LASER !== '1') {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  // ★必须先从 BOSS_DROPS 切一刀再改：BOSS_CHESTS 里也有一行 `boss2: [],`（那只匣子的机制待发），
+  //   非全局 replace 命中的是先出现的那一行，于是这一组掐掉的是本来就不存在的匣子、海火核心照掉
+  const at = code.indexOf('export const BOSS_DROPS = {');
+  const re = /^(\s*)boss2: \[/m;
+  const tail = at < 0 ? '' : code.slice(at);
+  // ★用 re.test() 判命中，不比替换前后的字符串
+  if (!re.test(tail)) errors.push(`副本 config.js 的 BOSS_DROPS 里找不到 boss2: [ ，LASER=${LASER} 这一组等于没跑`);
+  else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss2: [], $1boss2Parked: [')}`);
+}
+
 // 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
 // ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
 //   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
@@ -238,9 +256,13 @@ const {
   ARENA_W, ARENA_H, ITEM_BAR, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
   TURRET_CD, TURRET_RANGE, TURRET_MUZZLE_LEN, TURRET_PIVOT_Y, TURRET_BULLET_RADIUS, TURRET_BULLET_COLOR, turretDamage, BULLET_RANGE_BUFFER,
   STAT_CORE_BOOST, statBoostText, STAT_POP_STAGGER, STAT_POP_MS, UPGRADES, LEVEL_UP_BONUS,
+  LASER_CROSS_TELEGRAPH, LASER_CROSS_FIRE, LASER_CROSS_FADE, LASER_CROSS_SPIN,
+  LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_DMG, LASER_CROSS_HIT_GAP, LASER_CROSS_CD, laserCrossDamage,
   canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
+// 卡片顶边要避开的那条线：wx 桩里给的是刘海机（safeTop 47 / 胶囊底边 83），详情页排版探针读这两个数
+const { safeTop, capsuleBottom } = await import(fileUrl(path.join(COPY, 'render.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
 const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).default;
 // 这几件实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
@@ -248,6 +270,7 @@ const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).defau
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const BloodVial = (await import(fileUrl(path.join(COPY, 'player', 'bloodVial.js')))).default;
 const Turret = (await import(fileUrl(path.join(COPY, 'player', 'turret.js')))).default;
+const LaserCross = (await import(fileUrl(path.join(COPY, 'player', 'laserCross.js')))).default;
 const Bullet = (await import(fileUrl(path.join(COPY, 'player', 'bullet.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
@@ -269,8 +292,33 @@ const strayPopBoosts = [];     // 三个来源都认不出的加成包：有新�
 const statPopBoosts = [];      // 核心那几次传进来的加成包，用来验「弹的字和落的属性是同一份数据」
 let coreBoostCalls = 0;        // player.applyBoost(STAT_CORE_BOOST) 的次数
 const coreBoostMismatch = [];  // 加前加后求差 ≠ 加成包的项，逐条留下好定位是哪个 key 断的
-let sawStatChest = false;      // 场上是否出现过带 boost 的匣（掉落道具）：关掉开关时这条必须一直 false
+let sawStatChest = false;      // 场上是否出现过带 boost 的匣（掉落道具里的「巨细胞核」）：关掉开关时这条必须一直 false
 let sawPetChest = false;       // 场上是否出现过带 pet 的匣（休眠的专属匣）：同上
+// —— Boss 掉落道具「海火核心」（十字激光）的账本 ——
+// ★这一本和上面那本分家是对的：两件掉落道具的表相邻、开关相邻，但一条链是「属性 + 弹字」、
+//   另一条是「层数 + 受伤触发 + 实体扫射」，混在一本账里任何一端归零都分不清是哪件出的事
+let sawDropChest = false;      // 场上出现过 BOSS_DROPS 里任意一种匣：掉落口总账，BOSSDROP 两端都读它
+let sawCrossChest = false;     // 其中海火核心那一种真的掉到地上过
+let boss2Drops = 0;            // 海火死了几只：0 时上面那条的零是抽样零，不能当断链判
+let crossGrants = 0;           // CHEST_GRANTS.core_seafire 被调的次数 = 拾取了几截核心
+let crossHpLosses = 0;         // 带着层数时「真正掉血」的次数：触发分母，用来分清抽样零和代码零
+let crossBlockedShield = 0;    // 被无敌帧或盾挡下、按设计不该触发的那些次数
+let crossFires = 0;            // 真正放出到场上的十字根数
+let crossPeak = 0;             // 同时在场的根数峰值：CD 大于整段扫射时长时必须是 1
+let crossSettles = 0;          // 扫射段的结算帧数
+let crossHits = 0;             // 命中的「怪·次」总数
+let crossDmg = 0;              // 十字累计造成的伤害：报 DPS 用
+let crossTexts = 0;            // 十字扫射期间抽到的飘字条数：静默改造后恒为 0，非 0 即红（见海火核心那组断言）
+const crossFireAt = [];        // 每次放出的时刻（毫秒，DT 累加）：相邻间隔用来验 CD
+const crossHpLossAt = [];      // 每次「真正掉血」的时刻：和 crossFireAt 配对用，一根十字必须对上一次掉血
+const crossInitLayers = [];    // 每根十字 init 时拿到的层数：验伤害公式与「层数只来自拾取」
+let insideCross = false;       // 正在十字的 settle 里：这段时间的 Enemy.takeDamage 都算十字的战果
+let frameMs = 0;               // 主循环当前的仿真时刻：钩子只在装钩子那一帧闭包一次 i，读数必须走这个
+// BOSS_DROPS 全表的 id：判「这只匣子是不是掉落道具」按 id 认，不按「有没有某个字段」认。
+// ★LASER=0 那一组把 boss2 那一行挪到了兄弟键 boss2Parked 上，Object.values 照样扫得到，
+//   所以这张 id 集在两端都完整 —— 掐断的是掉落口，不是注册面
+const DROP_IDS = new Set();
+for (const kinds of Object.values(BOSS_DROPS)) for (const k of kinds) DROP_IDS.add(k.id);
 const popFirstFrame = new Map(); // 每句 +x 文案第一次被画出来是第几帧：错开那条断言读这个，不读「有没有画过」
 let popQueueLen = -1;          // 拾取当帧 popStats 排进队列的条数（-1 = 还没拾取过）
 let popSpread = -1;            // 拾取当帧队列首尾 t0 的跨度，应等于 (行数-1) × STAT_POP_STAGGER
@@ -530,6 +578,7 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
   dbProto.addDamageText = function (x, y, damage, isCrit, color) {
     if (color === UI.burn) { burnTicks++; burnDmg += damage; }
     if (color === UI.blood) clotHeals++; // 血块被吃掉才会有的洋红跳字：主循环里那条回血线路的唯一实场读数
+    if (insideCross) crossTexts++; // 静默改造前实测这个数字占全部飘字的 95.2%：现在光束走 silent，非 0 就是漏透传
     const before = this.damageTexts.length;
     origAdd.call(this, x, y, damage, isCrit, color);
     // 不区分来源：白字被顶掉同样要紧，peak 撞到上限就说明这道闸在吃玩家该看到的数字
@@ -611,12 +660,57 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
   };
 }
 
+// 十字激光的实场账：三处钩子分头钉「拾取了几次 / 放了几根 / 打了几个怪」，第四处把飘字也归到它名下。
+// ★战果归属用一对 insideCross 标记，而不是给游戏代码加「谁打的」参数：
+//   Enemy.takeDamage 的签名已经是四参（dmg, isCrit, databus, color），再加一个来源参数的后果是
+//   下一个调用点漏传，而漏传只会让战果安静地记到普攻头上 —— 读数看着照样合理，正是最难查的那种
+{
+  const orig = CHEST_GRANTS.core_seafire;
+  // ★注册面扫描在下面还有一条查同一个键，这里先钉一次：登记缺了的话拾取会当场 TypeError，
+  //   而那一声报错在几百帧的日志里远不如一句「核心没注册」好定位
+  if (!orig) errors.push('CHEST_GRANTS 里没有 core_seafire：chest.js 那句裸 CHEST_GRANTS[kind](databus) 会在拾取瞬间抛 TypeError');
+  else CHEST_GRANTS.core_seafire = (db) => { crossGrants++; return orig(db); };
+}
+{
+  const proto = LaserCross.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) {
+    crossFires++;
+    crossFireAt.push(frameMs);
+    const r = origInit.apply(this, args);
+    // 读的是 origInit 跑完之后的 this.damage：公式若断在 consts，这里当场和 laserCrossDamage 对不上
+    crossInitLayers.push({ layers: args[0], dmg: this.damage });
+    return r;
+  };
+  const origSettle = proto.settle;
+  proto.settle = function (db) {
+    crossSettles++;
+    insideCross = true;
+    try {
+      return origSettle.call(this, db);
+    } finally {
+      insideCross = false;
+    }
+  };
+}
+{
+  const proto = Enemy.prototype;
+  const orig = proto.takeDamage;
+  // ★必须原样转发全部参数：上一版把签名写死成四个，第五个 silent 在这里被吃掉，
+  //   于是「光束静默」那条断言永远假红而游戏代码是对的。包别人的方法就是往里插一层，插的那层不许改口径
+  proto.takeDamage = function (...args) {
+    if (insideCross) { crossHits++; crossDmg += args[0]; }
+    return orig.apply(this, args);
+  };
+}
+
 // 嗜血的实场计数：包的是 player 实例上的方法，不包原型。
 // ★理由和当年那批实例钩子一样 —— 下面那段纯检直接 `Player.prototype.onKill.call(假玩家)`，
 //   挂在原型上会把纯检的五次调用一起计进现场账，procs 对不上 kills 就成了假红。
 //   第一帧才装：player 是开局那一帧才 new 出来的，提前装会挂到 null 上、整组计数空跑
 
 for (let i = 0; i < frames; i++) {
+  frameMs = i * DT * 1000; // 钩子只装一次、闭包不到 i，时刻一律从这里取
   const p = databus.player;
   if (p && !p.__leechHooked) {
     p.__leechHooked = true;
@@ -653,6 +747,22 @@ for (let i = 0; i < frames; i++) {
       for (const k of Object.keys(STAT_CORE_BOOST)) {
         const got = Math.round((this[k] - before[k]) * 1000) / 1000;
         if (got !== STAT_CORE_BOOST[k]) coreBoostMismatch.push(`${k}: 期望 +${STAT_CORE_BOOST[k]}，实得 +${got}`);
+      }
+      return r;
+    };
+  }
+  // 十字的触发分母：只有「这一帧真的掉血」那一下才算，破盾那一下按设计不触发，所以另记一笔。
+  // ★同样包实例不包原型：下面那些纯检会直接拿假玩家调 Player.prototype 上的方法
+  if (p && !p.__crossHooked) {
+    p.__crossHooked = true;
+    const orig = p.takeDamage;
+    p.takeDamage = function (amount, now, db) {
+      const hpBefore = this.hp;
+      const shieldBefore = this.shield;
+      const r = orig.call(this, amount, now, db);
+      if (this.laserCross > 0) {
+        if (this.hp < hpBefore) { crossHpLosses++; crossHpLossAt.push(frameMs); }
+        else if (this.shield < shieldBefore) crossBlockedShield++;
       }
       return r;
     };
@@ -770,12 +880,17 @@ for (let i = 0; i < frames; i++) {
   // 不会改写 film breaks 这条基线。
   // ★两种带 kindDef 的匣都要挪（休眠的专属匣、上线的掉落道具），但记账必须分家：
   //   kindDef.pet → sawPetChest（下线期间必须恒 false，BOSSCHEST=1 那一跑才为 true）
-  //   kindDef.boost → sawStatChest（默认就该为 true，BOSSDROP=0 那一跑必须恒 false）
+  //   id ∈ BOSS_DROPS → sawDropChest（整张表的总账，默认就该为 true，BOSSDROP=0 那一跑必须恒 false）
+  //   kindDef.boost → sawStatChest（其中会涨属性那一种，报表分列读它）
   //   共用一个标志的后果是新道具一上线就把「专属匣已下线却还在场上掉出来」顶红，而那条其实在说另一件事
   if (p) {
     for (const c of databus.chests) {
       if (!c.kindDef) continue;
       if (c.kindDef.pet) sawPetChest = true;
+      if (DROP_IDS.has(c.kindDef.id)) {
+        sawDropChest = true;
+        if (c.kindDef.id === 'core_seafire') sawCrossChest = true;
+      }
       if (c.kindDef.boost) sawStatChest = true;
       c.x = p.x;
       c.y = p.y;
@@ -886,6 +1001,7 @@ for (let i = 0; i < frames; i++) {
   for (const dyingBoss of dyingBosses) {
     if (databus.enemys.includes(dyingBoss)) continue;
     bossDrops++;
+    if (dyingBoss.type === 'boss2') boss2Drops++;
     if (firstBossDeathAt < 0) firstBossDeathAt = i * DT;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
@@ -899,11 +1015,13 @@ for (let i = 0; i < frames; i++) {
         errors.push(`boss ${dyingBoss.type} 死亡没掉专属匣`);
       }
     }
-    // 掉落道具的同一条：表非空却查不到带 boost 的匣，就是掉落口那道门或表本身断了
+    // 掉落道具的同一条：表非空却查不到这一号 Boss 该掉的那种匣，就是掉落口那道门或表本身断了。
+    // ★判据是「id ∈ BOSS_DROPS[这只 Boss]」而不是「有没有 boost 字段」：那张表里两件道具的机制不同，
+    //   一件涨属性、一件只涨层数，按字段认等于拿一号的口径去问二号掉没掉，海火一死就假红
     if (BOSS_DROPS_ENABLED) {
       const table = BOSS_DROPS[dyingBoss.type];
-      if (table && table.length && !databus.chests.some((c) => c.kindDef.boost)) {
-        errors.push(`boss ${dyingBoss.type} 死亡没掉落道具（表里有 ${table.length} 种，场上一个带 boost 的匣都没有）`);
+      if (table && table.length && !databus.chests.some((c) => c.kindDef && table.some((k) => k.id === c.kindDef.id))) {
+        errors.push(`boss ${dyingBoss.type} 死亡没掉落道具（表里有 ${table.length} 种，场上没有一种对得上号）`);
       }
     }
   }
@@ -916,6 +1034,12 @@ for (let i = 0; i < frames; i++) {
   if (databus.bombs.length > maxBombs) maxBombs = databus.bombs.length;
   if (databus.bombers.length > maxBombers) maxBombers = databus.bombers.length;
   if (databus.vials.length > maxVials) maxVials = databus.vials.length;
+  // 同时在场的十字根数：CD(4000) 大于整段扫射(260+1500+240=2000) 时这个峰值必须是 1，
+  // 读成 2 就说明触发没被冷却挡住（十字会连成一根常驻光棒，见下面的断言）
+  if (databus.laserCrosses.length > crossPeak) crossPeak = databus.laserCrosses.length;
+  for (const c of databus.laserCrosses) {
+    if (!Number.isFinite(c.x) || !Number.isFinite(c.y) || !Number.isFinite(c.spin)) errors.push('十字激光的坐标或朝向出现非有限值');
+  }
   for (const v of databus.vials) {
     // 座次那条 lerp 一旦喂进非有限的朝向，瓶子会凭空从画面上消失（同 boss pet 那条的理由）
     if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) errors.push('血瓶坐标出现非有限值');
@@ -974,7 +1098,7 @@ for (let i = 0; i < frames; i++) {
       + ` boss=${b ? b.type : '-'}${b && b.state ? ':' + b.state : ''}`
       + ` film=${b && b.film !== undefined ? Math.round(b.film) : '-'}`
       + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`
-      + ` twins=${twins}${twins && twinsEnraged ? '(enraged)' : ''} vesicles=${databus.vesicles.length}`);
+      + ` twins=${twins}${twins && twinsEnraged ? '(enraged)' : ''} vesicles=${databus.vesicles.length} cross=${databus.laserCrosses.length}`);
   }
 }
 
@@ -996,16 +1120,18 @@ if (!BOSS_CHESTS_ENABLED) {
 // 这一件默认是开的，所以「关掉」那一端才是反常组：它要证明的是 main.js 那道门真的钉得住，
 // 而不是「反正没人调用所以看不见」。两端都要跑，只跑一端等于没跑（同 2026-10-06 那条教训）
 if (!BOSS_DROPS_ENABLED) {
-  if (sawStatChest) errors.push('掉落道具已关掉却还在场上掉出来：main.js 的 BOSS_DROPS_ENABLED 那道门没钉住，或者还有第二个掉落口');
+  if (sawDropChest) errors.push('掉落道具已关掉却还在场上掉出来：main.js 的 BOSS_DROPS_ENABLED 那道门没钉住，或者还有第二个掉落口');
   if (corePopCalls) errors.push(`掉落道具已关掉却弹过 ${corePopCalls} 次核心 +x：CHEST_GRANTS.core_cmv 被掉落以外的地方调用了`);
   if (coreBoostCalls) errors.push(`掉落道具已关掉却给玩家加过 ${coreBoostCalls} 次全属性：applyBoost 还有别的调用口`);
   if (databus.bossChests.core_cmv) errors.push(`掉落道具已关掉但 HUD 计数里有 core_cmv ×${databus.bossChests.core_cmv}：右栏会凭空多出一格`);
+  if (databus.bossChests.core_seafire) errors.push(`掉落道具已关掉但 HUD 计数里有 core_seafire ×${databus.bossChests.core_seafire}：右栏会凭空多出一格`);
+  if (crossFires) errors.push(`掉落道具已关掉却放出过 ${crossFires} 根十字：层数只能由拾取那条链写进 player`);
 } else {
   // 空跑防护：一只 Boss 都没死时，上面/下面这些零与「没接上」长得一模一样，必须显式说出来
   if (bossDrops === 0) {
     errors.push(`掉落道具开着却整局没有一只 Boss 死亡（bossDrops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
   } else {
-    if (!sawStatChest) errors.push(`死了 ${bossDrops} 只 Boss，场上却从没出现过带 boost 的匣：掉落口没接上（表里 boss1 有 ${BOSS_DROPS.boss1.length} 种）`);
+    if (!sawDropChest) errors.push(`死了 ${bossDrops} 只 Boss，场上却从没出现过 BOSS_DROPS 里的任何一种匣：掉落口没接上（表里 boss1 有 ${BOSS_DROPS.boss1.length} 种）`);
     if (!corePopCalls) errors.push('匣出现过却没弹一次 +x：拾取→CHEST_GRANTS.core_cmv→applyBoost→hud.popStats 断了一环');
     if (coreBoostCalls !== corePopCalls) {
       errors.push(`属性加了 ${coreBoostCalls} 次、核心 +x 弹了 ${corePopCalls} 次：授予函数里两步不同源，玩家会看到「弹了字没涨属性」或反过来`);
@@ -1065,6 +1191,86 @@ if (!BOSS_DROPS_ENABLED) {
         errors.push(`最后一句 +x 迟到第 ${lastOff} 帧才首现，晚于整段动画的结束帧 ${endFrame}：条目被提前摘掉了`);
       }
     }
+  }
+}
+
+// —— Boss 掉落道具「海火核心」（十字激光）的两端断言 ——
+// ★门读的是表本身而不是某个新加的常量：LASER=0 那一组只是把 boss2 那一行挪出了这张表，
+//   道具仍然登记着（注册面扫描照旧覆盖它），所以「表里这一号空不空」就是游戏内可达性的唯一真相
+const SEAFIRE_ON = BOSS_DROPS.boss2.length > 0;
+const CROSS_SWEEP_MS = LASER_CROSS_TELEGRAPH + LASER_CROSS_FIRE + LASER_CROSS_FADE;
+if (!SEAFIRE_ON) {
+  if (sawCrossChest) errors.push('海火核心已不可达却还掉出过匣：LASER=0 的旋钮没把 BOSS_DROPS.boss2 那一行掐住');
+  if (crossGrants) errors.push(`海火核心已不可达却授予过 ${crossGrants} 次层数：CHEST_GRANTS.core_seafire 被掉落以外的地方调用了`);
+  if (databus.player && databus.player.laserCross) errors.push(`海火核心已不可达玩家却有 ${databus.player.laserCross} 层：层数还有别的写入口`);
+  if (crossFires) errors.push(`海火核心已不可达却放出过 ${crossFires} 根十字：fireLaserCross 没看层数`);
+} else if (boss2Drops === 0) {
+  errors.push(`海火核心开着却整局没死过海火（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
+} else {
+  if (!sawCrossChest) errors.push(`死了 ${boss2Drops} 只海火，场上却没出现海火核心那件匣：main.js 的掉落口没按 Boss 号对上表`);
+  if (!crossGrants) errors.push('匣掉过却没授予一次层数：拾取→CHEST_GRANTS.core_seafire 断了一环（chest.js 那句 CHEST_GRANTS[kind] 没跑到？）');
+  if (crossHpLosses === 0) errors.push(`带着 ${crossGrants} 层却整局没真正掉过血：触发分母是零，下面每条读数都是空跑（测台每帧回血？还是无敌帧太长？）`);
+  // 一根十字只可能由一次掉血换来：多出来的那几根说明触发点写重了（或冷却门没生效）
+  if (crossFires > crossHpLosses) {
+    errors.push(`放出 ${crossFires} 根十字但只有 ${crossHpLosses} 次真正掉血：一次挨打放了不止一根，触发口被接了两遍`);
+  }
+  // ★逐根配对，不是只比总数：负向测试实测「把触发口另外接到中毒跳血上」时掉血次数一点没涨，
+  //   上面那条计数不等式照样是绿的（76 根对 223 次），只有这一条会红。
+  //   两个时刻都取同一个 frameMs（放出发生在 takeDamage 内部），所以判据是「同帧」而不是「相差若干毫秒」
+  const lossFrames = new Set(crossHpLossAt);
+  const orphan = crossFireAt.find((t) => !lossFrames.has(t));
+  if (orphan !== undefined) {
+    errors.push(`t=${Math.round(orphan)}ms 放出的一根十字对不上任何一次真正掉血：触发口接到了 takeDamage 掉血分支以外`
+      + '（中毒跳血 / applyBlast / 无敌帧或护盾挡掉的那一下），站进毒里就能白嫖常驻十字');
+  }
+  // 有层数、有掉血却没有十字 = 触发链断了；这一条和上面那条一起把「fires」夹在中间
+  if (crossFires === 0) errors.push(`带着层数挨了 ${crossHpLosses} 下真伤却没放出过一根十字：takeDamage 的掉血分支没接 fireLaserCross，或 fireLaserCross 的三道门（层数 / 冷却 / databus）里有一道恒假`);
+  // 冷却：相邻两次放出的间隔必须不短于 LASER_CROSS_CD（放火那一下就把冷却顶满，所以这是硬下界）。
+  // ★先钉住「CD 大于整段扫射」这条不变式本身：下面那条峰值断言的守卫读的就是它，
+  //   谁把 CD 调到 2000 以下，那条会自己变成永真、一根都不报，而画面上的症状是「光棒叠成一片常驻白光」
+  if (LASER_CROSS_CD <= CROSS_SWEEP_MS) {
+    errors.push(`LASER_CROSS_CD(${LASER_CROSS_CD}ms) 不大于整段扫射(${CROSS_SWEEP_MS}ms)：`
+      + '上一根还没淡完下一根就亮起，挨打越密越像常驻光柱，而"同时在场只有一根"那条判据会静默失效');
+  }
+  const STEP = Math.round(DT * 1000);
+  for (let k = 1; k < crossFireAt.length; k++) {
+    const gap = crossFireAt[k] - crossFireAt[k - 1];
+    if (gap < LASER_CROSS_CD - STEP) {
+      errors.push(`第 ${k + 1} 根十字只隔了 ${gap}ms 就放出，短于 LASER_CROSS_CD=${LASER_CROSS_CD}ms：`
+        + '冷却门没挡住下一次挨打，站进怪堆里十字会连成一根常驻光棒');
+      break;
+    }
+  }
+  // 同时在场根数：CD 大于整段扫射时长时，上一根一定已经回收，峰值只能是 1
+  if (LASER_CROSS_CD > CROSS_SWEEP_MS && crossPeak > 1) {
+    errors.push(`CD(${LASER_CROSS_CD}ms) 已大于整段扫射(${CROSS_SWEEP_MS}ms)，场上却同时有过 ${crossPeak} 根十字：`
+      + '要么冷却没生效，要么十字没在 FADE 放完后回收');
+  }
+  // 伤害公式：每根十字的伤害必须正好等于「层数 × 每层基数」，读的是 init 之后的实例字段
+  const badDmg = crossInitLayers.filter((c) => c.dmg !== laserCrossDamage(c.layers));
+  if (badDmg.length) {
+    errors.push(`${badDmg.length} 根十字的伤害不等于 laserCrossDamage(层数)（首例 层${badDmg[0].layers} 伤害${badDmg[0].dmg}）：`
+      + 'init 里那句赋值和 consts 的公式不同源，改每层基数只会改到一半');
+  }
+  const badLayers = crossInitLayers.filter((c) => !(c.layers >= 1 && c.layers <= crossGrants));
+  if (badLayers.length) {
+    errors.push(`十字的层数读出 ${badLayers[0].layers}，而整局只授予过 ${crossGrants} 次：层数来源不是 player.laserCross，或它被别处加成过`);
+  }
+  for (let k = 1; k < crossInitLayers.length; k++) {
+    if (crossInitLayers[k].layers < crossInitLayers[k - 1].layers) {
+      errors.push('十字的层数往回走过：一局之内海火核心只进不出，回退说明读的是别的字段或被 reset 过');
+      break;
+    }
+  }
+  // 扫射真的在判定：phase 门写错的话光棒照画、一血不掉，画面上看着完全正常
+  if (crossFires && !crossSettles) errors.push('放出过十字却一次都没进扫射段结算：蓄力→扫射的相位门断了');
+  if (crossSettles && !crossHits) errors.push('扫射段结算跑过却一个怪都没命中：hits() 的垂距或束长判据写歪（光在空转）');
+  // 光束静默：settle 里那次 takeDamage 传了 silent，飘字池一条都不该抽。
+  // ★这条是有区分度的：Enemy.takeDamage 目前只有一个覆写（膜王），覆写漏透传 silent 就只有膜王身上跳字，
+  //   而膜王血厚、一根扫射在它身上结十几次——正是画面里最刺眼的那一只，不会「局部错而读数不变」
+  if (crossTexts) {
+    errors.push(`十字扫射期间还抽了 ${crossTexts} 条飘字：光束的伤害没静默。`
+      + `实测过一根就占掉全部飘字的 95%，把玩家普攻的数字挤没（DAMAGE_TEXT_MAX=${DAMAGE_TEXT_MAX} 时抑制率 28.7%）`);
   }
 }
 
@@ -1927,13 +2133,14 @@ function vesicleRun(offset) {
 const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
 if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
 
-// —— 详情页排版守门：这一条在今天不报错（11 行实测底边 813 / 屏高 844），它是给未来那几行守的门。
-//   ★ROW_H 是死的、行数是活的：加一种就是把整张卡片往下顶 50 像素，顶穿屏幕不是崩、是「点开就关不掉」
+// —— 详情页排版守门：★ROW_H 是死的、行数是活的，加一种就是把整张卡片往下顶 50 像素，
+//   顶穿屏幕不是崩、是「点开就关不掉」
 {
-  // 最坏行数 = 金匣那 10 格 + BOSS_DROPS 全表（「巨细胞核」1 行），两处都归 ownedItems() 收进同一张卡
+  // 最坏行数 = 金匣那 10 格 + BOSS_DROPS 全表（巨细胞核 + 海火核心 = 12 行），两处都归 ownedItems() 收进同一张卡
+  // ★12 行的卡片高 712，刘海机上「居中」和「让开胶囊」两个上界打架，layout 里那道 min 选择把卡片往上顶
+  //   （实测 y 从 143 压到 124、底边 836 ≤ 844）。所以往上顶换来的新风险是顶边啃进胶囊 —— 下面那条就是钉它的
   // ★刻意不含 BOSS_CHESTS 那 1 行：专属匣整条下线中（BOSS_CHESTS_ENABLED = false），游戏内不可达。
-  //   哪天把它翻回 true，这张卡就是 12 行 = 底边 863 > 844，「继续战斗」按钮整个掉出屏幕 ——
-  //   到那时先给这一页做滚动或分栏，别指望这条断言能替你省下这一步
+  //   哪天把它翻回 true 就是 13 行，压 y 也兜不住了（顶边会啃进胶囊）—— 到那时先做滚动或分栏
   const worstRows = [
     ...ITEM_BAR.map((t) => ({ id: t.glyph, name: t.name })),
     ...Object.values(BOSS_DROPS).flat().map((k) => ({ id: k.id, name: k.name })),
@@ -1945,6 +2152,12 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   if (L.btn.y + L.btn.h > canvasH) {
     errors.push(`详情页「继续战斗」按钮底边 ${L.btn.y + L.btn.h} 掉出屏幕 ${canvasH}：玩家点开这一页就回不去战斗`);
   }
+  // 让位让的是「点不动」而不是「看不见」：胶囊盖在画布之上，游戏代码收不到它下面的触点
+  if (L.y < capsuleBottom) {
+    errors.push(`详情页最坏 ${worstRows.length} 行的卡片顶边 ${Math.round(L.y)} 啃进微信胶囊（底边 ${capsuleBottom}）：`
+      + `压 y 已经兜不住了，这一页该做滚动或分栏，别再加行`);
+  }
+  if (safeTop <= 0) errors.push('详情页探针所在的环境没模拟刘海机（safeTop=' + safeTop + '）：上面三条读数都是空跑');
 }
 
 // —— 注册面扫描：这一节专治静默失效。漏一处不是崩，是 HUD 少一格、或者开箱有 toast 而什么都不涨
@@ -1964,13 +2177,19 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
       errors.push(`金匣 '${b.key}' 在 HUD 没有对应格：玩家永远看不到自己捡到了它`);
     }
   }
+  // ★按函数切段再查：theme.js 有两个画图入口，itemGlyph 的 default 分支转调 icon，
+  //   整文件 includes 分不清命中在哪一层——写反了会一边假红一边假绿
+  const glyphAt = themeSrc.indexOf('export function itemGlyph');
+  const iconSrc = themeSrc.slice(0, glyphAt);      // icon()：地上的匣子、图鉴、toast 都走这一层
+  const glyphSrc = themeSrc.slice(glyphAt);        // itemGlyph()：右栏那颗徽章，default 兜底转调 icon()
   for (const t of ITEM_BAR) {
-    if (!themeSrc.includes(`case '${t.glyph}'`)) errors.push(`theme.js 的 itemGlyph 没有 '${t.glyph}' 分支：HUD 上它会被画成普通白圈`);
+    if (!glyphSrc.includes(`case '${t.glyph}'`)) errors.push(`theme.js 的 itemGlyph 没有 '${t.glyph}' 分支：右栏那一格会退回 icon() 的通用画法，不是为这颗徽章调过的形状`);
     if (!pauseSrc.includes(`case '${t.glyph}'`)) errors.push(`pause.js 的 describe 没有 '${t.glyph}' 分支：详情页那一行的说明是空的`);
   }
   // —— Boss 掉落道具（BOSS_DROPS）的注册面 ——
-  // ★这里刻意不查 pause.js 的 case：boss 掉落物走的是 describe 的 default 分支，白读 kindDef.brief，
-  //   给它加 case 反而是两处文案。同理 icon 复用 theme.js 已有的分支，不新建
+  // 文案两处都查得到就够了：详情页那行由 describe() 分派，先按 glyph 找 case、找不到才落到 default 读 brief。
+  //   巨细胞核没有 case（它涨的七行面板上正在显示，重复一遍反而对不上号），海火核心有（层数不在任何面板上，只能这里报）。
+  //   所以 brief 是「没有 case 时不许空白」的兜底，两件都要求有
   for (const kinds of Object.values(BOSS_DROPS)) {
     for (const k of kinds) {
       if (!CHEST_KIND_BY_ID[k.id]) {
@@ -1980,10 +2199,17 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
       if (!CHEST_GRANTS[k.id]) {
         errors.push(`CHEST_GRANTS 没有注册 '${k.id}'：chest.js 那句裸 CHEST_GRANTS[kind](databus) 会在拾取瞬间抛 TypeError`);
       }
-      if (!themeSrc.includes(`case '${k.icon}'`)) {
-        errors.push(`theme.js 的 itemGlyph 没有 '${k.icon}' 分支：右栏道具格里它会被画成普通白圈`);
+      // ★查的是 icon() 那一段：掉在地上的那只匣子由 chest.js:94 用 icon(ctx, kindDef.icon, …) 画，
+      //   这一层没有分支的话地上的匣子和右栏徽章会一起退化成通用白圈，而掉落链照样全绿
+      if (!iconSrc.includes(`case '${k.icon}'`)) {
+        errors.push(`theme.js 的 icon 没有 '${k.icon}' 分支：掉在地上的那只匣子会被画成普通白圈，玩家分不清它是什么`);
       }
-      if (!k.brief) errors.push(`BOSS_DROPS 的 '${k.id}' 没有 brief：详情页那一行是空的`);
+      // ★describe() 的 switch 键是 item.glyph，而 ownedItems 把掉落物的 glyph 直接设成 config 里的 icon。
+      //   撞名不会报错、只会串词：金匣有的那套说明会被念到这件掉落物头上
+      if (ITEM_BAR.some((t) => t.glyph === k.icon)) {
+        errors.push(`BOSS_DROPS '${k.id}' 的 icon '${k.icon}' 和金匣的 glyph 撞名：详情页会按金匣那条说明念它`);
+      }
+      if (!k.brief) errors.push(`BOSS_DROPS 的 '${k.id}' 没有 brief：describe 的 default 分支会交出空串，详情页那一行是空的`);
       for (const key of Object.keys(k.boost || {})) {
         if (!STAT_KEYS.includes(key)) {
           errors.push(`BOSS_DROPS '${k.id}' 的 boost 有 '${key}'，不在 HUD 面板那七行里：`
@@ -2055,6 +2281,16 @@ console.log('boss drops:', bossDrops, '| boss chest:', BOSS_CHESTS_ENABLED
     : `off (${sawStatChest ? '泄漏' : '0 只匣'} / 拾取 ${corePopCalls} 次)`,
   '| +x 全源: 升级', levelPopCalls, '/ 选卡', cardPopCalls, '/ 释放', releaseCalls,
   `/ 总弹 ${statPopCalls} | hold 泄漏 ${heldLeaks} / 挂死 ${stuckHeld}`);
+// ★这一行必须把可达性本身（SEAFIRE_ON）印出来，而不只印一串零：LASER=0 那一组的零是旋钮掐掉了掉落，
+//   不是回归 —— 同 2026-10-06「报表恒印 off 被当回归查了半天」那条坑
+console.log(`cross laser (海火核心 ${SEAFIRE_ON ? 'on' : 'off（LASER 旋钮掐掉 boss2 那一行）'}):`,
+  SEAFIRE_ON
+    ? `海火死 ${boss2Drops} 只 / 拾取 ${crossGrants} 次 / 层数最高 ${crossInitLayers.length ? Math.max(...crossInitLayers.map((c) => c.layers)) : 0}`
+      + ` | 掉血 ${crossHpLosses} 次（盾挡 ${crossBlockedShield}）→ 放出 ${crossFires} 根，同时在场峰值 ${crossPeak}`
+      + ` | 结算帧 ${crossSettles} / 命中 ${crossHits} 次 共 ${crossDmg} 点（每层 ${LASER_CROSS_DMG}·束宽 ${LASER_CROSS_WIDTH}·束长 ${LASER_CROSS_LEN}·同怪间隔 ${LASER_CROSS_HIT_GAP}ms）`
+      + ` | 它的飘字 ${crossTexts} 条（光束已静默，这条要 0）`
+    : `海火死 ${boss2Drops} / 授予 ${crossGrants} / 放出 ${crossFires}（这一段要的全是 0）`,
+  `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`);
 console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
   '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
   '| first:', chestStamps.length ? chestStamps[0].toFixed(1) + 's' : '-');

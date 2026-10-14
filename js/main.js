@@ -169,7 +169,7 @@ export default class Main {
         continue;
       }
       if (player.isCollideWith(e)) {
-        player.takeDamage(e.damage, now);
+        player.takeDamage(e.damage, now, databus); // 第三个参数是海火核心的触发口，见 Player.fireLaserCross
         if (player.hp <= 0) {
           databus.isGameOver = true;
         }
@@ -207,6 +207,13 @@ export default class Main {
     for (let i = databus.lasers.length - 1; i >= 0; i--) {
       if (databus.lasers[i].isDestroyed) {
         databus.removeLaser(i);
+      }
+    }
+
+    // 友方那一根十字同理（淡出 LASER_CROSS_FADE 放完才算 isDestroyed）
+    for (let i = databus.laserCrosses.length - 1; i >= 0; i--) {
+      if (databus.laserCrosses[i].isDestroyed) {
+        databus.removeLaserCross(i);
       }
     }
 
@@ -319,6 +326,10 @@ export default class Main {
     // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
     for (const v of databus.vesicles) v.draw(ctx); // 同层同理由：囊泡也是抛体，落点环和爆风都要压在怪之上
+    // 友方十字光束不跟上面那根敌方的 lasers 同层（那条排在地面：满 5 道光会把 Boss 埋掉，且玩家该画在光之上）。
+    // ★这根是玩家自己的武器，压在怪群之下就等于"放了却看不见"，所以和炸弹/囊泡同一档；
+    //   但仍排在跟随体与角色之前 —— 它的原点就在角色身上，四根 22 宽的束盖住本体等于把自己涂掉了
+    for (const c of databus.laserCrosses) c.draw(ctx);
     // 炮台排在三种跟随体之前：它是地面上的固定件，会跟着走的那几只和角色本人都该盖住它。
     // ★但不在赤潮那一层：地贴压在所有实体下面，而炮台是一件立着的东西，得压在怪之上才读得出它站在那儿
     for (const t of databus.turrets) t.draw(ctx);

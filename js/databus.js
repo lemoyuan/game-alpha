@@ -3,6 +3,7 @@ import Companion from './player/companion';
 import Bomber from './player/bomber';
 import BloodVial from './player/bloodVial';
 import Turret from './player/turret';
+import LaserCross from './player/laserCross';
 import DamageText from './fx/damageText';
 import { settings } from './storage';
 import { DAMAGE_TEXT_MAX } from './consts';
@@ -44,6 +45,10 @@ export default class DataBus {
     // ★必须写在 reset() 而不是构造函数：DataBus 是单例，漏了这一行会带着上一局的几座继续开火，
     //   而新一局 player.turrets 从 0 起、生成条件永不成立，headless 又只开一局 —— 这个错一个字都不会报错
     this.turrets = [];
+    // 十字激光（Boss 掉落道具「海火核心」）：角色挨一下真伤就放出一根，友方一侧，一根一根自己排在这里。
+    // ★不并进上面的 this.lasers：那条数组里每一条的判定都是「打中角色」，两家共用等于让友方光束照自己、
+    //   而 headless 的敌方光束断言（眼数、换向预告）会读进玩家放的那几根。和 bombs / vesicles 是同一条分家的理由
+    this.laserCrosses = [];
     this.bombs = [];      // 在飞的炸弹：一枚两阶段（抛物线飞行 → 落点引爆），爆风不另开列表、画在这同一条实体上
     // 双子 Boss 在飞的囊泡：与 bombs 同形（继承 Bomb 的抛物线与爆风），但必须自己一条列表。
     // ★上面那句「不再加列表」在这里破例的原因：headless 的 thrown / booms / 「一轮几枚」三条断言
@@ -114,6 +119,10 @@ export default class DataBus {
       for (const v of this.vials) v.update(dt, this);
       for (const t of this.turrets) t.update(dt, this);
       this.player.update(dt, this);
+      // ★必须排在 player.update 之后：这根十字的原点每帧贴着角色走，读上一帧位置会让光和身子脱开一格
+      //   （同上面 lasers 那条「读上一帧自转角会让眼和光脱开」，只是这里脱开的是角色自己的位移 ——
+      //   光束是从人身上发出来的，人已经挪走了、光还留在原地，读起来就像道具坏了）
+      for (const c of this.laserCrosses) c.update(dt, this);
     }
   }
 
@@ -140,6 +149,10 @@ export default class DataBus {
 
   removeLaser(index) {
     this.lasers.splice(index, 1);
+  }
+
+  removeLaserCross(index) {
+    this.laserCrosses.splice(index, 1);
   }
 
   removeZone(index) {

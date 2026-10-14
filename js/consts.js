@@ -132,6 +132,31 @@ export const TURRET_SIZE = 30;              // 显示边长（逻辑像素）。
 // ★一个公式写两处迟早算成两个数，而详情页那句「单发 N 点」一旦被拿来对实测，对不上就算界面的锅
 export const turretDamage = (attack) => Math.max(1, Math.floor(attack * TURRET_DAMAGE_RATIO));
 
+// ===== 十字激光（Boss 掉落道具「海火核心」：拾取后每次真正掉血，就把海火那招从自己身上放出去）=====
+// 这是第一件「不涨属性、只借一招」的 Boss 掉落物，所以★没有左栏 +x 飘字：那条瀑布只由 applyBoost 触发，
+// 而这里一个属性都没动，拾取那一刻的反馈只剩「开启「海火核心」」那条 toast（所以 config 那行故意不设 quiet）
+export const LASER_CROSS_TELEGRAPH = 260; // 蓄力段（只画细瞄准线、不判定）毫秒数。Boss 那招蓄力 1100 是「大招预警」，
+                                          //   这里是挨打之后的反击：260 只够读出「亮了一下才疼」，再长就赶不上被围攻那一拍
+export const LASER_CROSS_FIRE = 1500;     // 扫射段（判定）毫秒数
+export const LASER_CROSS_FADE = 240;      // 淡出段毫秒数，期间不判定（照 Boss 那条约定：留下的光不该继续疼）
+export const LASER_CROSS_SPIN = 1.6;      // 角速度（弧度/秒），★不随层数变。1.5 秒 × 1.6 弧度 = 137°，压过十字的 90° 对称周期，
+                                          //   所以一轮扫射能把每个方向都扫到；再慢就留下一整块没人扫的象限
+export const LASER_CROSS_WIDTH = 22;      // 主束宽度（像素），也就是判定宽度。Boss 是 26：友方版细一号，同屏两种光束才一眼分得出谁在打谁
+export const LASER_CROSS_LEN = 300;       // 光束长度（像素）。★不读 player.attackRange（同炮台 TURRET_RANGE 那条：射程跟着升级悄悄变大，详情页就写不出稳定读数），
+                                          //   也不照抄 Boss 的 470 —— 470 的口径是「≥ 屏幕半对角，跑不出扇面」，那是威胁的几何；
+                                          //   一件武器每下放满全屏，玩家就读不出它什么时候够不着了
+export const LASER_CROSS_DMG = 6;         // 每层每次结算的伤害。★层数 × 固定基数，走燃烧子弹 BURN_DMG 那条口径，不按攻击力取比例（炸弹/炮台那样）：
+                                          //   它是反击不是火力，再乘一次攻击力等于让「攻击 +3」那张卡顺带把它也抬高，两层乘法谁都没法读
+export const LASER_CROSS_HIT_GAP = 500;   // 同一只怪两次结算的最小间隔（毫秒）。必须有：怪没有受击无敌帧，而贴身距离里四根束会同时压在一只怪身上
+                                          //   （垂距 < 束半宽 + 怪半径），不限流就是四层束一起结。扫射 1500 ÷ 500 = 一只怪最多挨 3 次
+export const LASER_CROSS_CD = 4000;       // 两次触发的最小间隔（毫秒）。★必须大于三段之和（260+1500+240 = 2000）：否则被围攻时上一根还没淡完下一根已经亮起，
+                                          //   十字在身上常驻 —— 而触发源正是「掉血」，那等于把这件道具变成「越挨打越打不死」的反向激励，
+                                          //   躲开每一刀的正确玩法反而拿到最少输出。另一头也不用怕它太长：受击本身已被 PLAYER_INVINCIBLE=1500 限流，
+                                          //   所以 4000 才是真正起作用的那道闸
+
+// 单根十字每次结算伤害的唯一口径：实体 laserCross.js 与详情页 pause.js 都从这里取（同 turretDamage / bombDamage）
+export const laserCrossDamage = (layers) => layers * LASER_CROSS_DMG;
+
 export const DAMAGE_TEXT_MAX = 160; // 伤害飘字并发上限。★这个数不是拍的：实测 480 秒满 build（bot 每帧抽卡、786 击杀）的并发峰值是零燃烧 120 条、三层燃烧 112 条。曾经按 60 定，结果常态吃掉约 4% 的伤害数字，热闹时段普攻会「不掉字」；按 120 定又刚好压在零燃烧那条尾巴上，最热的几帧照样丢字。它只该兜失控，不该参与常态调度
 
 export const XP_BASE = 10;              // 经验曲线基数

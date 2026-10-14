@@ -92,6 +92,9 @@
   <button data-nav="chestplain">摆一只普通金匣</button>
   <button data-nav="grantcore">授予巨细胞核（全属性 +x 动画）</button>
   <button data-nav="chestcore">在脚下摆一只 Boss 掉落匣</button>
+  <button data-nav="grantcross">授予海火核心（受伤放十字激光）</button>
+  <button data-nav="chestcross">摆一只海火掉落匣</button>
+  <button data-nav="hurt">挨一下（触发十字激光）</button>
   <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
   <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
@@ -499,7 +502,8 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       return;
     }
     // 宝箱道具这几条不打断正在打的局：只有停在首页或已结算时才新开一局
-    if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain' || nav === 'grantcore' || nav === 'chestcore') {
+    if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain' || nav === 'grantcore' || nav === 'chestcore'
+      || nav === 'grantcross' || nav === 'chestcross') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { clampToCoast } = await import('./js/arena/coast.js');
       const { default: Chest } = await import('./js/npc/chest.js');
@@ -527,11 +531,45 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       } else if (nav === 'chestcore') {
         place('core_cmv');
         say('Boss 掉落匣已摆在右前方：走过去踩，拾取那帧起左栏逐行弹 +x（这只 quiet，不弹开箱 toast）');
+      } else if (nav === 'grantcross') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        const { LASER_CROSS_CD } = await import('./js/consts.js');
+        CHEST_GRANTS.core_seafire(databus); // 绕过掉落：这一件的反馈不在拾取那帧，而在下一次真正掉血那帧
+        say(`海火核心已授出（第 ${databus.bossChests.core_seafire} 层）：现在挨一下真伤就会从身上放出十字，`
+          + `点「挨一下」或让怪碰到你；冷却 ${LASER_CROSS_CD / 1000} 秒一根`);
+      } else if (nav === 'chestcross') {
+        place('core_seafire');
+        say('海火掉落匣已摆在右前方：走过去踩，之后每次真正掉血从身上放出一道旋转十字（盾挡掉的那一下不放）');
       } else {
         place(); // 不传 kind = 走七种随机加成的普通金匣
         say('普通金匣已摆在右前方');
       }
       spawnAround(4);
+      return;
+    }
+    // 海火核心的触发验收：走真实 takeDamage 通路，无敌帧 / 护盾 / 防御折算一道都不绕
+    if (nav === 'hurt') {
+      if (databus.screen !== 'game' || databus.isGameOver) {
+        say('先开始一局（这一条不打断结算页）');
+        return;
+      }
+      const p = databus.player;
+      const now = Date.now();
+      if (now < p.invincibleUntil) {
+        say(`这一下被无敌帧压掉（还剩 ${Math.round(p.invincibleUntil - now)}ms）：没受伤，十字不放`);
+        return;
+      }
+      const beforeShield = p.shield;
+      const beforeHp = p.hp;
+      const beforeCross = databus.laserCrosses.length;
+      p.takeDamage(9, now, databus);
+      if (p.shield < beforeShield) {
+        say(`护盾挡掉一层（剩 ${p.shield}）：没受伤，十字不放`);
+        return;
+      }
+      const fired = databus.laserCrosses.length - beforeCross;
+      say(`掉 ${beforeHp - p.hp} 血（余 ${p.hp}）→ 放出 ${fired} 根十字，${p.laserCross} 层`
+        + (fired ? '' : `（冷却还剩 ${Math.round(p.laserCrossT)}ms）`));
       return;
     }
     // 激怒态验收：不打断当前局，走标准 takeDamage 通路放倒还在场的兄（掉落/经验/回收全是真的）

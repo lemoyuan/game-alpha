@@ -3,6 +3,7 @@ import {
   COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage,
   TURRET_CD, TURRET_RANGE, turretDamage,
   BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT, XP_PICKUP_RANGE,
+  LASER_CROSS_CD, laserCrossDamage,
 } from '../consts';
 import { safeTop } from '../render';
 import { CHEST_KIND_BY_ID } from '../npc/monster/config';
@@ -30,6 +31,10 @@ function describe(item, player) {
     case 'turrets': return `脚下留着 ${player.turrets} 座固定炮台，每 ${TURRET_CD / 1000} 秒向 ${TURRET_RANGE} 像素内最近的一怪开一炮，单发 ${turretDamage(player.attack)} 点，不跟着你走也不会被打掉`;
     case 'burnBullets': return `命中点燃 ${BURN_HOLD / 1000} 秒，每 ${BURN_TICK / 1000} 秒跳一次血，每跳 ${item.n * BURN_DMG} 点，再命中只刷新时长`;
     case 'pickupRange': return `经验宝石在 ${player.pickupRange} 像素内自动飞向你（初始 ${XP_PICKUP_RANGE}）`;
+    // 海火核心（Boss 掉落道具）：ownedItems 把它那行的 glyph 设成 config 里的 icon 'laserCross'，所以分支挂在这。
+    // ★只报三个数：两件 Boss 掉落里巨细胞核没有分支、走下面 default 读 brief，因为它涨的是左栏那七行、
+    //   逐项数字面板上正在显示，重复一遍反而对不上；这一件的层数不在任何面板上，只能在这里报
+    case 'laserCross': return `每次真正掉血放出一道旋转十字，共 ${item.n} 层，每次结算 ${laserCrossDamage(item.n)} 点，${LASER_CROSS_CD / 1000} 秒内最多一根`;
     default: return (CHEST_KIND_BY_ID[item.id] || {}).brief || '';
   }
 }
@@ -80,7 +85,11 @@ export default class PauseScreen {
     const x = Math.round((canvasW - w) / 2);
     const body = items.length ? items.length * ROW_H : 40; // 空列表只留一行提示
     const h = 56 + body + 56;
-    const y = Math.max(safeTop + 96, Math.round((canvasH - h) / 2));
+    // ★上界要夹住：Math.max 那一头的 safeTop + 96 是「卡片再高也不许顶进微信胶囊」，但它在高卡片上会把整块往下推。
+    //   12 行（十种金匣 + 两件 Boss 掉落道具）的卡片高 712，刘海机上 y=151 → 底边 863 已经越过 canvasH=844，
+    //   「继续战斗」整颗掉出屏幕、点不动。夹一道 min 让卡片改为往上顶（顶边仍在胶囊之下），按钮才回到屏内。
+    //   ★再加行就不能继续靠压 y 兜了（顶边会啃进胶囊），得做滚动或分栏 —— 见 headless 那个最坏行数探针
+    const y = Math.min(Math.max(safeTop + 96, Math.round((canvasH - h) / 2)), canvasH - h - 8);
     return { x, y, w, h, btn: { x: x + w / 2 - 60, y: y + h - 46, w: 120, h: 34 } };
   }
 

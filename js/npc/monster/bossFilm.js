@@ -386,7 +386,7 @@ export default class BossFilm extends Enemy {
    * 减伤比例按膜厚线性折算（不是"有膜就满额"）：1 点膜也吃 68% 减伤是在撒谎，
    * 而且会让 filmRecover 那条自分泌底线变成一堵墙。
    */
-  takeDamage(dmg, isCrit, databus, color) {
+  takeDamage(dmg, isCrit, databus, color, silent) {
     let applied = dmg;
     if (this.film > 0) {
       this.film = Math.max(0, this.film - dmg * this.filmBurn);
@@ -398,7 +398,8 @@ export default class BossFilm extends Enemy {
     }
     // color 必须跟着往下传：漏这一处的话只有膜王身上的燃烧跳字是白的、别的怪全是橙的，
     // 属于「默认路径正确、局部错误」那种冒烟测试查不出来的失效
-    super.takeDamage(applied, isCrit, databus, color); // 飘字读到手伤害，别报原始值骗玩家
+    // silent 同一条规矩：漏了就只有膜王会被十字激光跳出字来（膜王的血量厚，一根扫射在它身上结十几次，正是最刺眼的那一只）
+    super.takeDamage(applied, isCrit, databus, color, silent); // 飘字读到手伤害，别报原始值骗玩家
   }
 
   onFilmBreak() {

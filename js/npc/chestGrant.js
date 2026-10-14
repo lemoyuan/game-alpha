@@ -25,4 +25,12 @@ export const CHEST_GRANTS = {
     databus.player.applyBoost(kind.boost, databus, false);
     databus.bossChests.core_cmv = (databus.bossChests.core_cmv || 0) + 1;
   },
+  // Boss 掉落道具「海火核心」：拾取这一刻只涨一个计数，一道光都不放。
+  // ★和上面那条的分工差别在于「有没有属性可报」：巨细胞核动的是左栏那七行，所以由 applyBoost 顺带弹 +x；
+  //   这一件动的是 player.laserCross —— 一个不在面板里的数，弹 +x 就等于在无中生有，
+  //   所以拾取那一刻的反馈走 toast（config 那行因此不设 quiet），光束留到以后每次真正掉血时由 Player.fireLaserCross 现放
+  core_seafire: (databus) => {
+    databus.player.laserCross += 1;
+    databus.bossChests.core_seafire = (databus.bossChests.core_seafire || 0) + 1;
+  },
 };

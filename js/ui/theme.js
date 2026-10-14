@@ -474,6 +474,39 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       dot(h * 0.34, -h * 0.1, h * 0.17);
       dot(-h * 0.05, h * 0.38, h * 0.15);
       break;
+    case 'laserCross': {
+      // 十字激光（海火核心的掉落匣图标）：一整块十字跟调用方颜色平涂 + 四道奶白芯 + 中心一颗奶白点
+      // ★十字一条路径成形，不拆成四根臂各自描边：交界处会割出一条穿模的墨线（同嗜血那颗血滴、炸弹跟班那颗火星的规矩）
+      // ★这一层和道具格 itemGlyph 里那一格的颜色是故意反的：这里「红身奶白芯」和游戏里那道光一致，
+      //   道具格在暗红盘上必须「奶白束红芯」才读得出来（实测红对暗红只有 2.70:1）。
+      //   同一件道具的两张皮各按各自底色定，不要合并回去（同下面 itemGlyph 头那句「两层口径不同」）
+      const a = h * 0.3;   // 臂半宽
+      const e = h * 0.95;  // 臂端到中心
+      solid(() => {
+        ctx.beginPath();
+        ctx.moveTo(-a, -e);
+        ctx.lineTo(a, -e);
+        ctx.lineTo(a, -a);
+        ctx.lineTo(e, -a);
+        ctx.lineTo(e, a);
+        ctx.lineTo(a, a);
+        ctx.lineTo(a, e);
+        ctx.lineTo(-a, e);
+        ctx.lineTo(-a, a);
+        ctx.lineTo(-e, a);
+        ctx.lineTo(-e, -a);
+        ctx.lineTo(-a, -a);
+        ctx.closePath();
+      });
+      ctx.strokeStyle = UI.cream;
+      ctx.lineWidth = Math.max(1.2, h * 0.16); // 芯只能是「条」：一层 1.5px 的线在匣子那圈深色皮上等于没画
+      line(0, -e + a, 0, -a);
+      line(0, a, 0, e - a);
+      line(-e + a, 0, -a, 0);
+      line(a, 0, e - a, 0);
+      dot(0, 0, h * 0.18, UI.cream);
+      break;
+    }
     case 'flame':
       // 燃烧子弹：外焰是上尖下圆的火舌（跟随调用方 color 平涂），芯一颗奶白内焰负责读出层次
       // ★内焰不要改成 ink 描边：HUD 这一行图标只有 14px，描边会和外焰轮廓糊成一片
@@ -922,6 +955,45 @@ export function itemGlyph(ctx, key, cx, cy, s) {
       ctx.restore();
       path();
       ctx.stroke(); // 描边放最后：先描的话红面会啃掉轮廓的内半条，瓶底那圈会忽然变细
+      break;
+    }
+    case 'laserCross': {
+      // 海火核心：四根奶白束臂 + 每臂一道红色内芯 + 中心一枚红核点一颗奶白高光（正十字，收在 ±1h 内）
+      // ★内部破例用红、不用家族默认的 ink：这一格只画在 badge 的 bossChestBand 暗红盘上（HUD 与详情页两处都是），
+      //   实测 ink 在那块盘上只有 1.42:1 对比、等于没画，而「红色十字激光」正是用户点名的那一件事。
+      //   vial 为了「存量是这件道具唯一的读数」已经开过一次这个口子，这里是第二次，理由同类
+      // ★主体是「四条分开的臂 + 一颗核」，不是 leech 那种实心十字：两格在同一条道具栏里同形会长成一家
+      //   （同 10-11 vial 那条「同家庭第二成员要拉开剪影」的教训）。臂间空档加圆帽，读成四道光束而不是一块加号
+      // ★不补墨色描边：同上面第一条，墨在这块盘上看不见，白描一圈反而啃掉红芯两侧那圈奶白；哪天挪到金盘上要补贴纸外框
+      const armW = h * 0.62;   // 束臂粗细：真 1× 下 5.2px，是「条」不是「线」（同 pickupRange 那条箭头线的教训）
+      const coreW = h * 0.30;  // 红色内芯：两侧各留 0.16h 奶白收边，红再粗就成了红十字、奶白那层读不出来
+      const reach = h * 0.96;  // 臂端到中心，留出盘沿那圈贴纸
+      ctx.lineCap = 'round';
+      for (let k = 0; k < 4; k++) {
+        ctx.save();
+        ctx.rotate((k * Math.PI) / 2);
+        ctx.strokeStyle = UI.cream;
+        ctx.lineWidth = armW;
+        ctx.beginPath();
+        ctx.moveTo(h * 0.2, 0);
+        ctx.lineTo(reach, 0);
+        ctx.stroke();
+        ctx.strokeStyle = UI.red;
+        ctx.lineWidth = coreW;
+        ctx.beginPath();
+        ctx.moveTo(h * 0.34, 0);
+        ctx.lineTo(reach - h * 0.1, 0);
+        ctx.stroke();
+        ctx.restore();
+      }
+      ctx.fillStyle = UI.red;
+      ctx.beginPath();
+      ctx.arc(0, 0, h * 0.34, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = UI.cream;
+      ctx.beginPath();
+      ctx.arc(0, 0, h * 0.14, 0, Math.PI * 2);
+      ctx.fill();
       break;
     }
     default:
