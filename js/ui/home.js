@@ -234,7 +234,11 @@ export default class HomeScreen {
       //   rh-44 / rh-28 / rh-12 在 rh=66 时逐像素等于原来那三个数，只是给矮行留了退路
       label(ctx, `${config.name}（${role}）`, tx, y + rh - 44, { size: FS.body, bold: true, color: UI.textOnLight });
       label(ctx, config.group, tx, y + rh - 28, { size: FS.tiny, color: UI.blue });
-      label(ctx, `血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + rh - 12, {
+      // ★Boss 行不报血量和经验：那两样由出场槽位表（BOSS_SLOTS）每局随顺序给，
+      //   MONSTER_TYPES 里那两行只是兜底基准，印在屏幕上就是假数字。普通怪照旧
+      label(ctx, config.boss
+        ? `移速${config.speed} · 伤害${config.damage} · 血量经验随出场顺序`
+        : `血量${config.hp} · 移速${config.speed} · 伤害${config.damage} · 经验${config.xp}`, tx, y + rh - 12, {
         size: FS.tiny, color: UI.muted,
       });
       icon(ctx, 'arrowRight', x + w - 20, cy, 14, { color: UI.textOnLight });
@@ -274,7 +278,10 @@ export default class HomeScreen {
         {
           label: '数值',
           color: UI.mint,
-          text: `血量 ${config.hp} · 移速 ${config.speed} · 接触伤害 ${config.damage} · 经验 ${config.xp} · 碰撞半径 ${config.radius}`,
+          // ★同列表行：Boss 的血量与经验由出场槽位表（BOSS_SLOTS）按本局随机顺序给，身份行那两个数只是兜底基准
+          text: config.boss
+            ? `移速 ${config.speed} · 接触伤害 ${config.damage} · 碰撞半径 ${config.radius}（血量与经验按本局的出场顺序给）`
+            : `血量 ${config.hp} · 移速 ${config.speed} · 接触伤害 ${config.damage} · 经验 ${config.xp} · 碰撞半径 ${config.radius}`,
         },
       ]
       : [{ label: '说明', color: UI.muted, text: '进游戏里遭遇一次，这张卡就会自动解锁，不需要额外操作。' }];

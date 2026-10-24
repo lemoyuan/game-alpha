@@ -9,7 +9,7 @@ import {
   CHEST_ROLL_INTERVAL, CHEST_FIRST_ROLL, CHEST_PITY, chestChance,
   SPAWN_INTERVAL_START, SPAWN_INTERVAL_RAMP, SPAWN_INTERVAL_MIN,
   BOSS_SPAWN_INTERVAL_MULT,
-  BOSS_SCHEDULE, BOSS_RESPAWN_GAP,
+  BOSS_SLOTS, BOSS_PAIR_MULT, BOSS_RESPAWN_GAP, buildBossOrder,
 } from './config';
 import { clampToCoast } from '../../arena/coast';
 import { markEncountered } from '../../storage';
@@ -18,7 +18,7 @@ import { markEncountered } from '../../storage';
 // config 反过来 import 类就成环，ES Module 下会解析出 undefined class
 // ★下面那句 `|| Boss` 兜底是这套结构里最贵的一处静默失效：漏登记不会报错，
 //   只会「用新 Boss 的数值跑毒王的冲锋」——血条、掉落、图鉴、刷怪降速全部正常。
-//   所以加一只 Boss 必须同时在这里加一行，config 那条 BOSS_SCHEDULE 才算接上
+//   所以加一只 Boss 必须同时在这里加一行，config 名册（BOSS_SCHEDULE）里那一行才算接上
 const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm, boss4: BossTwins };
 
 // 刷怪控制器：普通怪随时间加密，宝箱怪按幸运值的概率刷新，Boss 定时出场
@@ -29,11 +29,13 @@ export default class Spawner {
     this.elapsed = 0;
     this.chestRollT = 0;      // 距上次「掷骰」累计的毫秒，满 CHEST_ROLL_INTERVAL 掷一次
     this.chestSinceLast = 0;  // 距上次真正刷出金匣累计的毫秒 —— 保底计数器，满 CHEST_PITY 强制刷一只
-    this.bossIndex = 0; // BOSS_SCHEDULE 读到第几条，出场即自增
+    // 本局的 Boss 出场顺序：身份名册洗一遍。★谁在第几场 = 这里，第几场多硬 = BOSS_SLOTS，两张表各管一件事
+    this.bossOrder = buildBossOrder();
+    this.bossIndex = 0; // 走到第几【槽】：bossOrder 和 BOSS_SLOTS 都用它当下标，出场即自增
     // 场上没有 Boss 时累计的毫秒数：Boss 之间的冷却。
     // ★初值是 GAP 而不是 0：这条冷却说的是「上一只死亡后还要缓多久」，开局并没有上一只。
-    //   留 0 就等于让一号 Boss 也空攒一遍冷却，而 GAP 现在和 BOSS_FIRST_SPAWN_TIME 都是 120 秒，
-    //   一号 Boss 会不会迟到只剩「这两条恰好相等」这个巧合，谁把其中一个动一下就静默失灵
+    //   留 0 就等于让第 1 槽也空攒一遍冷却，而 GAP 现在和 BOSS_FIRST_SPAWN_TIME 都是 120 秒，
+    //   第 1 槽会不会迟到只剩「这两条恰好相等」这个巧合，谁把其中一个动一下就静默失灵
     this.bossRest = BOSS_RESPAWN_GAP;
   }
 
@@ -43,8 +45,9 @@ export default class Spawner {
     this.elapsed = 0;
     this.chestRollT = 0;
     this.chestSinceLast = 0;
+    this.bossOrder = buildBossOrder(); // ★每局重洗：不重洗就等于第二局沿用第一局的顺序，「每局随机」退化成「全局固定」
     this.bossIndex = 0;
-    this.bossRest = BOSS_RESPAWN_GAP; // 同上：新开局没有「上一只」要等，一号 Boss 只看自己的 time
+    this.bossRest = BOSS_RESPAWN_GAP; // 同上：新开局没有「上一只」要等，第 1 槽只看自己那条 time
   }
 
   update(dt, databus) {
@@ -55,7 +58,7 @@ export default class Spawner {
     this.interval = Math.max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_START - this.elapsed * SPAWN_INTERVAL_RAMP);
 
     // Boss 存活期间普通刷怪降速不降停：间隔乘 BOSS_SPAWN_INTERVAL_MULT（2 = 密度减半）。
-    // 不能停刷——Boss 血量 ×10 后一场要两分钟起步，停刷等于这段时间全图零新怪、玩家 build 成长暂停
+    // 不能停刷——Boss 的血按槽位给到几千上万，一场要两分钟起步，停刷等于这段时间全图零新怪、玩家 build 成长暂停
     const bossAlive = databus.enemys.some((e) => e.isBoss);
     const gate = this.interval * (bossAlive ? BOSS_SPAWN_INTERVAL_MULT : 1);
     if (this.timer >= gate) {
@@ -82,14 +85,17 @@ export default class Spawner {
       }
     }
 
-    // Boss 出场表逐条走：到点 + 场上没 Boss 且已冷却够久才刷下一只
-    // bossRest 少了不行：玩家提前秒杀 Boss 时 elapsed 早已越过下一个出场时间，
-    // 没有这道冷却，海火会在毒王尸体消失的同一帧贴脸刷出来
-    const next = BOSS_SCHEDULE[this.bossIndex];
+    // Boss 槽位逐格走：到点 + 场上没 Boss 且已冷却够久才进下一格
+    // ★这里读的是【两张表的下标同一个数】：bossOrder 回答"这一场是谁"，BOSS_SLOTS 回答"这一场多硬"。
+    //   两者都由 bossIndex 定位，所以顺序怎么洗都不影响节奏，节奏怎么改都不影响谁拿到哪一份血
+    // bossRest 少了不行：玩家提前秒杀 Boss 时 elapsed 早已越过下一槽的 time，
+    // 没有这道冷却，下一只会在尸体消失的同一帧贴脸刷出来
+    const slot = BOSS_SLOTS[this.bossIndex];
+    const entry = this.bossOrder[this.bossIndex];
     this.bossRest = bossAlive ? 0 : this.bossRest + dt * 1000;
-    if (next && this.bossRest > BOSS_RESPAWN_GAP && this.elapsed > next.time) {
+    if (entry && slot && this.bossRest > BOSS_RESPAWN_GAP && this.elapsed > slot.time) {
       this.bossIndex++;
-      this.spawnBoss(databus, next);
+      this.spawnBoss(databus, entry, slot);
     }
   }
 
@@ -106,11 +112,14 @@ export default class Spawner {
     return pos;
   }
 
-  spawnBoss(databus, entry = BOSS_SCHEDULE[0]) {
+  spawnBoss(databus, entry = this.bossOrder[0], slot = BOSS_SLOTS[0]) {
     if (!databus.player) return;
     const config = MONSTER_TYPES[entry.type];
     const BossClass = BOSS_CLASS[entry.type] || Boss;
     const count = entry.pair || 1;
+    // 成对出场：每只【各】拿槽位量的 BOSS_PAIR_MULT（2026-10-24 口径：一对 = 一只半），不是整槽也不是平分
+    const each = count > 1 ? Math.round(slot.hp * BOSS_PAIR_MULT) : slot.hp;
+    const eachXp = count > 1 ? Math.round(slot.xp * BOSS_PAIR_MULT) : slot.xp;
     const centre = this.placeAroundPlayer(databus, config.radius, 400);
     const group = [];
     for (let i = 0; i < count; i++) {
@@ -122,6 +131,12 @@ export default class Spawner {
       clampToCoast(at, config.radius + 10);
       const boss = new BossClass(entry.type, config);
       boss.init(at.x, at.y);
+      // 血量与经验归【槽位】，本局谁走到第几场由 bossOrder 决定，所以这里必须在 init 之后覆盖到实例上：
+      // Enemy.init 会把 hp 复位成 maxHp（对象池约定），写在 init 前等于没写；同下面普通怪那条 hpScaleAt 的写法。
+      // ★绝不写回 MONSTER_TYPES —— 那张表是模块单例、没有任何 reset() 重建它，写进去会污染第二局，而图鉴读的就是它
+      boss.maxHp = each;
+      boss.hp = each;
+      boss.xpValue = eachXp;
       // ★mirror / twinIndex 必须在 init 之后写：Enemy.init 会复位 mirror（对象池约定），写反了就是"永远不镜像"
       if (count > 1) {
         boss.mirror = i % 2 === 1;

@@ -255,19 +255,44 @@ if (TWIN !== undefined && TWIN !== '1') {
   else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss4: [], $1boss4Parked: [')}`);
 }
 
-// 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
-// ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
-//   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
-// ★光钉 time 还不够：调度门是 bossRest > GAP && elapsed > next.time，而指针要先走完 boss1/2/3 三行，
-//   每行都得等上一只死了再 +120 秒。所以 TWINS=1 还要在循环里把 bossIndex 直接按到 boss4 那一行（见下）
+// 双子的出场钉值：TWINS=1 要把双子稳定叫进这一局。
+// ★2026-10-24 顺序随机之后的写法变了：旧版把 BOSS_FOURTH_SPAWN_TIME 压到 150、再在循环里把 bossIndex
+//   按到 boss4 那一行 —— 那两条现在都失效了，因为 FOURTH 说的是【第 4 槽】的时刻，
+//   而 bossIndex 是【槽位】下标，跟"哪一只"再没关系。让某一只稳定进第 1 槽只有钉排表这一条路，
+//   所以这里只是往下面那根 BOSSORDER 旋钮里塞一个身份
 const TWINS = process.env.TWINS;
-if (TWINS !== undefined) {
+
+// ===== Boss 出场顺序旋钮 =====
+//   BOSSORDER=0       → 副本里 BOSS_ORDER_RANDOM 改 false（回退臂：顺序应逐槽等于名册）
+//   BOSSORDER=boss4   → 钉身份排表，双子落第 1 槽（每只 = 第 1 槽血 × BOSS_PAIR_MULT）
+//   BOSSORDER=boss3,boss1 → 任意排列，没钉到的身份按名册原序补在后面
+// ★为什么必须能钉：调度门是 bossRest > GAP && elapsed > slot.time，而 bossRest 初值就等于 GAP，
+//   第 1 槽的放行时刻 = max(BOSS_FIRST_SPAWN_TIME, GAP/1000)，第 2~4 槽还要等前面那只死了再 +120 秒。
+//   900 秒的测试局里随机顺序会把某一只特定 Boss 整局排到没机会出场，那时它名下每条断言读到的零
+//   都是抽样零而不是代码零（同 2026-10-09 那条教训）
+const BOSSORDER = process.env.BOSSORDER;
+const bossOrderPin = (BOSSORDER && BOSSORDER !== '0' && BOSSORDER !== '1')
+  ? BOSSORDER.split(',').map((s) => s.trim()).filter(Boolean)
+  : [];
+if (TWINS === '1' && bossOrderPin.indexOf('boss4') === -1) bossOrderPin.push('boss4');
+if (bossOrderPin.length) {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  let code = fs.readFileSync(f, 'utf8');
+  const re = /export const BOSS_ORDER_PIN = null/;
+  // ★布尔/字面量改副本一律用 re.test() 判命中，不比替换前后的字符串
+  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_ORDER_PIN = null，钉排表 ${bossOrderPin.join(',')} 这一组等于没跑`);
+  else code = code.replace(re, `export const BOSS_ORDER_PIN = [${bossOrderPin.map((t) => `'${t}'`).join(', ')}]`);
+  const re2 = /export const BOSS_FIRST_SPAWN_TIME = \d+/;
+  // ★钉到第 1 槽还必须压第 1 槽的时刻：不压的话它仍然要等满 120 秒，短局里照样可能整局不出场
+  if (!re2.test(code)) errors.push('副本 config.js 里找不到 BOSS_FIRST_SPAWN_TIME，钉排表那一组会把第 1 槽留在 120 秒之后');
+  else code = code.replace(re2, 'export const BOSS_FIRST_SPAWN_TIME = 150');
+  fs.writeFileSync(f, code);
+} else if (BOSSORDER === '0') {
   const f = path.join(COPY, 'npc', 'monster', 'config.js');
   const code = fs.readFileSync(f, 'utf8');
-  const re = /export const BOSS_FOURTH_SPAWN_TIME = \d+/;
-  // ★同样用 re.test() 判命中，不比替换前后的字符串
-  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_FOURTH_SPAWN_TIME，TWINS=${TWINS} 这一组等于没跑`);
-  else fs.writeFileSync(f, code.replace(re, `export const BOSS_FOURTH_SPAWN_TIME = ${TWINS === '1' ? 150 : 480}`));
+  const re = /export const BOSS_ORDER_RANDOM = \w+/;
+  if (!re.test(code)) errors.push(`副本 config.js 里找不到 BOSS_ORDER_RANDOM，BOSSORDER=0 这一组等于没跑`);
+  else fs.writeFileSync(f, code.replace(re, 'export const BOSS_ORDER_RANDOM = false'));
 }
 
 const mainMod = await import(fileUrl(path.join(COPY, 'main.js')));
@@ -276,8 +301,16 @@ const {
   BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_DROPS, BOSS_DROPS_ENABLED, BOSS_XP_GEMS, chestChance, chestExpectedSeconds,
   CHEST_FIRST_ROLL, CHEST_PITY, CHEST_CHANCE_BASE, CHEST_CHANCE_EXTRA,
   MONSTER_TYPES, MUTANT_CHANCE, BLOOD_CLOT_HEAL,
-  BOSS_SCHEDULE, CODEX_ORDER, BOSS_FOURTH_SPAWN_TIME, CHEST_KIND_BY_ID,
+  BOSS_SCHEDULE, CODEX_ORDER, CHEST_KIND_BY_ID,
+  BOSS_SLOTS, BOSS_PAIR_MULT, BOSS_ORDER_RANDOM, BOSS_ORDER_PIN, buildBossOrder, BOSS_FIRST_SPAWN_TIME,
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
+// 身份表兜底基准的快照：★必须在开跑之前取。槽位给量必须写在【实例】上，一旦哪天改回写 MONSTER_TYPES，
+// 那张表是模块单例、没有任何 reset() 重建它，污染会带进第二局和图鉴，而本台的实场读数（从实体读）照样绿
+const bossIdentityBaselines = {};
+for (const e of BOSS_SCHEDULE) {
+  const cfg = MONSTER_TYPES[e.type];
+  if (cfg) bossIdentityBaselines[e.type] = { hp: cfg.hp, xp: cfg.xp };
+}
 const { CHEST_GRANTS } = await import(fileUrl(path.join(COPY, 'npc', 'chestGrant.js')));
 // HUD 左栏那七行的 key：BOSS_DROPS 的 boost 不许有落在这七行之外的项（见下面的注册面扫描）
 // skillButtonRect：右下那颗主动键唯一的矩形来源。★断言必须调这个函数拿坐标，不许自己按常量重算 ——
@@ -654,16 +687,32 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
 
 // 成对出场只能在召唤入口这一帧抓：两只同一帧进数组，逐帧扫 enemys 数不出「哪一帧算一次出场」。
 // 委托式包装保留原行为，只把这一帧新增的 boss 存成一组给下面的断言用
+// ★本局每一场 Boss 战的台账：谁落在第几槽、实体上【实际】拿到多少血和经验、什么时候出场/死亡。
+//   血量一定要从实体读：这一轮改的就是「槽位的数有没有落到实例上」，拿 BOSS_SLOTS 跟 BOSS_SLOTS 比是恒真式，
+//   把 spawner 里那三行覆盖整段删掉照样绿
+const bossLog = [];
+// 「这一局有没有轮到某只 Boss 出场」——顺序随机之后，某一只整局没来是旋钮/时刻表的后果，不是断链。
+// 下面那三处「没死过某只 Boss」的门都改读它：没出场就打日志跳过，出场了却没死才报红
+const bossAppeared = (type) => bossLog.some((r) => r.type === type);
 {
   const spawner = databus.spawner;
   const origBoss = Object.getPrototypeOf(spawner).spawnBoss;
-  spawner.spawnBoss = (db, entry) => {
+  spawner.spawnBoss = (db, entry, slot) => {
     const before = db.enemys.length;
-    const r = origBoss.call(spawner, db, entry);
+    // ★第三个参数照抄进 call：漏掉它，被调用方拿默认槽位（第 1 槽）给实体血量，而台账记的却是别的槽，
+    //   逐槽血量那条断言会当场红在一个测试自己的错上
+    const r = origBoss.call(spawner, db, entry, slot);
+    const group = db.enemys.slice(before).filter((e) => e.isBoss);
     if (entry && entry.type === 'boss4') {
-      const group = db.enemys.slice(before).filter((e) => e.isBoss);
       twinsGroups.push(group);
       for (const b of group) twinsAlive.add(b);
+    }
+    const slotIdx = BOSS_SLOTS.indexOf(slot || BOSS_SLOTS[0]);
+    for (const b of group) {
+      bossLog.push({
+        type: entry ? entry.type : b.type, slot: slotIdx, pair: (entry && entry.pair) || 1,
+        at: db.spawner.elapsed, hp: b.maxHp, xp: b.xpValue, deadAt: -1, ent: b,
+      });
     }
     return r;
   };
@@ -1084,14 +1133,10 @@ for (let i = 0; i < frames; i++) {
     p.activateMembrane();
     memCaller = 'game';
   }
-  // TWINS=1：把 Boss 指针按到 boss4 那一行。★只钉 config 里的 time 不够 —— 指针要先走完
-  //   boss1/2/3 三行，每行都得等上一只死了再攒满 120 秒冷却，短局里那条门根本过不去，
-  //   双子一次不出场而每一条双子断言都读成"通过"，那就是空跑
-  if (TWINS === '1' && boss4Index >= 0 && databus.spawner.bossIndex < boss4Index) {
-    databus.spawner.bossIndex = boss4Index;
-  }
-  // bot 站桩没输出，打不动 3000 血的 Boss：出场表会永远停在第一条，
-  // 二号 Boss 的激光/赤潮分支一行都跑不到。这里按秒削 Boss 的血，让三只 Boss 在 480 秒里都轮到
+  // ★这里不再钉子：旧写法是 TWINS=1 时把 bossIndex 按到 boss4 那一行，顺序随机之后 bossIndex 是【槽位】下标、
+  //   跟"哪一只"再没关系，按过去只会把某一槽跳掉。要让某一只稳定出场，改副本里的 BOSS_ORDER_PIN（见上面那节）
+  // bot 站桩没输出，打不动槽位给到几千上万的 Boss：调度指针会永远停在当前那一槽，
+  // 后面几槽一次都轮不到。这里按秒削 Boss 的血，让四场 Boss 战在这一局里都走一遍
   // ★★必须遍历场上每一只 Boss：find 只削得到第一只，双子那一档第二只会一直活着，
   //   「丧兄激怒」这条边一次都触发不到，而血条、掉落、激怒断言全部照样绿着
   // ★游戏结束了就别削了：这段在台子外层，而 main.js 在玩家死后整段跳过 databus.update，
@@ -1135,6 +1180,13 @@ for (let i = 0; i < frames; i++) {
     }
   }
   const dyingBosses = bosses.filter((b) => b.isDead); // 本帧 checkCollisions 会给它们结算掉落
+  // 台账补上死亡时刻：取「第一次读到 isDead」那一帧，之后不再覆盖（双子同帧双亡也只是各记各的）
+  // ★必须和出场时刻用同一把钟（spawner.elapsed = 世界时间）：帧序号 × DT 是墙上时间，
+  //   三选一面板冻结期间它照走而 elapsed 不动，两个数并排印出来会出现「死在出场之前」
+  for (const dead of dyingBosses) {
+    const rec = bossLog.find((r) => r.ent === dead);
+    if (rec && rec.deadAt < 0) rec.deadAt = databus.spawner.elapsed;
+  }
   // 膜量读数按「哪只带 filmMax」找，不按「场上第一只 Boss」：同屏两只时 find 盯错的会是一双眼睛
   const filmBoss = bosses.find((b) => b.filmMax !== undefined);
   if (filmBoss) {
@@ -1540,9 +1592,10 @@ if (!SEAFIRE_ON) {
   if (databus.player && databus.player.laserCross) errors.push(`海火核心已不可达玩家却有 ${databus.player.laserCross} 层：层数还有别的写入口`);
   if (crossFires) errors.push(`海火核心已不可达却放出过 ${crossFires} 根十字：fireLaserCross 没看层数`);
 } else if (boss2Drops === 0) {
-  // ★TWINS=1 那一跑把 Boss 指针按在 boss4 行，海火天生叫不出来：那是旋钮的后果不是事故，报红只会让那一臂永远不绿
-  if (TWINS === '1') console.log('海火核心：TWINS=1 那一跑叫不出海火（Boss 指针被按在 boss4），这一件的断言整节跳过，请看 TWINS=off 那一跑');
-  else errors.push('海火核心开着却整局没死过海火（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+  // ★顺序随机之后「这一局没轮到海火」是正常结果（钉排表、或后面的槽被战斗时长推出测试窗），
+  //   报红只会让那一臂永远不绿 —— 但也不能一声不吭，否则下一位会把这行绿读成「这件验过了」
+  if (!bossAppeared('boss2')) console.log('海火核心：本局没轮到海火出场（第 1 槽 = boss1 之外的排表，或时刻表没走到它那一槽），这一件的断言整节跳过');
+  else errors.push('海火核心开着、本局海火也出场了，却整局没死过它（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
 } else {
   if (!sawCrossChest) errors.push(`死了 ${boss2Drops} 只海火，场上却没出现海火核心那件匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!crossGrants) errors.push('匣掉过却没授予一次层数：拾取→CHEST_GRANTS.core_seafire 断了一环（chest.js 那句 CHEST_GRANTS[kind] 没跑到？）');
@@ -1727,9 +1780,9 @@ if (!BIOFILM_ON) {
 } else if (!BOSS_DROPS_ENABLED) {
   if (membranePresses || membraneFrames) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却按成 ${membranePresses} 次、膜 ${membraneFrames} 帧：掉落以外的地方把道具发出去了`);
 } else if (boss3Drops === 0) {
-  // ★同海火那一条：TWINS=1 把 Boss 指针按在 boss4 行，膜王天生叫不出来，报红只会让那一臂永远不绿
-  if (TWINS === '1') console.log('薄膜核心：TWINS=1 那一跑叫不出膜王（Boss 指针被按在 boss4），这一件的断言整节跳过，请看 TWINS=off 那一跑');
-  else errors.push('薄膜核心开着却整局没死过膜王（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+  // ★同海火那一条：没轮到膜王出场是排表/时刻表的后果，不是断链，但也不能一声不吭
+  if (!bossAppeared('boss3')) console.log('薄膜核心：本局没轮到膜王出场（第 1 槽 = boss1 之外的排表，或时刻表没走到它那一槽），这一件的断言整节跳过');
+  else errors.push('薄膜核心开着、本局膜王也出场了，却整局没死过它（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
 } else {
   if (!sawMembraneChest) errors.push(`死了 ${boss3Drops} 只膜王，场上却没出现薄膜核心那只匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!membraneGrants) errors.push('匣掉过却没授予一次：拾取→CHEST_GRANTS.core_biofilm 断了一环（这件不叠层，授予那行写的是 = 1）');
@@ -1829,7 +1882,8 @@ if (!DIPLO_ON) {
 } else if (!BOSS_DROPS_ENABLED) {
   if (twinChests || twinPeak || twinSalvos) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却掉过 ${twinChests} 只匣、落过 ${twinPeak} 座、齐射 ${twinSalvos} 轮：掉落以外的地方把道具发出去了`);
 } else if (twinDeathsSeen === 0) {
-  errors.push('双子核心开着却整局没死过双子（boss4Drops=0 且 twinsDeaths=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长，或用 TWINS=1 把 boss4 的叫到 150 秒');
+  if (!bossAppeared('boss4')) console.log('双子核心：本局没轮到双子出场（随机顺序把 boss4 排在测试窗之外），这一件的断言整节跳过 —— 要验它跑 BOSSORDER=boss4 或 TWINS=1 那一臂');
+  else errors.push('双子核心开着、本局双子也出场了，却一只都没倒下（boss4Drops=0 且 twinsDeaths=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长，或用 BOSSORDER=boss4 / TWINS=1 把双子钉进第 1 槽（并把第 1 槽的出场时刻压到 150 秒）');
 } else {
   // ★1 是唯一合法值：0 = 掉落口没按 Boss 号对上表，≥2 = 那道上锁的账没钉住（一局两只匣 → 地上两座炮）
   if (twinChests !== 1) {
@@ -2720,15 +2774,16 @@ const twinsCfg = MONSTER_TYPES.boss4;
 if (boss4Index < 0) {
   errors.push('BOSS_SCHEDULE 里没有 boss4 那一行：双子写好了类却永远不会出场，整节双子断言无从判起');
 }
-// 空跑防护：钉了 TWINS=1 却没抓到出场分组，这一组就是白跑的
+// 空跑防护：钉了 TWINS=1（= 副本里把 boss4 钉进 BOSS_ORDER_PIN、第 1 槽时刻压到 150 秒）却没抓到出场分组，这一组就是白跑的
 if (TWINS === '1' && boss4Index >= 0 && twinsGroups.length === 0) {
-  errors.push(`TWINS=1 跑了 ${seconds}s 却一组双子都没召唤出来：出场时刻压到 ${BOSS_FOURTH_SPAWN_TIME}s、指针按到第 ${boss4Index + 1} 行仍没走通调度门`);
+  errors.push(`TWINS=1 跑了 ${seconds}s 却一组双子都没召唤出来：钉排表 ${JSON.stringify(BOSS_ORDER_PIN)}、第 1 槽时刻压到 ${BOSS_FIRST_SPAWN_TIME}s 仍没走通调度门`);
 }
 // 空跑防护第二条：TWINS=1 的整条价值在「双子有几十秒可跑、至少死掉一只」，
 //   而激怒 / rage 贴图 / 掉落这三条断言都以 deaths>=1 为门控 —— 玩家先死了就是门控替代码兜了底，
 //   报表一片绿而三条断言一行都没判，这种跑次必须自己喊出来
 if (TWINS === '1' && gameOverAt >= 0 && twinsDeaths === 0) {
-  errors.push(`TWINS=1 空跑：玩家 ${gameOverAt.toFixed(1)}s 就死了（双子 ${BOSS_FOURTH_SPAWN_TIME}s 出场），一只双子都没倒下过，激怒 / rage 贴图 / 掉落三条断言这次一条都没判`);
+  const twinAt = bossLog.find((r) => r.type === 'boss4');
+  errors.push(`TWINS=1 空跑：玩家 ${gameOverAt.toFixed(1)}s 就死了（双子${twinAt ? ` ${twinAt.at.toFixed(0)}s 出场` : '根本没出场'}），一只双子都没倒下过，激怒 / rage 贴图 / 掉落三条断言这次一条都没判`);
 }
 for (let g = 0; g < twinsGroups.length; g++) {
   const group = twinsGroups[g];
@@ -2879,6 +2934,223 @@ function vesicleRun(offset) {
   } else if (z.tint !== twinsCfg.stainTint || z.r0 !== twinsCfg.stainRadius || z.maxLife !== twinsCfg.stainLife
     || z.damage !== twinsCfg.stainDamage || z.hold !== twinsCfg.stainHold || z.warnTime !== 0) {
     errors.push(`毒渍参数不对：tint=${z.tint} r=${z.r0} life=${z.maxLife} dmg=${z.damage} hold=${z.hold} warn=${z.warnTime}`);
+  }
+}
+
+// ===== Boss 出场顺序 × 槽位给量（2026-10-24）=====
+// 本轮的口径就一句话：血量和经验属于【第几场】，谁穿哪一件是另一件事。所以三条链各自钉死 ——
+// 发牌（buildBossOrder 洗得动）、给量（槽位数真的落到实例上）、显示（图鉴不再报血量）。
+// ★实场读数一律从实体拿：拿 BOSS_SLOTS 跟 BOSS_SLOTS 比是恒真式，把 spawner 里那三行覆盖整段删掉照样绿
+const rosterTypes = BOSS_SCHEDULE.map((e) => e.type);
+let bossPerms = -1; // 2000 次洗出发到几种顺序：-1 = 这一臂本来就不洗，按跳过处理
+let bossHpTotal = 0;
+let bossXpTotal = 0;
+{
+  // —— 静态形状：名册几槽、有没有重复身份、台阶有没有真的在递增 ——
+  if (BOSS_SLOTS.length !== BOSS_SCHEDULE.length) {
+    errors.push(`BOSS_SLOTS 有 ${BOSS_SLOTS.length} 槽而名册有 ${BOSS_SCHEDULE.length} 只：调度门要 entry && slot 同时成立才放行，对不上的那一半永远碰不到面`);
+  }
+  const dupTypes = rosterTypes.filter((t, i) => rosterTypes.indexOf(t) !== i);
+  if (dupTypes.length) {
+    errors.push(`名册里 '${dupTypes.join(',')}' 出现两次：一局会叫出两只同一号 Boss，而掉落口按 type 记「一局只掉一只」，第二只的道具必然不掉`);
+  }
+  for (let i = 1; i < BOSS_SLOTS.length; i++) {
+    if (!(BOSS_SLOTS[i].hp > BOSS_SLOTS[i - 1].hp)) {
+      errors.push(`第 ${i + 1} 槽血量 ${BOSS_SLOTS[i].hp} 没高过第 ${i} 槽 ${BOSS_SLOTS[i - 1].hp}：本轮要的就是按槽位递增`);
+    }
+    if (!(BOSS_SLOTS[i].xp > BOSS_SLOTS[i - 1].xp)) {
+      errors.push(`第 ${i + 1} 槽经验 ${BOSS_SLOTS[i].xp} 没高过第 ${i} 槽 ${BOSS_SLOTS[i - 1].xp}`);
+    }
+    if (!(BOSS_SLOTS[i].time >= BOSS_SLOTS[i - 1].time)) {
+      errors.push(`第 ${i + 1} 槽的最早出场时刻 ${BOSS_SLOTS[i].time}s 早于第 ${i} 槽 ${BOSS_SLOTS[i - 1].time}s：后面那场会比前面那场先到`);
+    }
+  }
+  if (!(BOSS_PAIR_MULT > 0 && BOSS_PAIR_MULT < 1)) {
+    errors.push(`BOSS_PAIR_MULT = ${BOSS_PAIR_MULT} 落在 (0,1) 之外：口径是「一对 = 一只半」，取 1 就成了每只各拿整槽`);
+  }
+}
+{
+  // —— O1 纯检发牌：洗出来必须恰好是名册的一个排列 ——
+  const pinned = !!(BOSS_ORDER_PIN && BOSS_ORDER_PIN.length);
+  if (pinned || !BOSS_ORDER_RANDOM) {
+    // ★明确跳过而不是静默：钉排表和 BOSSORDER=0 这两臂本来就不洗，
+    //   把旋钮读成 bug 是最坏的一种假红（同 2026-10-06「报表恒印 off 被当回归查了半天」）
+    console.log(`boss 顺序纯检跳过：这一臂 random=${BOSS_ORDER_RANDOM} pin=${JSON.stringify(BOSS_ORDER_PIN)}`);
+  } else {
+    const identity = rosterTypes.join('>');
+    const perms = new Set();
+    let nonIdentity = 0;
+    let bad = '';
+    for (let i = 0; i < 2000 && !bad; i++) {
+      const order = buildBossOrder();
+      if (order.length !== BOSS_SCHEDULE.length) { bad = `第 ${i} 次给出 ${order.length} 条（名册只有 ${BOSS_SCHEDULE.length} 只）`; break; }
+      if (order.some((e) => BOSS_SCHEDULE.indexOf(e) === -1)) { bad = '给出的行不是名册里的原对象：洗一遍就把 pair / toast 洗掉了'; break; }
+      if (new Set(order).size !== order.length) { bad = `第 ${i} 次给出 ${order.map((e) => e.type).join('>')}，有重复：一只 Boss 会在一局里出场两次`; break; }
+      const key = order.map((e) => e.type).join('>');
+      perms.add(key);
+      if (key !== identity) nonIdentity++;
+    }
+    if (bad) errors.push(`buildBossOrder：${bad}`);
+    else {
+      if (nonIdentity === 0) errors.push('buildBossOrder 连发 2000 次全是名册原序：BOSS_ORDER_RANDOM 是 true 却一次也没洗，「每局随机」这条是假的');
+      if (perms.size < 2) errors.push(`buildBossOrder 2000 次只洗出 ${perms.size} 种顺序：发牌近乎恒定`);
+    }
+    bossPerms = perms.size;
+  }
+}
+{
+  // —— 身份表必须整局干干净净：槽位数只准落在实例上 ——
+  for (const [type, base] of Object.entries(bossIdentityBaselines)) {
+    const cfg = MONSTER_TYPES[type];
+    if (cfg.hp !== base.hp || cfg.xp !== base.xp) {
+      errors.push(`整局跑完，MONSTER_TYPES.${type} 的 hp/xp 从 ${base.hp}/${base.xp} 变成了 ${cfg.hp}/${cfg.xp}：槽位给量写回了身份表。那张表没有 reset() 重建它，下一局和图鉴读到的都是上一局的残留`);
+    }
+  }
+}
+{
+  // —— O2 / O3 / O4 实场给量：逐槽读实体上的 maxHp 与 xpValue ——
+  if (!bossLog.length) {
+    console.log('boss 槽位给量的实场检查整节跳过：这一局一场 Boss 战都没叫出来（时长太短或调度门没放行），不是断链');
+  } else {
+    for (const r of bossLog) {
+      const slot = BOSS_SLOTS[r.slot];
+      if (!slot) {
+        errors.push(`${r.type} 落在第 ${r.slot + 1} 槽而表里只有 ${BOSS_SLOTS.length} 槽：spawner 传给 spawnBoss 的第三个参数和 BOSS_SLOTS 对不上`);
+        continue;
+      }
+      const mult = r.pair > 1 ? BOSS_PAIR_MULT : 1;
+      const wantHp = Math.round(slot.hp * mult);
+      const wantXp = Math.round(slot.xp * mult);
+      if (r.hp !== wantHp) {
+        errors.push(`第 ${r.slot + 1} 槽的 ${r.type} 实体上是 ${r.hp} 血，应为 ${slot.hp} × ${mult} = ${wantHp}：槽位覆盖没落到实例上（写在 init 之前等于没写）`);
+      }
+      if (r.xp !== wantXp) {
+        errors.push(`第 ${r.slot + 1} 槽的 ${r.type} 实体上是 ${r.xp} 经验，应为 ${wantXp}：血跟着槽位走了、经验还在读身份行`);
+      }
+    }
+    // 成对出场是「同一槽各乘一次倍率」，不是把一槽掰成两半：同槽两只必须同量
+    const bySlot = new Map();
+    for (const r of bossLog) {
+      const first = bySlot.get(r.slot);
+      if (!first) bySlot.set(r.slot, r);
+      else if (first.hp !== r.hp) errors.push(`第 ${r.slot + 1} 槽两只 ${r.type} 血量不同（${first.hp} / ${r.hp}）：成对不给同一槽的两只各乘一次倍率，就是在平分那一槽`);
+    }
+    // 逐槽单调：双子落在哪一槽都要保持递增（0.7 × 后一槽 > 前一槽的单只量）
+    const seq = [...bySlot.entries()].sort((a, b) => a[0] - b[0]).map(([, r]) => r);
+    for (let i = 1; i < seq.length; i++) {
+      if (!(seq[i].hp > seq[i - 1].hp)) {
+        errors.push(`第 ${seq[i].slot + 1} 槽每只 ${seq[i].hp} 血没高过第 ${seq[i - 1].slot + 1} 槽的 ${seq[i - 1].hp}：难度曲线在这一段是平的或倒的`);
+      }
+    }
+    bossHpTotal = bossLog.reduce((n, r) => n + r.hp, 0);
+    bossXpTotal = bossLog.reduce((n, r) => n + r.xp, 0);
+    // ★下面两组数是写死的，不跟着 BOSS_PAIR_MULT 算：它们才是「0.7 这个倍率真的在生效」的证据。
+    //   血量 = 3000+5000+8000+13000 = 29000，双子那一站按 2×0.7 记账 → 只会多出 1200/2000/3200/5200；
+    //   经验 = 300+400+550+700 = 1950，同理多出 120/160/220/280。
+    //   倍率改成 1（每只拿整槽）会落到 32000/34000/37000/42000 那一族数上，这里当场红
+    if (bySlot.size === BOSS_SLOTS.length) {
+      if (![30200, 31000, 32200, 34200].includes(bossHpTotal)) {
+        errors.push(`整局四槽合计血量 ${bossHpTotal}，而「单只 3000/5000/8000/13000 + 双子那一站按 2×0.7」只能给出 30200/31000/32200/34200`);
+      }
+      if (![2070, 2110, 2170, 2230].includes(bossXpTotal)) {
+        errors.push(`整局四槽合计经验 ${bossXpTotal}，应为 2070/2110/2170/2230（1950 + 双子那一槽的 0.4 倍）`);
+      }
+    } else {
+      console.log(`boss 整局总量那两条跳过：只读到 ${bySlot.size} / ${BOSS_SLOTS.length} 槽（当前 ${bossHpTotal} 血 / ${bossXpTotal} 经验），后面几槽被 GAP 推到 ${seconds}s 之后了`);
+    }
+  }
+}
+{
+  // —— O7 回退臂 / 钉排表臂：每一槽的身份必须等于旋钮说的那一条 ——
+  // 默认臂（random=true 且没钉）不判：那一局的顺序本来就是抽的，判它等于把随机当 bug
+  const pinned = bossOrderPin.length > 0;
+  if (!pinned && BOSSORDER !== '0') {
+    console.log('boss 逐槽身份检查跳过：这一臂走随机，顺序由发牌决定');
+  } else if (!bossLog.length) {
+    console.log('boss 逐槽身份检查跳过：整局没有 Boss 出场');
+  } else {
+    const want = pinned
+      ? bossOrderPin.concat(rosterTypes.filter((t) => bossOrderPin.indexOf(t) === -1))
+      : rosterTypes;
+    for (const r of bossLog) {
+      if (r.type !== want[r.slot]) {
+        errors.push(`第 ${r.slot + 1} 槽出来的是 ${r.type}，而 ${pinned ? `钉排表 ${JSON.stringify(bossOrderPin)}` : 'BOSSORDER=0'}说这一槽该是 ${want[r.slot]}：${pinned ? '钉排表没钉住' : '回退路径是假的，以后想拿旧节奏做对照无从下手'}`);
+      }
+    }
+    const spawnerOrder = databus.spawner.bossOrder.map((e) => e.type).join('>');
+    if (spawnerOrder !== want.join('>')) {
+      errors.push(`spawner.bossOrder = ${spawnerOrder}，应为 ${want.join('>')}：台账记的身份和刷怪器手里的牌不是同一副`);
+    }
+  }
+}
+{
+  // —— O5 掉落仍按身份记账：顺序随机不该动掉落口 ——
+  for (const [type, list] of Object.entries(BOSS_DROPS)) {
+    for (const k of list) {
+      const n = databus.bossChests[k.id] || 0;
+      if (n > 1) {
+        errors.push(`「${k.name}」这一局被记了 ${n} 次：一局里同一号 Boss 只出场一次（名册不重复），门若改成按槽位记就会丢掉这层保护`);
+      }
+    }
+  }
+  const strayKeys = Object.keys(databus.bossLootDropped).filter((k) => rosterTypes.indexOf(k) === -1);
+  if (strayKeys.length) {
+    errors.push(`bossLootDropped 里有非身份的键 ${strayKeys.join(',')}：掉落口的记账口径从 type 漂走了，四件道具的「一局一只」会跟着失效`);
+  }
+}
+// —— O6 图鉴：Boss 行不再报血量，普通怪一字不改 ——
+// ★这一条只能靠文本扫：槽位化之后 MONSTER_TYPES 里那四个 hp 只是兜底基准，
+//   屏幕上继续印它不会报错、数值检查也全绿，只有图鉴那一行写成假数字（同下面详情页探针那笔教训）
+{
+  const homeSrc = fs.readFileSync(path.join(COPY, 'ui', 'home.js'), 'utf8');
+  for (const sentinel of ['血量经验随出场顺序', '血量与经验按本局的出场顺序给']) {
+    if (!homeSrc.includes(sentinel)) {
+      errors.push(`home.js 源码里找不到「${sentinel}」：图鉴的 Boss 分支被摘掉了，屏幕上会继续印 MONSTER_TYPES 的兜底血量`);
+    }
+  }
+  const { records } = await import(fileUrl(path.join(COPY, 'storage.js')));
+  for (const e of CODEX_ORDER) if (records.encountered.indexOf(e.type) === -1) records.encountered.push(e.type);
+  const hs = databus.homeScreen;
+  if (!hs) errors.push('databus.homeScreen 不存在：这条图鉴文本检查是空跑的');
+  else {
+    // 同详情页探针那条口径：把 measureText 报成 0 才永远不折行，折了行就只看得到半句
+    ctx.measureText = () => ({ width: 0 });
+    hs.goto('codex');
+    frameTexts.clear();
+    hs.draw(ctx);
+    const list = [...frameTexts];
+    for (const type of rosterTypes) {
+      const cfg = MONSTER_TYPES[type];
+      const want = `移速${cfg.speed} · 伤害${cfg.damage} · 血量经验随出场顺序`;
+      if (!list.includes(want)) {
+        errors.push(`图鉴列表里「${cfg.name}」这一行不是 ${want}，实际画出的移速行是 ${JSON.stringify(list.filter((s) => s.includes('移速')))}：Boss 行要么还在报血量，要么字段被改乱了`);
+      }
+      if (list.some((s) => s.includes(`血量${cfg.hp}`))) {
+        errors.push(`图鉴列表又把「血量${cfg.hp}」画了出来：那是 MONSTER_TYPES.${type}.hp 的兜底基准，不是这一局它身上的血量`);
+      }
+    }
+    const mob = CODEX_ORDER.find((e) => !MONSTER_TYPES[e.type].boss);
+    if (mob) {
+      const cfg = MONSTER_TYPES[mob.type];
+      const want = `血量${cfg.hp} · 移速${cfg.speed} · 伤害${cfg.damage} · 经验${cfg.xp}`;
+      if (!list.includes(want)) errors.push(`图鉴列表里普通怪「${cfg.name}」那一行变了：本轮只该动 Boss 行，${want} 必须原样画出来`);
+    }
+    for (const type of rosterTypes) {
+      const cfg = MONSTER_TYPES[type];
+      hs.openCodex(type);
+      frameTexts.clear();
+      hs.draw(ctx);
+      const det = [...frameTexts];
+      const want = `移速 ${cfg.speed} · 接触伤害 ${cfg.damage} · 碰撞半径 ${cfg.radius}（血量与经验按本局的出场顺序给）`;
+      if (!det.includes(want)) {
+        errors.push(`图鉴详情页「${cfg.name}」的数值段不是槽位化文案，实际画出：${JSON.stringify(det.filter((s) => s.includes('移速')))}`);
+      }
+      const leaked = det.filter((s) => /血量 ?\d/.test(s));
+      if (leaked.length) errors.push(`图鉴详情页「${cfg.name}」的数值段还印着血量数字：${JSON.stringify(leaked)}`);
+    }
+    delete ctx.measureText;
+    hs.goto('main');
+    frameTexts.clear();
   }
 }
 
@@ -3316,6 +3588,15 @@ console.log(`membrane (薄膜核心 ${BIOFILM_ON ? 'on' : 'off（MEMBRANE 旋钮
     : `授予 ${membraneGrants} / 按成 ${membranePresses} / 膜 ${membraneFrames} 帧（这一段要的全是 0）`,
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level}`
   + ` / 死亡 ${gameOverAt < 0 ? '整局没死' : `${gameOverAt.toFixed(1)}s（整局上限 ${seconds}s）`}`);
+// ★这一行把「谁落在第几槽、各自实拿多少、什么时候出场/死亡」一次印全：顺序随机之后，
+//   下一位读报表的人只能从这一行判断这一局到底走了哪条曲线（膜王落第 1 槽、双子落第 4 槽都是合法结果）
+console.log(`boss order (random=${BOSS_ORDER_RANDOM} / pin=${JSON.stringify(BOSS_ORDER_PIN)} / 第 1 槽不早于 ${BOSS_FIRST_SPAWN_TIME}s${BOSSORDER ? ` / 旋钮 BOSSORDER=${BOSSORDER}` : ''}):`,
+  bossLog.length
+    ? `${databus.spawner.bossOrder.map((e) => e.type).join(' → ')} || `
+      + bossLog.map((r) => `${r.type}@槽${r.slot + 1}${r.pair > 1 ? `×${r.pair}` : ''} ${r.hp}血·${r.xp}xp 出${r.at.toFixed(0)}s 死${r.deadAt < 0 ? '没死' : `${r.deadAt.toFixed(0)}s`}`).join(' | ')
+    : '整局没叫出 Boss',
+  `|| 合计 ${bossHpTotal} 血 / ${bossXpTotal} 经验（设计 29000 / 1950，双子那一站按 2×0.7 各记一只）`,
+  `| 洗出发到 ${bossPerms < 0 ? '本臂不洗，跳过' : `${bossPerms} 种顺序（上限 24）`}`);
 // ★同前两件：这一行必须把可达性本身（DIPLO_ON）与这一局 boss4 死了几只一起印出来，
 //   否则 TWIN=0 那一跑的零、或整局没打死双子的零，都会被下一位读成回归
 // ★利用率是软读数不是断言：座子钉在拾取那一刻不动，bot 一跑开它那一圈里就没怪，低才是常态。
@@ -3330,8 +3611,9 @@ console.log(`twin battery (双子核心 ${DIPLO_ON ? 'on' : 'off（TWIN 旋钮�
       + ` | 单发 ${databus.player ? twinDamage(databus.player.attack) : '-'} 点（攻 ${databus.player && databus.player.attack} × ${TWIN_DAMAGE_RATIO}）射程 ${TWIN_RANGE}`
     : `匣 ${twinChests} / 授予 ${twinGrants} / 座 ${twinPeak} / 齐射 ${twinSalvos}（这一段要的全是 0）`,
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level}`);
-// ★报表行必须读出 TWINS 钉值和这一局 boss4 的实际出场时刻：否则未来会话看到一行 0 分不清是回归还是根本没出场
-console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${BOSS_FOURTH_SPAWN_TIME}s):`,
+// ★报表行必须读出 TWINS 钉值和这一局 boss4 的实际出场情况：否则未来会话看到一行 0 分不清是回归还是根本没出场
+// ★旧版这里印的是 BOSS_FOURTH_SPAWN_TIME，顺序随机之后那个数说的是【第 4 槽】而不是【boss4】，照印会把人带偏
+console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, 本局 boss4：${bossLog.filter((r) => r.type === 'boss4').map((r) => `第${r.slot + 1}槽 ${r.hp}血 出${r.at.toFixed(0)}s 死${r.deadAt < 0 ? '没死' : `${r.deadAt.toFixed(0)}s`}`).join(' / ') || '没出场'}):`,
   `${twinsGroups.length} groups / peak ${twinsPeak} / deaths ${twinsDeaths} / 丧兄窗口 ${twinsGrieving} 帧`,
   `| thrown ${fieldVesicles} / boomed ${fieldVesicleBooms} / hit ${vesicleHits} / in-flight peak ${maxVesicles}`,
   `| 抛弹 cd 到点 ${twinsThrowReady} 次（被 throwMinDist 挡 ${twinsThrowBlocked}）`,

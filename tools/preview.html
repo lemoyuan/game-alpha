@@ -107,10 +107,11 @@
   <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
   <button data-nav="game">开始一局（自动跑图）</button>
   <button data-nav="game3">跳到 3 分钟（带怪海）</button>
-  <button data-nav="boss">召唤 Boss</button>
-  <button data-nav="boss2">召唤二号 Boss（海火）</button>
-  <button data-nav="boss3">召唤三号 Boss（膜王）</button>
-  <button data-nav="boss4">召唤四号 Boss（双子 · 一次两只）</button>
+  <button data-nav="bossorder">打印本局 Boss 顺序与各槽给量</button>
+  <button data-nav="boss">召唤毒王（血按本局槽位给）</button>
+  <button data-nav="boss2">召唤海火（血按本局槽位给）</button>
+  <button data-nav="boss3">召唤膜王（血按本局槽位给）</button>
+  <button data-nav="boss4">召唤双子（一次两只 · 血按本局槽位给）</button>
   <button data-nav="twinslay">放倒一只双子（看激怒态）</button>
   <button data-nav="bosschest">Boss 专属匣（融合匣，游戏内已下线）</button>
   <button data-nav="petstart">带融合匣开局（游戏内已下线）</button>
@@ -702,7 +703,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const victim = databus.enemys.find((e) => e.type === 'boss4');
       if (!victim) {
-        say('场上没有双子：先点「召唤四号 Boss」');
+        say('场上没有双子：先点「召唤双子（一次两只 · 血按本局槽位给）」');
         return;
       }
       victim.takeDamage(victim.hp, false, databus);
@@ -717,41 +718,45 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'boss4' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'boss4' || nav === 'bossorder' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
       startRun();
       if (nav === 'game3') {
         setElapsed(180);
         spawnAround(26);
       }
-      // 手动召唤要把出场表指针推到表尾：不然自动调度器过一会儿自己又刷一只叠上来
-      if (nav === 'boss') {
-        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        setElapsed(200);
-        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
-        databus.spawner.spawnBoss(databus);
+      // ★顺序每局随机之后，「召唤某一只」必须同时给【身份】和【槽位】两样：
+      //   身份决定技能 / toast / 一次几只，槽位决定血量和经验。旧写法 spawnBoss(databus, BOSS_SCHEDULE[i])
+      //   里那个 i 是【位置】，而按钮上写的是【名字】——随机之后这两件事脱钩，按钮会叫出名字不符的东西。
+      //   这里按本局洗出的顺序去取它那一槽，所以预览台看到的数值和真机同一局里的一致。
+      const summonBoss = async (type, at) => {
+        const { BOSS_SCHEDULE, BOSS_SLOTS, BOSS_PAIR_MULT } = await import('./js/npc/monster/config.js');
+        const entry = BOSS_SCHEDULE.find((r) => r.type === type);
+        const idx = databus.spawner.bossOrder.findIndex((r) => r.type === type);
+        const slot = BOSS_SLOTS[idx < 0 ? 0 : idx];
+        const n = entry.pair || 1;
+        setElapsed(at);
+        databus.spawner.bossIndex = BOSS_SLOTS.length; // 推过表尾：不然自动调度器过一会儿自己又刷一只叠上来
+        databus.spawner.spawnBoss(databus, entry, slot);
         spawnAround(8);
-      }
-      if (nav === 'boss2') {
-        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        setElapsed(250);
-        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
-        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[1]);
-        spawnAround(8);
-      }
-      if (nav === 'boss3') {
-        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        setElapsed(370);
-        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
-        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[2]);
-        spawnAround(8);
-      }
+        say(`${type} 在本局第 ${idx + 1} 槽（${slot.hp} 那一档）：每只 ${Math.round(slot.hp * (n > 1 ? BOSS_PAIR_MULT : 1))} 血${n > 1 ? ` × ${n} 只` : ''}`);
+      };
+      if (nav === 'boss') await summonBoss('boss1', 200);
+      if (nav === 'boss2') await summonBoss('boss2', 250);
+      if (nav === 'boss3') await summonBoss('boss3', 370);
       // 双子是「一次两只」：pair 由 spawnBoss 里读，这里不需要也不能自己循环
-      if (nav === 'boss4') {
-        const { BOSS_SCHEDULE } = await import('./js/npc/monster/config.js');
-        setElapsed(470);
-        databus.spawner.bossIndex = BOSS_SCHEDULE.length;
-        databus.spawner.spawnBoss(databus, BOSS_SCHEDULE[3]);
-        spawnAround(8);
+      if (nav === 'boss4') await summonBoss('boss4', 470);
+      // 顺序是每局洗的，光看真机不容易说清"这一局谁在第几场"，这里直接读 spawner 的实例
+      if (nav === 'bossorder') {
+        const { BOSS_SLOTS, BOSS_PAIR_MULT } = await import('./js/npc/monster/config.js');
+        const order = databus.spawner.bossOrder || [];
+        say(order.map((r, i) => {
+          const c = BOSS_SLOTS[i];
+          const n = r.pair || 1;
+          return `第${i + 1}槽 ${r.type}（${n} 只 × ${Math.round(c.hp * (n > 1 ? BOSS_PAIR_MULT : 1))} 血 / ${Math.round(c.xp * (n > 1 ? BOSS_PAIR_MULT : 1))} 经验）`;
+        }).join(' → ') + `｜本局 Boss 合计 ${order.reduce((s, r, i) => {
+          const n = r.pair || 1;
+          return s + n * Math.round(BOSS_SLOTS[i].hp * (n > 1 ? BOSS_PAIR_MULT : 1));
+        }, 0)} 血`);
       }
       // Boss 专属匣：直接把 boss1 掉落表里的匣摆到玩家右侧，走过去看图标/跟班/HUD 计数
       if (nav === 'bosschest') {

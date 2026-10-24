@@ -65,13 +65,15 @@ export const MONSTER_TYPES = {
     // 三技能全部对应真实感染行为：冲锋=细胞融合成多核巨细胞，环形弹幕=病毒血症爆发，召唤=潜伏基因组再激活
     name: '毒王',
     latin: 'Human betaherpesvirus 5', group: '病毒 · 疱疹病毒科 · β 属',
-    intro: '首个 Boss：冲锋（融合扩散）→ 环形弹幕（病毒血症）→ 召唤小怪（潜伏再激活）循环释放',
+    intro: '冲锋（融合扩散）→ 环形弹幕（病毒血症）→ 召唤小怪（潜伏再激活）循环释放',
     fact: '它会让被感染的细胞胀到正常的好几倍大，还能把一整圈细胞融成没有细胞壁的多核巨团，「巨细胞」就是这么来的。多数人一辈子毫无症状——免疫系统把它压成了潜伏态；一旦免疫下滑（移植、HIV、长期熬夜压力），藏在唾液腺和白细胞里的基因组立刻重新激活产毒。',
     // ★2026-09-19：反解值 300 由用户按体感一律 ×10 成 3000（不是反解算错重推），xp 随 hp 等比例保密度
     //   覆盖后站桩台重测（玩家钉在 Boss 出生点 150px、神血、固定 build、render 略过）：
     //     中 build（攻23/1.3发/暴30%+1跟班） 有小怪流 ≈101 秒 / 把小怪流关掉 ≈74 秒
     //   对 Boss 的实际 DPS 只有 30~46，不是纸面的 56：它会跑出射程，扑脸的杂兵还会吃掉自动索敌的子弹
     //   ★嫌长先调 BOSS_SPAWN_INTERVAL_MULT（越大越短），别先动本行
+    // ★2026-10-24：本行的 hp/xp 只是兜底基准，实战数值由出场槽位表 BOSS_SLOTS 给（spawner 覆盖到实例上）。
+    //   顺序每局随机发，毒王可能落在任何一槽——上面这段反解保留作历史对照，别当成实战时长
     hp: 3000, speed: 55, radius: 34, color: '#c0392b', xp: 300, damage: 15,
     sprite: 'images/entity/boss1.png',
     boss: true,           // Boss 标记：运行期 isBoss 和图鉴「Boss 定时」都读它，别再硬编 type === 'boss1'
@@ -95,6 +97,8 @@ export const MONSTER_TYPES = {
     // ★2026-09-19：反解值 460 由用户按体感一律 ×10（xp 同步等比例）。站桩台实测中 build（攻23/1.3发/暴30%+1跟班）：
     //   有小怪流 ≈87 秒 / 关掉 ≈81 秒，对 Boss DPS ≈54 —— 海火施法期整个定身，子弹几乎不浪费，
     //   所以它受"杂兵吸火力"的影响远小于毒王（+8% vs +36%）
+    // ★2026-10-24：本行的 hp/xp 只是兜底基准，实战数值由出场槽位表 BOSS_SLOTS 给（spawner 覆盖到实例上）。
+    //   顺序每局随机发，海火可能落在任何一槽——上面这段反解保留作历史对照，别当成实战时长
     hp: 4600, speed: 46, radius: 34, color: '#22d3ee', xp: 450, damage: 13,
     sprite: 'images/entity/boss_giantcell.png', // 这张多核巨细胞图归海火；毒王仍用 boss1.png，给毒王重出图请另起前缀
     boss: true,
@@ -135,6 +139,10 @@ export const MONSTER_TYPES = {
     latin: 'Pseudomonas aeruginosa', group: '细菌 · 变形菌门 · 假单胞菌属 · 生物膜态',
     intro: '趴着几乎不动，象牙白黏膜吃掉近七成伤害；吐出的菌落爬回体内补膜，破膜那几秒才是输出窗口',
     fact: '浮游的铜绿假单胞菌和结成生物膜的它，被同一种抗生素杀死所需的浓度差一到三个数量级——不是它拿到了耐药基因，是 EPS 黏液把药挡在外面、里面那层细胞泡在营养和氧的梯度里干脆不分裂，而绝大多数抗生素只杀正在分裂的细胞。所以它是临床上「清不掉的感染」：导管、缝线、囊性纤维化的肺泡壁上一旦定植，停药就复发；你把表层刮掉，底下停了生长的细胞立刻重新开长。那个蓝绿色是它自己分泌的绿脓素，医院里最常见的机会致病菌之一。',
+    // ★2026-10-24：本行的 hp/xp 只是兜底基准，实战数值由出场槽位表 BOSS_SLOTS 给（spawner 覆盖到实例上）。
+    //   顺序每局随机发，膜王可能落在任何一槽——下面那整段反解保留作历史对照，别当成实战时长。
+    //   ★还要记一笔：膜的规则全是【绝对值】（破满膜固定要 filmMax÷filmBurn=2000 点原始伤害、
+    //     菌群回补的分水岭 R≈47），只有血条跟着槽位走。所以槽位越低，这场里「磨膜」占的比重越大
     hp: 28000, speed: 26, radius: 38, color: '#EAECEE', xp: 600, damage: 14,
     // ★2026-09-19：反解值 2800 由用户按体感一律 ×10（xp 同步等比例）。同一站桩台重测：
     //   台子 = 玩家钉在穹体 150px、神血、固定 build、render 略过；「拦下」= 每帧把菌群打死，「不拦」= 任其全部嵌回
@@ -242,6 +250,8 @@ export const MONSTER_TYPES = {
     //     清场之后只会更高，所以真机时长只会比 243 秒短、不会更长
     //   ★xp 是【每只】的量：每只 300、成对击杀合计 600 = 膜王那一档。
     //     把本行当成"这一对总共掉多少"来调，双子的经验产出会凭空翻倍
+    // ★2026-10-24：本行的 hp/xp 只是兜底基准。顺序每局随机发之后，实战给数是【槽位量 × BOSS_PAIR_MULT】
+    //   每只各拿一份（spawner 覆盖到实例上），上面那笔 5600×2 的反解保留作历史对照
     hp: 5600, speed: 62, radius: 26, color: '#8F9C3A', xp: 300, damage: 12,
     sprite: 'images/entity/boss_diplo_normal.png',
     // ★激怒态换图。两张贴图【必须出自同一张 AI 图的左右两半】（vibe_images/boss_diplo_pair_*.png，
@@ -328,12 +338,13 @@ export const TANK_UNLOCK_TIME = 45;   // 坦克怪出现时间
 export const RANGED_UNLOCK_TIME = 60; // 远程怪出现时间
 
 // Boss 出场（秒）：存活期间普通刷怪照常走，只是间隔乘 BOSS_SPAWN_INTERVAL_MULT（密度减半）
-// ★这四条现在都是【最早出场时刻】而不是时刻表：真正的节奏由下面的 BOSS_RESPAWN_GAP（死亡后 120 秒）决定，
-//   战斗打得越久，后面几只被推得越晚。只有一号仍然精确等于自己的 time —— 开局没有「上一只」要等
-export const BOSS_FIRST_SPAWN_TIME = 120;  // 一号 Boss（毒王）：开局 120 秒整出场
-export const BOSS_SECOND_SPAWN_TIME = 240; // 二号 Boss（海火）：不早于 240 秒
-export const BOSS_THIRD_SPAWN_TIME = 360;  // 三号 Boss（膜王）：不早于 360 秒
-export const BOSS_FOURTH_SPAWN_TIME = 480; // 四号 Boss（双子，一次两只）：不早于 480 秒
+// ★这四条现在都是【第 1~4 槽的最早出场时刻】而不是时刻表：真正的节奏由下面的 BOSS_RESPAWN_GAP（死亡后 120 秒）决定，
+//   战斗打得越久，后面几槽被推得越晚。只有第 1 槽仍然精确等于自己的 time —— 开局没有「上一只」要等
+// ★2026-10-24：顺序改成每局随机发之后，这四条描述的是【第几场】而不是【哪一只】，别再往旁边加 Boss 名字
+export const BOSS_FIRST_SPAWN_TIME = 120;  // 第 1 槽：开局 120 秒整出场
+export const BOSS_SECOND_SPAWN_TIME = 240; // 第 2 槽：不早于 240 秒
+export const BOSS_THIRD_SPAWN_TIME = 360;  // 第 3 槽：不早于 360 秒
+export const BOSS_FOURTH_SPAWN_TIME = 480; // 第 4 槽：不早于 480 秒
 
 // 上一只 Boss 死亡后到下一只 Boss 出场的间隔（毫秒）。
 // 必须有：玩家提前秒杀 Boss 时 elapsed 已经越过下一个出场时间，没有冷却就会在尸体消失的同一帧贴脸刷出来
@@ -343,16 +354,81 @@ export const BOSS_FOURTH_SPAWN_TIME = 480; // 四号 Boss（双子，一次两�
 //   换句话说：Boss 战打得越久，后面几只被推得越晚，节奏不再是一张固定时刻表
 export const BOSS_RESPAWN_GAP = 120000;
 
-// Boss 出场表：spawner 按顺序取，一条一个 Boss；加三号 Boss 只在这里追加一行
-// pair = 一次上几只，缺省 1。★它只改「同时放几只」，不改节奏：BOSS_RESPAWN_GAP 的闸门查的是
-//   「场上还有没有 Boss」，双子死掉第一只时那条仍然为真，所以下一只要等【第二只也死】再 +120 秒。
+// Boss 身份名册：一条一个 Boss，只描述「有这几只、各自一次上几只、出场喊什么」。
+// ★2026-10-24 起它不再是出场顺序表：顺序每局随机（见下面 buildBossOrder），血量和经验归槽位。
+//   所以这里删掉了每行的 time —— 留着就会出现「身份行写着一刻钟、实际由槽位说话」两套话，
+//   而 spawner 读的是洗过的副本，那一行 time 永远不会被任何人再看第二眼
+// pair = 一次上几只，缺省 1。★必须留在身份行上而不是槽位上：漏了它双子会安静地变成一只
+//   （spawner 那句 `entry.pair || 1` 不报错），丧兄激怒永不武装、HUD 兄/弟标签消失，整局照常跑完。
+//   它也只改「同时上几只」，不改节奏：BOSS_RESPAWN_GAP 的闸门查的是「场上还有没有 Boss」，
+//   双子死掉第一只时那条仍然为真，所以下一只要等【第二只也死】再 +120 秒。
 //   这是定过的口径（双子的语义是"一场两只"），不是漏网
 export const BOSS_SCHEDULE = [
-  { type: 'boss1', time: BOSS_FIRST_SPAWN_TIME, toast: 'Boss 出现了！' },
-  { type: 'boss2', time: BOSS_SECOND_SPAWN_TIME, toast: '海面亮起了蓝绿色的光' },
-  { type: 'boss3', time: BOSS_THIRD_SPAWN_TIME, toast: '地面上那层膜鼓起来了' },
-  { type: 'boss4', time: BOSS_FOURTH_SPAWN_TIME, toast: '两只一起出现了', pair: 2 },
+  { type: 'boss1', toast: 'Boss 出现了！' },
+  { type: 'boss2', toast: '海面亮起了蓝绿色的光' },
+  { type: 'boss3', toast: '地面上那层膜鼓起来了' },
+  { type: 'boss4', toast: '两只一起出现了', pair: 2 },
 ];
+
+// ===== Boss 出场槽位：第 i 条 = 本局第 i 场 Boss 战，血量与经验属于【第几场】而不是【哪一只】 =====
+// ★台阶 3000 / 5000 / 8000 / 13000 是 2026-10-24 用户选的缓台阶（约 ×1.6），四槽合计 29000。
+//   以前那四个数（毒王 3000、海火 4600、膜王 28000、双子 5600×2 = 46800）是四笔不同年代的反解残渣，
+//   中段那道 2.4 倍断层就是这么来的；而且顺序一随机，「第 3 场该有多硬」不可能再由某一只的旧血量回答。
+//   ★整局 Boss 总血量因此薄 ≈38%（29000 对 46800），这是选这条台阶的直接后果，不是漏调
+// 经验用 300 / 400 / 550 / 700，合计 1950 = 从前四只之和：今天各只的经验本来就几乎是平的（300~600），
+//   它买的是「又过了一场 Boss 战」而不是「这一场有多少血」，照搬血的台阶会把整局经验曲线抬高
+// ★这四行的形状别改成 bossN: { } —— 文件在后面（BOSS_CHESTS / BOSS_DROPS），headless 的 LASER /
+//   MEMBRANE / TWIN 三个旋钮是按 /^(\s*)bossN: \[/ 挪行的，前面多一处同形状会让它挪错地方而 re.test() 照样通过
+export const BOSS_SLOTS = [
+  { time: BOSS_FIRST_SPAWN_TIME, hp: 3000, xp: 300 },
+  { time: BOSS_SECOND_SPAWN_TIME, hp: 5000, xp: 400 },
+  { time: BOSS_THIRD_SPAWN_TIME, hp: 8000, xp: 550 },
+  { time: BOSS_FOURTH_SPAWN_TIME, hp: 13000, xp: 700 },
+];
+
+// 成对出场时【每只】拿槽位量的这么多（2026-10-24 用户口径：一对 = 一只半，不是两只整槽也不是平分）。
+// ★血量和经验同用这一个倍率，以后读代码的人只需要记「0.7 倍」这一件事。
+//   副作用要认下来：双子无论落在哪一槽，那一槽的实际内容都比别的身份厚 40%，
+//   所以「第 4 槽 13000」碰上双子是每只 9100、合计 18200，比它从前那版 5600×2 厚 62%
+export const BOSS_PAIR_MULT = 0.7;
+
+// 出场顺序随机总闸。★改成 false 就回到名册原序（毒王→海火→膜王→双子），一行回退，
+//   以后想拿旧节奏做对照不必 git revert
+export const BOSS_ORDER_RANDOM = true;
+
+// 验收钉值：非空数组时优先于随机，先按这里列的身份排、名册里剩下的按原序补在后面。
+// headless 的 TWINS=1 臂靠它把双子按进第 1 槽（顺序随机之后没有别的办法稳定叫出某一只），
+// 「膜王 / 双子落到第 1 槽」那两臂也走这里。★写不认识的 type 不会丢 Boss，只会当没钉到
+export const BOSS_ORDER_PIN = null;   // 例：['boss4']
+
+/**
+ * 本局 Boss 出场顺序：把身份名册洗成一条槽位序列，返回的每一行都是名册里的原对象。
+ * ★血量和经验不在这里 —— 那是 BOSS_SLOTS 按【位置】给的东西，所以「谁穿哪一件」和「这一场多硬」
+ *   是两件独立的事，各自能单独调。
+ * ★也绝不把槽位数写回 MONSTER_TYPES：那张表是模块单例、没有任何 reset() 重建它，
+ *   写进去会污染第二局（下一局读到的是上一局覆盖后的值），而图鉴读的就是它
+ * @returns {Array} 长度等于 BOSS_SCHEDULE，每只 Boss 恰好出现一次
+ */
+export function buildBossOrder() {
+  if (BOSS_ORDER_PIN && BOSS_ORDER_PIN.length) {
+    const picked = [];
+    for (const type of BOSS_ORDER_PIN) {
+      const row = BOSS_SCHEDULE.find((r) => r.type === type);
+      if (row && picked.indexOf(row) === -1) picked.push(row);
+    }
+    return picked.concat(BOSS_SCHEDULE.filter((row) => picked.indexOf(row) === -1));
+  }
+  if (!BOSS_ORDER_RANDOM) return BOSS_SCHEDULE.slice();
+  // Fisher-Yates：从尾往上，每个位置和「它自己或前面某一个」等概率交换
+  const order = BOSS_SCHEDULE.slice();
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = order[i];
+    order[i] = order[j];
+    order[j] = t;
+  }
+  return order;
+}
 
 // Boss 专属宝箱：Boss 死亡时随机掉表里一种（main.js dropBossLoot），拾取效果走 chestGrant.js 注册表。
 // 本轮只有毒王有匣；海火/膜王留空表 = 只掉经验爆，以后接机制往表里加行即可，掉落与 HUD 代码不用动
@@ -478,8 +554,9 @@ export const HP_SCALE_CAP = 5;      // ★倍率上限，约 720 秒触顶。必
 /**
  * 游戏时刻（秒）→ 血量倍率，只在普通刷怪入口生效（见 spawner.spawn）。
  * 90 秒 1.5 / 180 秒 2.0 / 360 秒 3.0 / 540 秒 4.0 / 720 秒及以后 5.0。
- * ★Boss 与膜王菌群都不走这条路：三只 Boss 的血量是按「杂兵几乎不吸火力」反解出来的，
- *   菌群的血量是 colonyHpMult 与 filmPerEmbed 那套速率平衡的一部分，两者被这条曲线扫到都会把已调好的局改坏。
+ * ★Boss 与膜王菌群都不走这条路：Boss 的血量由出场槽位表 BOSS_SLOTS 给（spawner 在 init 后覆盖到实例上），
+ *   再按时间乘一层等于把「第几场仗」这个台阶二次放大；菌群的血量是 colonyHpMult 与 filmPerEmbed
+ *   那套速率平衡的一部分，被这条曲线扫到会把已调好的局改坏。
  */
 export function hpScaleAt(elapsed) {
   if (elapsed < HP_SCALE_TIME) return 1;
