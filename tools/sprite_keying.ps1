@@ -232,6 +232,13 @@ $jobs = @(
   # turret read as a dropped pill. The family standard is a cream body with a navy outline (vial.png
   # measures median 219), which is what turret-h2-cream reuses -- same H silhouette, fixed palette.
   @{ prefix = 'turret';      src = 'turret-h2-cream'; logical = 30 }, # display size = TURRET_SIZE in js/consts.js
+  # Twin battery (boss4 drop item): a planted disc with two barrels in a fixed V, BOTH muzzles drawn facing
+  # the camera. Unlike turret.png this texture is never split or swiveled at runtime -- there is no single
+  # aim direction to draw, so js/player/twinBattery.js blits it whole and spawns shells at the two measured
+  # muzzle centers. Consequence worth knowing before editing the art: it cannot show a "blind side", so the
+  # only limitation this entity has is its short radius. Content bbox is landscape (670x624), so fit=min
+  # binds on width and the drawn body comes out wider than the frame is tall.
+  @{ prefix = 'twin_battery'; src = 'twin-cannon-c-twinbarrels'; logical = 76 }, # display size = TWIN_SIZE in js/consts.js
   @{ prefix = 'mob_basic';   logical = 28 },
   @{ prefix = 'mob_fast';    logical = 20 },
   @{ prefix = 'mob_tank';    logical = 44 },

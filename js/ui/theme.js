@@ -315,6 +315,33 @@ export function membraneGlyph(ctx, h, body, mark) {
 }
 
 /**
+ * 双联炮座的图形（Boss 掉落道具「双子核心」）：一块上窄下宽的梯形炮盘 + 两颗正对镜头的炮口，每颗炮口挖一个孔
+ * ★形状只在这里定义一次，两个盘面各按自己的底色给 body/mark：道具栏那格（奶白主体 + 墨孔）与
+ *   地上的匣、图鉴徽章（跟随调用方色，icon 口径）—— 同上面 membraneGlyph 那条分工
+ * ★「炮口正对镜头」不是随手挑的，是 26 像素暗红盘上唯一站得住的画法：概念页（.preview/twin-cannon-concept.html）
+ *   把侧视粗炮管、带烟囱的迫击炮、V 形分叉双管都渲到 10× 量过像素，三张「炮管本体」全部读成靴子、相机或兔耳，
+ *   只有「两张正对的脸」这种剪影在 ink 对 bossChestBand 只剩 1.42:1 的盘上还认得出来（挖空的孔读成「管子里那个洞」）
+ * ★和上面 itemGlyph 的 'turrets'（金匣炮台）必须拉开：那一格是一根斜指右上的炮管，这里是两颗正对的炮口 ——
+ *   两件事本来就不同（一座可以叠很多座的铺地炮 / 一局只落一座的重炮），HUD 上挨在一起更像，看混了这件道具就白做
+ * 调用方负责先 translate 到中心并设好 strokeStyle / lineWidth / lineJoin
+ * @param {Function} body 主体（自己 fill + stroke） @param {Function} mark 炮孔（只 fill）
+ */
+export function twinBoreGlyph(ctx, h, body, mark) {
+  body(() => {
+    ctx.beginPath();
+    ctx.moveTo(-h * 0.86, h * 0.92);
+    ctx.lineTo(h * 0.86, h * 0.92);
+    ctx.lineTo(h * 0.54, h * 0.40);
+    ctx.lineTo(-h * 0.54, h * 0.40);
+    ctx.closePath();
+  });
+  for (const side of [-1, 1]) {
+    body(() => { ctx.beginPath(); ctx.arc(side * h * 0.40, -h * 0.14, h * 0.44, 0, Math.PI * 2); });
+    mark(() => { ctx.beginPath(); ctx.arc(side * h * 0.40, -h * 0.14, h * 0.25, 0, Math.PI * 2); });
+  }
+}
+
+/**
  * 代码绘制的卡通图标：统一「居中于 cx/cy，占 s×s，粗描边 + 平涂」
  * color 是主体填充色，描边恒为 UI.ink
  */
@@ -539,6 +566,11 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       // 薄膜核心：五瓣软圈跟调用方颜色平涂 + 中心一颗墨核（地上的匣、图鉴徽章读的就是这一层名字）
       // 形状在 membraneGlyph 里只定义一次，这一层只负责「主体跟调用方色、内核用墨」这套 icon 家族口径
       membraneGlyph(ctx, h, solid, (path) => { path(); ctx.fillStyle = UI.ink; ctx.fill(); });
+      break;
+    case 'twinBore':
+      // 双子核心：梯形炮盘 + 两颗正对镜头的炮口跟调用方颜色平涂，两个炮孔挖成墨（地上的匣、图鉴徽章读这一层）
+      // 同上面 membrane：形状只在 twinBoreGlyph 里定义一次，这一层只负责「主体跟调用方色、孔用墨」这套 icon 家族口径
+      twinBoreGlyph(ctx, h, solid, (path) => { path(); ctx.fillStyle = UI.ink; ctx.fill(); });
       break;
     case 'flame':
       // 燃烧子弹：外焰是上尖下圆的火舌（跟随调用方 color 平涂），芯一颗奶白内焰负责读出层次
@@ -1036,6 +1068,12 @@ export function itemGlyph(ctx, key, cx, cy, s) {
       // ★墨描边在这块暗红盘上近乎看不见：同上面 laserCross 那条实测（ink 对 bossChestBand 只有 1.42:1），
       //   所以这里也不补贴纸外框，形状靠奶白主体自己的轮廓站住
       membraneGlyph(ctx, h, body, mark);
+      break;
+    case 'twinBore':
+      // 双子核心：梯形炮盘 + 两颗奶白炮口各挖一个墨孔（道具栏、详情页同一形状，见 twinBoreGlyph）
+      // ★这一格在暗红盘（UI.bossChestBand）上，墨描边只有 1.42:1，别指望外框——形状靠奶白剪影自己站住；
+      //   而【主体之间】的描边是墨压奶白、对比够，那两条弧才是「两颗炮口坐在盘上」的读数来源
+      twinBoreGlyph(ctx, h, body, mark);
       break;
     default:
       icon(ctx, key, 0, 0, s, { color: UI.cream });

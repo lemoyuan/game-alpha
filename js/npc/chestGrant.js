@@ -42,4 +42,13 @@ export const CHEST_GRANTS = {
     databus.player.membrane = 1;
     databus.bossChests.core_biofilm = (databus.bossChests.core_biofilm || 0) + 1;
   },
+  // Boss 掉落道具「双子核心」：脚下落一座双联炮座。
+  // ★写 = 1 而不是 += 1，理由同上面那条：双子虽然一次出场两只，掉落口却有一道按 Boss type 的账本
+  //   （main.js dropBossLoot）保证一局只掉一只匣，所以这件同样不叠层，实体侧 databus.twinBatteries 也是「封顶一座」的形状
+  // ★这里只翻旗子、一座炮座都不生成：落位由 databus.update 观察这个数变化来做（同上面炮台那条），
+  //   因为「拾取那一刻角色站在哪」只有那一帧知道，写在这里反而拿不到坐标
+  core_diplo: (databus) => {
+    databus.player.twinBattery = 1;
+    databus.bossChests.core_diplo = (databus.bossChests.core_diplo || 0) + 1;
+  },
 };

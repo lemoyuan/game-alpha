@@ -99,6 +99,8 @@
   <button data-nav="chestmem">摆一只薄膜掉落匣</button>
   <button data-nav="membrane">按一下主动键（走 activateMembrane）</button>
   <button data-nav="tapmem">模拟手指点键位（走触点链路）</button>
+  <button data-nav="granttwin">授予双子核心（脚下落一座双联炮座）</button>
+  <button data-nav="chesttwin">摆一只双子掉落匣</button>
   <button data-nav="allitems">凑满所有道具并打开详情页（看溢出与滚动）</button>
   <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
@@ -537,7 +539,8 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
     }
     // 宝箱道具这几条不打断正在打的局：只有停在首页或已结算时才新开一局
     if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain' || nav === 'grantcore' || nav === 'chestcore'
-      || nav === 'grantcross' || nav === 'chestcross' || nav === 'grantmem' || nav === 'chestmem') {
+      || nav === 'grantcross' || nav === 'chestcross' || nav === 'grantmem' || nav === 'chestmem'
+      || nav === 'granttwin' || nav === 'chesttwin') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { clampToCoast } = await import('./js/arena/coast.js');
       const { default: Chest } = await import('./js/npc/chest.js');
@@ -585,6 +588,22 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       } else if (nav === 'chestmem') {
         place('core_biofilm');
         say('薄膜掉落匣已摆在右前方：踩下去那一刻右下角才出现主动键（没拿到之前那一格整块不画）');
+      } else if (nav === 'granttwin') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        const { TWIN_CD, TWIN_RANGE, TWIN_SALVO, twinDamage } = await import('./js/consts.js');
+        const px = Math.round(databus.player.x);
+        const py = Math.round(databus.player.y);
+        // 授予只写 player.twinBattery 那一个字段；实体是 databus.update 里按那个字段补出来的那座，下一帧才落地
+        CHEST_GRANTS.core_diplo(databus);
+        setTimeout(() => {
+          const b = databus.twinBatteries[0];
+          say(b
+            ? `炮座已落在 (${Math.round(b.x)}, ${Math.round(b.y)})，授予那一刻人在 (${px}, ${py})：每 ${TWIN_CD / 1000} 秒向 ${TWIN_RANGE} 像素内最近 ${TWIN_SALVO} 怪齐射，单发 ${twinDamage(databus.player.attack)} 点；台上一共 ${databus.twinBatteries.length} 座`
+            : `字段写了（player.twinBattery = ${databus.player.twinBattery}）但台上一座都没有：databus 里那条补落地的门断了`);
+        }, 150);
+      } else if (nav === 'chesttwin') {
+        place('core_diplo');
+        say('双子掉落匣已摆在右前方：踩下去那一刻【脚下】落一座双联炮座，之后它不跟着你走，只守半径 ' + (await import('./js/consts.js')).TWIN_RANGE + ' 像素那一小块地');
       } else {
         place(); // 不传 kind = 走七种随机加成的普通金匣
         say('普通金匣已摆在右前方');
@@ -653,8 +672,8 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       }, 220);
       return;
     }
-    // 详情页溢出的最坏情况：十种金匣加成 + 三件 Boss 掉落道具一次凑齐，再把这一页打开
-    // ★为什么凑而不打：真局凑满 13 件要跑十几分钟，而这一页要看的是「溢出之后长什么样、拖得动多少」
+    // 详情页溢出的最坏情况：十种金匣加成 + 四件 Boss 掉落道具一次凑齐，再把这一页打开
+    // ★为什么凑而不打：真局凑满 14 件要跑十几分钟，而这一页要看的是「溢出之后长什么样、拖得动多少」
     if (nav === 'allitems') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { BONUSES } = await import('./js/npc/chest.js');
@@ -667,6 +686,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       CHEST_GRANTS.core_cmv(d);
       CHEST_GRANTS.core_seafire(d);
       if (d.player.membrane <= 0) CHEST_GRANTS.core_biofilm(d);
+      if (d.player.twinBattery <= 0) CHEST_GRANTS.core_diplo(d);
       const items = ownedItems(d);
       const L = d.pauseScreen.layout(items);
       d.pauseScreen.show();

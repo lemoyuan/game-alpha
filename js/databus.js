@@ -3,6 +3,7 @@ import Companion from './player/companion';
 import Bomber from './player/bomber';
 import BloodVial from './player/bloodVial';
 import Turret from './player/turret';
+import TwinBattery from './player/twinBattery';
 import LaserCross from './player/laserCross';
 import DamageText from './fx/damageText';
 import { settings } from './storage';
@@ -45,6 +46,15 @@ export default class DataBus {
     // ★必须写在 reset() 而不是构造函数：DataBus 是单例，漏了这一行会带着上一局的几座继续开火，
     //   而新一局 player.turrets 从 0 起、生成条件永不成立，headless 又只开一局 —— 这个错一个字都不会报错
     this.turrets = [];
+    // 双联炮座（Boss 掉落道具「双子核心」）：★封顶一座，和上面三种跟随体同一条形状 —— player.twinBattery 只取 0/1，
+    //   因为 boss4 一局只掉一只匣（掉落口那道按 type 的记账门见 main.js dropBossLoot）。位置同样是拾取那一刻写定的，
+    //   所以它和炮台一样不进池子、不跟着人走
+    this.twinBatteries = [];
+    // 本局各 Boss 的掉落道具匣子是否已经掉过：type → true。★存在的唯一理由是 pair:2 的双子 —— dropBossLoot 是每只
+    //   濒死 Boss 各调一次的，boss1/2/3 一局只有一只所以从没暴露过这件事，双子会掉两只一模一样的匣。
+    //   用户 2026-10-24 拍板「一局只掉一只」，所以门记在 Boss type 上而不是记在道具 id 上：以后哪只 Boss 改成成对，
+    //   这里天然还是对的
+    this.bossLootDropped = {};
     // 十字激光（Boss 掉落道具「海火核心」）：角色挨一下真伤就放出一根，友方一侧，一根一根自己排在这里。
     // ★不并进上面的 this.lasers：那条数组里每一条的判定都是「打中角色」，两家共用等于让友方光束照自己、
     //   而 headless 的敌方光束断言（眼数、换向预告）会读进玩家放的那几根。和 bombs / vesicles 是同一条分家的理由
@@ -113,11 +123,20 @@ export default class DataBus {
         t.aim = Math.atan2(this.player.dirY, this.player.dirX);
         this.turrets.push(t);
       }
+      // ★形状是「封顶一座」不是「层数买几座」：双子核心一局只掉一只匣，所以 player.twinBattery 只取 0/1，
+      //   上面炮台那条 while 循环在这里是错的写法。落位仍然照炮台：这一帧正是角色踩上匣子被拾取那一刻
+      if (this.player.twinBattery > 0 && !this.twinBatteries.length) {
+        const battery = new TwinBattery();
+        battery.x = this.player.x;
+        battery.y = this.player.y;
+        this.twinBatteries.push(battery);
+      }
       for (const comp of this.companions) comp.update(dt, this);
       for (const p of this.bossPets) p.update(dt, this);
       for (const b of this.bombers) b.update(dt, this);
       for (const v of this.vials) v.update(dt, this);
       for (const t of this.turrets) t.update(dt, this);
+      for (const b of this.twinBatteries) b.update(dt, this);
       this.player.update(dt, this);
       // ★必须排在 player.update 之后：这根十字的原点每帧贴着角色走，读上一帧位置会让光和身子脱开一格
       //   （同上面 lasers 那条「读上一帧自转角会让眼和光脱开」，只是这里脱开的是角色自己的位移 ——

@@ -53,6 +53,10 @@ export default class Player extends Sprite {
     this.membraneT = 0;                 // 膜剩余毫秒数（dt 累加，同上面 laserCrossT：面板开着时必须跟着冻住，否则 3 秒保护在选卡界面里白烧完）
     this.membraneCdT = 0;               // 主动键冷却剩余毫秒数（dt 累加）：★在放火那一刻顶满，不在膜烧完时才顶，
                                         //   否则「按一次等 3 秒再等 40 秒」会把真实周期写成 43 秒
+    this.twinBattery = 0;               // 有没有「双子核心」（Boss 掉落道具，见 config 的 BOSS_DROPS.boss4）。★同样只取 0 / 1：
+                                        //   boss4 一局只掉一只匣（掉落口那道按 type 的记账门保证），chestGrant 那行写的也是 = 1
+                                        //   和上面两条 Boss 掉落的核心区别：这一件的计时器不在角色身上 —— 它落的是地上的一座实体，
+                                        //   由 databus.twinBatteries 驱动、节拍住在 consts.js 的 TWIN_CD，所以本类里没有它的 dt 行
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变

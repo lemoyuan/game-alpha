@@ -240,6 +240,21 @@ if (MEMBRANE !== undefined && MEMBRANE !== '1') {
   else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss3: [], $1boss3Parked: [')}`);
 }
 
+// 双子核心（双联炮座）单独一头旋钮，写法照抄上面的 MEMBRANE：TWIN=0 把副本里 BOSS_DROPS.boss4 那一行
+// 挪到表不读的兄弟键上，于是这一件在游戏内整条不可达（不掉匣、不授予、地上一座都不落），
+// 而 id 仍然进 CHEST_KIND_BY_ID —— 注册面扫描照旧覆盖它，「关掉」那一端量的是掉落口与那座实体的驱动链，不是删表
+const TWIN = process.env.TWIN;
+if (TWIN !== undefined && TWIN !== '1') {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  // ★同样必须先从 BOSS_DROPS 切一刀：config.js 的 BOSS_CHESTS 里也有一行 boss4: []，切法决定命中的是谁
+  const at = code.indexOf('export const BOSS_DROPS = {');
+  const re = /^(\s*)boss4: \[/m;
+  const tail = at < 0 ? '' : code.slice(at);
+  if (!re.test(tail)) errors.push(`副本 config.js 的 BOSS_DROPS 里找不到 boss4: [ ，TWIN=${TWIN} 这一组等于没跑`);
+  else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss4: [], $1boss4Parked: [')}`);
+}
+
 // 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
 // ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
 //   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
@@ -279,6 +294,8 @@ const {
   LASER_CROSS_TELEGRAPH, LASER_CROSS_FIRE, LASER_CROSS_FADE, LASER_CROSS_SPIN,
   LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_DMG_BASE, LASER_CROSS_DMG_ATK, LASER_CROSS_HIT_GAP, LASER_CROSS_CD, laserCrossDamage,
   MEMBRANE_REDUCE, MEMBRANE_HOLD, MEMBRANE_CD, MEMBRANE_BTN, membraneDamage,
+  TWIN_CD, TWIN_SALVO, TWIN_DAMAGE_RATIO, TWIN_RANGE, TWIN_BULLET_RADIUS, TWIN_BULLET_COLOR,
+  TWIN_SIZE, TWIN_MUZZLE_DX, TWIN_MUZZLE_DY, twinDamage,
   canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
@@ -292,6 +309,7 @@ const Bomb = (await import(fileUrl(path.join(COPY, 'player', 'bomb.js')))).defau
 const Bomber = (await import(fileUrl(path.join(COPY, 'player', 'bomber.js')))).default;
 const BloodVial = (await import(fileUrl(path.join(COPY, 'player', 'bloodVial.js')))).default;
 const Turret = (await import(fileUrl(path.join(COPY, 'player', 'turret.js')))).default;
+const TwinBattery = (await import(fileUrl(path.join(COPY, 'player', 'twinBattery.js')))).default;
 const LaserCross = (await import(fileUrl(path.join(COPY, 'player', 'laserCross.js')))).default;
 const Bullet = (await import(fileUrl(path.join(COPY, 'player', 'bullet.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
@@ -320,6 +338,7 @@ let sawPetChest = false;       // 场上是否出现过带 pet 的匣（休眠�
 // ★这一本和上面那本分家是对的：两件掉落道具的表相邻、开关相邻，但一条链是「属性 + 弹字」、
 //   另一条是「层数 + 受伤触发 + 实体扫射」，混在一本账里任何一端归零都分不清是哪件出的事
 let sawDropChest = false;      // 场上出现过 BOSS_DROPS 里任意一种匣：掉落口总账，BOSSDROP 两端都读它
+let sawCmvChest = false;       // 其中巨细胞核那一种真的掉到地上过：逐行弹 +x 那一组只认它，不认总账
 let sawCrossChest = false;     // 其中海火核心那一种真的掉到地上过
 let boss2Drops = 0;            // 海火死了几只：0 时上面那条的零是抽样零，不能当断链判
 let crossGrants = 0;           // CHEST_GRANTS.core_seafire 被调的次数 = 拾取了几截核心
@@ -332,6 +351,7 @@ let crossHits = 0;             // 命中的「怪·次」总数
 let crossDmg = 0;              // 十字累计造成的伤害：报 DPS 用
 let crossTexts = 0;            // 十字扫射期间抽到的飘字条数：静默改造后恒为 0，非 0 即红（见海火核心那组断言）
 const crossFireAt = [];        // 每次放出的时刻（毫秒，DT 累加）：相邻间隔用来验 CD
+const crossFirePump = [];      // 与 crossFireAt 一一对应：这一根是否落在 A3 探针那串帧外泵里（其间 frameMs 不动，差值读 0）
 const crossHpLossAt = [];      // 每次「真正掉血」的时刻：和 crossFireAt 配对用，一根十字必须对上一次掉血
 const crossInits = [];        // 每根十字 init 时拿到的（层数、传入的攻击力、场上此刻的攻击力、算出的伤害）：验伤害公式同源、验触发口传的是 player.attack、验「层数只来自拾取」
 let insideCross = false;       // 正在十字的 settle 里：这段时间的 Enemy.takeDamage 都算十字的战果
@@ -357,8 +377,37 @@ let memTapProbed = false;       // 真手指探针是否已跑
 let memTapLanded = false;       // 键位中心那一下是否真的放了火
 let memTapStrayed = false;      // 偏出矩形的场外那一下是否也放了火（必须恒 false）
 let memCaller = 'game';         // 调用方标记：测台自动按臂那一下按 'harness'，其余都是真链路
+// —— Boss 掉落道具「双子核心」（双联炮座）的账本 ——
+// ★第四本账，还是分家：这一件的读数既不在结算点上（前两件在属性/层数）、也不在角色身上（膜的两把钟在 player 上），
+//   而是「地上多了一座实体」—— 它的账要在实体列表与它自己开火的那一下上取
+let twinChests = 0;             // 场上出现过几只 core_diplo 匣。★是计数不是布尔：双子同屏两只、死两次，
+                                //   「一局只掉一只」这道门读的就是这个数字（掉了两只 = main.js 那道上锁的账没钉住）
+let boss4Drops = 0;             // 双子死了几只：pair=2，两只都死过才算「掉落口被走过两遍」，那才是这道门的判据
+let twinGrants = 0;             // CHEST_GRANTS.core_diplo 被调的次数 = 拾取了几次
+let twinPeak = 0;               // 场上座数峰值。★一局只落一座 → 恒 ≤1；掉两只匣也只有一座（授予写的是 = 1）
+let twinFireAsked = 0;          // fire() 被 update 问到的次数：到点就问，不管圈里有没有怪 —— 这条是「驱动链接上了」的凭据
+let twinSalvos = 0;             // 成功齐射的轮数（fire 返回 true）
+let twinShells = 0;             // 实际出膛的炮弹发数
+const twinSalvoAt = [];         // 每轮齐射的时刻（frameMs）：相邻间隔验冷却下界
+const twinSalvoPump = [];       // 与 twinSalvoAt 一一对应：这一轮是否落在 A3 探针那串「帧循环之外的泵」里
+                                // ★那一串泵不动 frameMs，落在里面的读数全是同一刻（间隔 0），必须整对跳过而不是折算
+const twinShellRows = [];       // 每发的几何快照 { bx, by, x, y, dx, dy, damage, radius, color, maxRange }：验出膛点在炮口、方向从炮口算
+const twinSalvoSizes = new Set(); // 每轮 fire 实际新增的炮弹数：不等于 TWIN_SALVO 的那些值会被记进来（发数和炮口数脱钩的凭据）
+let twinCdPeak = 0;             // 座子 cdT 读到的最大值：能攒到 TWIN_CD 才证明 databus 那条 update 循环真在驱动它
+let twinOnAt = -1;              // 第一座炮座出现的时刻（frameMs），-1 = 还没落地：节拍上界要从这一刻起算
+let twinActiveMs = 0;           // 落座之后世界跑了多少「游戏毫秒」（已折成 17ms/帧 那把钟）：上界与利用率的分母
+let twinSalvoBound = 0;         // 由 twinActiveMs 推出来的齐射轮数上界
+let twinGapMin = Infinity;      // 相邻两轮实测的最小间隔（探针污染的那几对不计）
+let twinDrift = 0;              // 座子离开过「落地那一刻坐标」的帧数：这件道具的全部意义就是不动，非 0 即红
+const twinAnchor = new WeakMap(); // 每座落地那一刻的坐标 { x, y }，「不跟着你走」这条按它来判
+const twinWrapped = new WeakSet(); // 已包过 fire 的座子：★包实例不包原型，理由同 leech/blast 那几条
+let probePumpOn = false;      // A3 冻结探针的那串帧外泵正在跑：这期间 frameMs 一点不走，其间记下的时刻全都不可比
+let probePumpMs = 0;          // 那一串泵一共偷跑了多少「游戏毫秒」（stub 那把 17ms/帧 的钟）：跨探针那一对的冷却下界要扣它
+                              // ★挂在探针自己身上而不是去 memClock 的块作用域里现算：十字和炮座两条间隔断言都要用，而 memClock 在更晚的块里
+const bossLootOwed = new WeakMap();   // 濒死实体 → 这一次死亡欠不欠一只匣（在掉落口之前抓，见下面的钩子）
+const bossLootByDeath = new WeakMap(); // 濒死实体 → 这一次死亡新增了几只对该得上号的匣
 // BOSS_DROPS 全表的 id：判「这只匣子是不是掉落道具」按 id 认，不按「有没有某个字段」认。
-// ★LASER=0 / MEMBRANE=0 那两组把各自那一行挪到了兄弟键 boss2Parked / boss3Parked 上，Object.values 照样扫得到，
+// ★LASER=0 / MEMBRANE=0 / TWIN=0 那三组把各自那一行挪到了兄弟键 boss2Parked / boss3Parked / boss4Parked 上，Object.values 照样扫得到，
 //   所以这张 id 集在两端都完整 —— 掐断的是掉落口，不是注册面
 const DROP_IDS = new Set();
 for (const kinds of Object.values(BOSS_DROPS)) for (const k of kinds) DROP_IDS.add(k.id);
@@ -569,6 +618,9 @@ const twinsThrowArmed = new WeakMap(); // 上一帧是否已在到点状态：�
 let twinsBursts = 0;         // 自溶爆起爆次数（包实例的 detonateSelf）
 const twinsAlive = new Set();   // 还在场的 boss4（按对象身份登记，召唤那一帧就记）
 let twinsDeaths = 0;         // 死掉并被回收的双子只数：激怒断言的门控 —— 要"真死过一只"才谈得上丧兄
+let twinsGrieving = 0;       // 「兄弟已死、同屏还站着另一只」的帧数：激怒断言的真门控。
+                             // ★只数 twinsDeaths 会假红：测台每 60 帧削一次 Boss 血，两只经常在同一帧一起倒，
+                             //   那时「活着的那只」从没存在过，bossTwins.update 里 `if (this.isDead) return` 挡掉激怒是正确行为
 let vesiclesThrown = 0;      // 囊泡抛枚数（包 Vesicle.prototype.init，纯检前要快照）
 let vesicleBooms = 0;        // 囊泡落地引爆次数
 let maxVesicles = 0;         // 同屏在飞囊泡枚数峰值：两兄弟同时抛时应该能到 2 枚以上
@@ -725,11 +777,43 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
   else CHEST_GRANTS.core_biofilm = (db) => { membraneGrants++; return orig(db); };
 }
 {
+  // 双子核心的授予计数：同一条理由先钉一次注册。这一件漏登记的症状和海火一样安静 ——
+  //   匣子掉地上、踩开了、toast 也弹了，player.twinBattery 却恒为 0，地上一座都不落
+  const orig = CHEST_GRANTS.core_diplo;
+  if (!orig) errors.push('CHEST_GRANTS 里没有 core_diplo：chest.js 那句裸 CHEST_GRANTS[kind](databus) 会在拾取瞬间抛 TypeError');
+  else CHEST_GRANTS.core_diplo = (db) => { twinGrants++; return orig(db); };
+}
+{
+  // 「一局只掉一只」这道门的唯一凭据：按【每次 Boss 死亡那一下新增了几只匣】计数，而不是数场上有几种/几个实体。
+  // ★为什么不用 WeakSet 给匣子建档：databus.pool 会复用同一个 Chest 对象，第一只被踩掉之后第二只拿到的就是
+  //   同一个实例 —— 那样「掉了两只」会被数成一只，而这正是本条要抓的那个失败（摘掉 main.js 那道上锁的账，
+  //   双子死两次 → 掉两只一样的匣 → 断言照样绿）。按死亡事件切片数新增，两只都数得出来
+  // ★「这次死亡欠不欠一只匣」必须在 origDrop 之前抓：账本 bossLootDropped 是在函数里面置真的，
+  //   事后再读恒为 true，会把「第一只该掉却没掉」判成「本该不掉」—— 下面那条掉落断言就靠这个 Map 让路
+  const origDrop = main.dropBossLoot;
+  main.dropBossLoot = function (e) {
+    const n0 = databus.chests.length;
+    const table = BOSS_DROPS[e.type];
+    const owed = !!(BOSS_DROPS_ENABLED && table && table.length && !databus.bossLootDropped[e.type]);
+    bossLootOwed.set(e, owed);
+    origDrop.call(this, e);
+    let matched = 0;
+    for (let ci = n0; ci < databus.chests.length; ci++) {
+      const c = databus.chests[ci];
+      if (!c.kindDef || !table || !table.some((k) => k.id === c.kindDef.id)) continue;
+      matched++;
+      if (e.type === 'boss4' && c.kindDef.id === 'core_diplo') twinChests++;
+    }
+    bossLootByDeath.set(e, matched);
+  };
+}
+{
   const proto = LaserCross.prototype;
   const origInit = proto.init;
   proto.init = function (...args) {
     crossFires++;
     crossFireAt.push(frameMs);
+    crossFirePump.push(probePumpOn);
     const r = origInit.apply(this, args);
     // 读的是 origInit 跑完之后的 this.damage：公式若断在 consts、或触发口传的不是 player.attack，这里当场对不上
     crossInits.push({ layers: args[0], attack: args[1], live: databus.player.attack, dmg: this.damage });
@@ -1041,6 +1125,7 @@ for (let i = 0; i < frames; i++) {
       if (c.kindDef.pet) sawPetChest = true;
       if (DROP_IDS.has(c.kindDef.id)) {
         sawDropChest = true;
+        if (c.kindDef.id === 'core_cmv') sawCmvChest = true;
         if (c.kindDef.id === 'core_seafire') sawCrossChest = true;
         if (c.kindDef.id === 'core_biofilm') sawMembraneChest = true;
       }
@@ -1152,6 +1237,9 @@ for (let i = 0; i < frames; i++) {
     twinsAlive.delete(t);
     if (!databus.isGameOver) twinsDeaths++;
   }
+  // 「兄弟已死、自己还在场」的窗口：twins 是上面那次逐帧扫描到的在场 boss4 只数，
+  //   两只同一帧倒下时它当场归零 → 这一格不涨，激怒那条断言自动让开（不是放水，是那种局面下没人可激怒）
+  if (twinsDeaths > 0 && twins > 0) twinsGrieving++;
   // Boss 尸体从 enemys 里消失 = 本帧 dropBossLoot 已经跑完，掉落物就在场上。
   // ★逐只过：双子同屏两只，只处理一只是「掉了一次的账」而不是「掉了几次的账」
   for (const dyingBoss of dyingBosses) {
@@ -1159,6 +1247,7 @@ for (let i = 0; i < frames; i++) {
     bossDrops++;
     if (dyingBoss.type === 'boss2') boss2Drops++;
     if (dyingBoss.type === 'boss3') boss3Drops++;
+    if (dyingBoss.type === 'boss4') boss4Drops++;
     if (firstBossDeathAt < 0) firstBossDeathAt = i * DT;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
@@ -1175,9 +1264,12 @@ for (let i = 0; i < frames; i++) {
     // 掉落道具的同一条：表非空却查不到这一号 Boss 该掉的那种匣，就是掉落口那道门或表本身断了。
     // ★判据是「id ∈ BOSS_DROPS[这只 Boss]」而不是「有没有 boost 字段」：那张表里两件道具的机制不同，
     //   一件涨属性、一件只涨层数，按字段认等于拿一号的口径去问二号掉没掉，海火一死就假红
-    if (BOSS_DROPS_ENABLED) {
+    // ★★只问「这次死亡欠的那一只」：双子是 pair:2 一次出场两只，而 main.js 里那本按 e.type 记账的门定了
+    //   「一局只掉一只」—— 第二只死亡本来就不该掉匣。原来这条只看场上有没有匣，第二只死的时候第一只早被
+    //   踩掉了（本测台每帧把匣子挪到人脚下），于是它会稳定假红，而且红的是一条正确行为
+    if (BOSS_DROPS_ENABLED && bossLootOwed.get(dyingBoss) !== false) {
       const table = BOSS_DROPS[dyingBoss.type];
-      if (table && table.length && !databus.chests.some((c) => c.kindDef && table.some((k) => k.id === c.kindDef.id))) {
+      if (table && table.length && (bossLootByDeath.get(dyingBoss) || 0) === 0) {
         errors.push(`boss ${dyingBoss.type} 死亡没掉落道具（表里有 ${table.length} 种，场上没有一种对得上号）`);
       }
     }
@@ -1219,6 +1311,51 @@ for (let i = 0; i < frames; i++) {
   // 索敌只在开火那一刻做，但空闲时 cdT 被钉满、这段扫描每帧都跑，所以开销上界是 座数 × 怪数
   const turretScan = databus.turrets.length * databus.enemys.length;
   if (turretScan > turretScanPeak) turretScanPeak = turretScan;
+  // —— 双联炮座（Boss 掉落道具「双子核心」）——
+  // ★「一轮打了几发」不能像炮台那样靠 cdT 下降沿推：这座一次齐射打两发，发数要直接从 bullets 的增量取。
+  //   包【实例】不包原型 —— 下面那组纯检夹具会直接调 TwinBattery .prototype.fire，
+  //   包原型会把夹具造的炮弹记进实场账，齐射间隔与发数两条一起被污染（而且污染得看着合理）
+  // ★实场里「一发都没打」在这件道具上不是断链：它钉在拾取那一刻的位置，人跑远了圈里没怪就是正确行为
+  //   （炮台那条教训：位置固定的实体别让战果按玩家邻域归属）。所以驱动链读的是 fireAsked 与 cdPeak 两个数，
+  //   开火几何交给纯检夹具 —— 那里能精确摆出「圈里有两只怪」「圈里一只」「圈外一只」三种档
+  if (databus.twinBatteries.length > twinPeak) twinPeak = databus.twinBatteries.length;
+  if (twinOnAt < 0 && databus.twinBatteries.length) twinOnAt = frameMs;
+  for (const bt of databus.twinBatteries) {
+    if (!Number.isFinite(bt.x) || !Number.isFinite(bt.y) || !Number.isFinite(bt.cdT)) {
+      errors.push('双联炮座坐标或冷却计时出现非有限值');
+      break;
+    }
+    if (bt.cdT > twinCdPeak) twinCdPeak = bt.cdT;
+    // ★「不跟着你走」这条只能这样判：这座道具的全部意义就是不动，而它没有任何「跟随」代码可以静态检查
+    //   （炮台当年踩过同样的空 —— 断言要的是行为，不是「文件里没出现 player.x」）
+    const anch = twinAnchor.get(bt);
+    if (!anch) twinAnchor.set(bt, { x: bt.x, y: bt.y });
+    else if (Math.abs(bt.x - anch.x) > 0.5 || Math.abs(bt.y - anch.y) > 0.5) twinDrift++;
+    if (!twinWrapped.has(bt)) {
+      twinWrapped.add(bt);
+      const origFire = bt.fire;
+      bt.fire = function (db, pl) {
+        twinFireAsked++;
+        const n0 = db.bullets.length;
+        const r = origFire.call(this, db, pl);
+        if (!r) return r;
+        twinSalvos++;
+        twinSalvoAt.push(frameMs);
+        twinSalvoPump.push(probePumpOn);
+        const added = db.bullets.length - n0;
+        twinShells += added;
+        twinSalvoSizes.add(added);
+        for (let si = n0; si < db.bullets.length && twinShellRows.length < 400; si++) {
+          const bu = db.bullets[si];
+          twinShellRows.push({
+            bx: this.x, by: this.y, x: bu.x, y: bu.y, dx: bu.dx, dy: bu.dy,
+            damage: bu.damage, radius: bu.radius, color: bu.color, maxRange: bu.maxRange, attack: pl.attack,
+          });
+        }
+        return r;
+      };
+    }
+  }
   // 存量按帧间差值记账：进账 = 上涨沿（自增 + 满血时的溢出，两者在实场分不开，精确拆分交给下面的纯检），
   // 出账 = 下降沿（只有 pumpVial 的输送会减它）
   const vd = p ? p.vialDrops : 0;
@@ -1265,6 +1402,7 @@ for (let i = 0; i < frames; i++) {
   //   而那条 bug 的画面症状是「一次选卡把 3 秒保护偷干净」
   // ★代价写在位置里：中间这 120 次 step 不走本体的逐帧读数，那 2 秒里的 Boss 死亡可能少计一次
   //   （只有「恰好在这一刻血皮被补死」才碰得到，且只会让 boss drops 那行偏小，不会假红）
+  // ★同一串泵里 frameMs 一点没走：这期间记下的时刻全是同一个数，任何「相邻间隔」类断言都得把这些条目挑出来（见 probePumpOn）
   if (!memClockProbed && p && p.membraneT > 0 && p.membraneCdT > 0
     && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
     memClockProbed = true;
@@ -1272,10 +1410,12 @@ for (let i = 0; i < frames; i++) {
     const c0 = p.membraneCdT;
     const on0 = p.membraneOn();
     const at = frameMs;
+    probePumpOn = true;
     // ★冻结段必须泵得比一次膜的时长还长：把基准存成 Date.now() 的那种写法，字段本身在暂停期间也是停着的
     //   （update 整段被 main.js 跳过），只有 membraneOn() 会悄悄翻假 —— 只比字段的话这种写法正好溜过去
     // ★这里就地算每帧毫秒：MEM_STEP 是循环之后才声明的 const，在暂时性死区里读它会直接抛
     const freezeFrames = Math.ceil(MEMBRANE_HOLD / Math.round(DT * 1000)) + 5;
+    probePumpMs = (freezeFrames + 60) * Math.round(DT * 1000);
     databus.isPaused = true;
     for (let k = 0; k < freezeFrames; k++) step();
     const t1 = p.membraneT;
@@ -1283,6 +1423,7 @@ for (let i = 0; i < frames; i++) {
     const on1 = p.membraneOn();
     databus.isPaused = false;
     for (let k = 0; k < 60; k++) step();
+    probePumpOn = false;
     // ★at 必须记下来：这些泵是在帧循环之外推进 stub 时钟的，frameMs 一帧都没跟着走。
     //   解冻那 60 帧把冷却又烧掉 (c1 − c2) 毫秒，而时间戳读不出来 —— 不折算的话 A4 会被自己的探针打红
     memClock = { t0, c0, t1, c1, t2: p.membraneT, c2: p.membraneCdT, on0, on1, at, freezeFrames };
@@ -1319,7 +1460,10 @@ if (!BOSS_DROPS_ENABLED) {
     errors.push(`掉落道具开着却整局没有一只 Boss 死亡（bossDrops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
   } else {
     if (!sawDropChest) errors.push(`死了 ${bossDrops} 只 Boss，场上却从没出现过 BOSS_DROPS 里的任何一种匣：掉落口没接上（表里 boss1 有 ${BOSS_DROPS.boss1.length} 种）`);
-    if (!corePopCalls) errors.push('匣出现过却没弹一次 +x：拾取→CHEST_GRANTS.core_cmv→applyBoost→hud.popStats 断了一环');
+    // ★下面这一组逐行弹 +x 的断言只属于「巨细胞核」这一件，门必须读 sawCmvChest 而不是 sawDropChest：
+    //   双子核心上线后「任何一种匣出现过」会被 core_diplo 单独满足，TWINS=1 那一跑（只有 boss4 上场）
+    //   就拿着core_cmv 从没登场的一堆 -1 读数喊「+x 断了」。分账口径同 sawCrossChest / sawMembraneChest
+    if (sawCmvChest && !corePopCalls) errors.push('匣出现过却没弹一次 +x：拾取→CHEST_GRANTS.core_cmv→applyBoost→hud.popStats 断了一环');
     if (coreBoostCalls !== corePopCalls) {
       errors.push(`属性加了 ${coreBoostCalls} 次、核心 +x 弹了 ${corePopCalls} 次：授予函数里两步不同源，玩家会看到「弹了字没涨属性」或反过来`);
     }
@@ -1336,10 +1480,10 @@ if (!BOSS_DROPS_ENABLED) {
     // 排版结构：七行都进了队列、首尾 t0 的跨度正好是 (行数-1) × 错开。
     // ★这一条与绘制无关，所以「字被画到屏幕外」它照样绿 —— 它钉的是 popStats 的排队逻辑本身
     const wantRows = Object.keys(STAT_CORE_BOOST).length;
-    if (popQueueLen !== wantRows) {
+    if (sawCmvChest && popQueueLen !== wantRows) {
       errors.push(`拾取当帧只排进 ${popQueueLen} 条 +x（加成包有 ${wantRows} 项）：有属性涨了却没弹字，或者弹了不属于面板的行`);
     }
-    if (popSpread !== (wantRows - 1) * STAT_POP_STAGGER) {
+    if (sawCmvChest && popSpread !== (wantRows - 1) * STAT_POP_STAGGER) {
       errors.push(`+x 首尾错开 ${popSpread}ms，应为 (行数-1)×STAT_POP_STAGGER = ${(wantRows - 1) * STAT_POP_STAGGER}ms`);
     }
     // 绘制事实（判别式那一条）：拾取当帧只可能有第一行。
@@ -1358,7 +1502,11 @@ if (!BOSS_DROPS_ENABLED) {
     const STEP_MS = Math.round(DT * 1000); // 每帧推进的墙上时钟毫秒数，step() 里那个 Math.round
     const minGapFrames = Math.floor(STAT_POP_STAGGER / STEP_MS); // 80/17 = 4 帧
     const missing = POP_TEXTS.filter((t) => !popFirstFrame.has(t));
-    if (missing.length) {
+    if (!sawCmvChest) {
+      // ★没走过这一件就整节跳过：下面那两段比的是「七行的首现帧序」，空台账算出来全是 NaN，
+      //   NaN 的比较恒假会变成「静默通过」，那比跳过更难查
+      console.log('这一局 core_cmv 没登场（TWINS=1 那种只有 boss4 的排表会走到这里）：拾取那一刻的逐行 +x 绘制探针整节跳过');
+    } else if (missing.length) {
       errors.push(`这几行 +x 整局都没被画出来：${missing.join(' ')}。要么 drawStatPops 没接到绘制循环，要么字被画到了屏幕外`);
     } else {
       const offs = POP_TEXTS.map((t) => popFirstFrame.get(t) - popAtFrame);
@@ -1392,7 +1540,9 @@ if (!SEAFIRE_ON) {
   if (databus.player && databus.player.laserCross) errors.push(`海火核心已不可达玩家却有 ${databus.player.laserCross} 层：层数还有别的写入口`);
   if (crossFires) errors.push(`海火核心已不可达却放出过 ${crossFires} 根十字：fireLaserCross 没看层数`);
 } else if (boss2Drops === 0) {
-  errors.push(`海火核心开着却整局没死过海火（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
+  // ★TWINS=1 那一跑把 Boss 指针按在 boss4 行，海火天生叫不出来：那是旋钮的后果不是事故，报红只会让那一臂永远不绿
+  if (TWINS === '1') console.log('海火核心：TWINS=1 那一跑叫不出海火（Boss 指针被按在 boss4），这一件的断言整节跳过，请看 TWINS=off 那一跑');
+  else errors.push('海火核心开着却整局没死过海火（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
 } else {
   if (!sawCrossChest) errors.push(`死了 ${boss2Drops} 只海火，场上却没出现海火核心那件匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!crossGrants) errors.push('匣掉过却没授予一次层数：拾取→CHEST_GRANTS.core_seafire 断了一环（chest.js 那句 CHEST_GRANTS[kind] 没跑到？）');
@@ -1424,11 +1574,17 @@ if (!SEAFIRE_ON) {
   //   crossFireAt 记的 frameMs 却是每帧 16.667。一根 4000ms 的冷却实际只花 4000 ÷ 17 ≈ 236 帧，
   //   按 frameMs 读出来就是 3933ms，照「CD 减一格」判会假红（同 1696 行那条注释是同一个坑）
   const minGap = (LASER_CROSS_CD * DT * 1000) / STEP - STEP;
+  // ★还要躲开 A3 冻结探针那串帧外泵（同炮座齐射那一条）：那期间 step() 照跑、frameMs 一格不动，
+  //   落在里面的两根读数是同一刻 → 间隔 0，跨过去的那一对则白白多烧了 probePumpMs 的冷却而时间戳上看不见。
+  //   不补的后果是「海火核心的冷却下界」被这台机器自己的探针打红，而红字看着像真 bug
   for (let k = 1; k < crossFireAt.length; k++) {
+    if (crossFirePump[k] || crossFirePump[k - 1]) continue;
     const gap = crossFireAt[k] - crossFireAt[k - 1];
-    if (gap < minGap) {
-      errors.push(`第 ${k + 1} 根十字只隔了 ${gap}ms 就放出，短于折算后的冷却下界 ${minGap.toFixed(0)}ms`
-        + `（LASER_CROSS_CD=${LASER_CROSS_CD}ms 走的是游戏那把 ${STEP}ms/帧 的钟）：`
+    const spanned = memClockProbed && crossFireAt[k - 1] <= memClock.at && crossFireAt[k] > memClock.at;
+    const bound = minGap - (spanned ? probePumpMs : 0);
+    if (gap < bound) {
+      errors.push(`第 ${k + 1} 根十字只隔了 ${gap}ms 就放出，短于折算后的冷却下界 ${bound.toFixed(0)}ms`
+        + `（LASER_CROSS_CD=${LASER_CROSS_CD}ms 走的是游戏那把 ${STEP}ms/帧 的钟${spanned ? `，本段已扣掉 A3 探针偷泵的 ${probePumpMs.toFixed(0)}ms` : ''}）：`
         + '冷却门没挡住下一次挨打，站进怪堆里十字会连成一根常驻光棒');
       break;
     }
@@ -1571,7 +1727,9 @@ if (!BIOFILM_ON) {
 } else if (!BOSS_DROPS_ENABLED) {
   if (membranePresses || membraneFrames) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却按成 ${membranePresses} 次、膜 ${membraneFrames} 帧：掉落以外的地方把道具发出去了`);
 } else if (boss3Drops === 0) {
-  errors.push('薄膜核心开着却整局没死过膜王（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+  // ★同海火那一条：TWINS=1 把 Boss 指针按在 boss4 行，膜王天生叫不出来，报红只会让那一臂永远不绿
+  if (TWINS === '1') console.log('薄膜核心：TWINS=1 那一跑叫不出膜王（Boss 指针被按在 boss4），这一件的断言整节跳过，请看 TWINS=off 那一跑');
+  else errors.push('薄膜核心开着却整局没死过膜王（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
 } else {
   if (!sawMembraneChest) errors.push(`死了 ${boss3Drops} 只膜王，场上却没出现薄膜核心那只匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!membraneGrants) errors.push('匣掉过却没授予一次：拾取→CHEST_GRANTS.core_biofilm 断了一环（这件不叠层，授予那行写的是 = 1）');
@@ -1646,6 +1804,258 @@ if (!BIOFILM_ON) {
       + '计时器没烧完（或每帧被续上），详情页那句「3 秒」说的是假话');
   }
 }
+
+// —— Boss 掉落道具「双子核心」（双联炮座）的两端断言 ——
+// ★门读表本身（BOSS_DROPS.boss4 空不空），理由同 SEAFIRE_ON / BIOFILM_ON：TWIN=0 只是把这一行挪到 boss4Parked，
+//   道具仍然完整登记着（注册面扫描照旧覆盖它），掐断的是掉落口而不是注册面
+// ★这一件的判据形状和前两件不同：双子是同屏两只、一局死两次，匣却只许掉一只。
+//   「一局只掉一只」那道门唯一的凭据就是 boss4Drops 与 twinChests 之间那个不对等，两个读数必须一起看：
+//   只判「掉过匣」的话摘掉那道门照样绿（两只都掉才是它想抓的症状），只判「没两座」的话掉落口整条断了也绿
+const DIPLO_ON = BOSS_DROPS.boss4.length > 0;
+// ★「死过几只双子」有两把账：boss4Drops 读的是每帧的 dyingBosses 快照，落在 A3 探针那串帧外泵里的死亡它看不见；
+//   twinsDeaths 拿的是强引用集合，那串泵过后照样数得到。取大的那个，免得「只死过 1 只」那句反证提示本身是错的
+const twinDeathsSeen = Math.max(boss4Drops, twinsDeaths);
+if (!DIPLO_ON) {
+  if (twinChests) errors.push(`双子核心已不可达却掉出过 ${twinChests} 只匣：TWIN=0 的旋钮没把 BOSS_DROPS.boss4 那一行掐住，或者还有第二个掉落口`);
+  if (twinGrants) errors.push(`双子核心已不可达却授予过 ${twinGrants} 次：CHEST_GRANTS.core_diplo 被掉落以外的地方调用了`);
+  if (databus.bossChests.core_diplo) errors.push(`双子核心已不可达但 HUD 计数里有 core_diplo ×${databus.bossChests.core_diplo}：右栏会凭空多出一格`);
+  if (databus.player && databus.player.twinBattery) errors.push(`双子核心已不可达玩家却有 twinBattery=${databus.player.twinBattery}：这一件还有别的写入口`);
+  // ★这一条是整组里最要紧的「关掉等价式」：座子是地上实体，看不到它就以为「恰好没掉」，
+  //   而道具不可达时「一座都没有 + 一炮都没开」同时成立，才说明 databus 那条补落地的门真在看 player.twinBattery
+  if (twinPeak || twinSalvos || twinShells) {
+    errors.push(`双子核心已不可达场上却有 ${twinPeak} 座、齐射 ${twinSalvos} 轮 / ${twinShells} 发：`
+      + 'databus.update 里那句补落地的门没读 player.twinBattery，或者炮座还有第二个生成口');
+  }
+} else if (!BOSS_DROPS_ENABLED) {
+  if (twinChests || twinPeak || twinSalvos) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却掉过 ${twinChests} 只匣、落过 ${twinPeak} 座、齐射 ${twinSalvos} 轮：掉落以外的地方把道具发出去了`);
+} else if (twinDeathsSeen === 0) {
+  errors.push('双子核心开着却整局没死过双子（boss4Drops=0 且 twinsDeaths=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长，或用 TWINS=1 把 boss4 的叫到 150 秒');
+} else {
+  // ★1 是唯一合法值：0 = 掉落口没按 Boss 号对上表，≥2 = 那道上锁的账没钉住（一局两只匣 → 地上两座炮）
+  if (twinChests !== 1) {
+    errors.push(twinChests === 0
+      ? `死了 ${twinDeathsSeen} 只双子，场上却没出现双子核心那只匣：main.js 的掉落口没按 Boss 号对上表`
+      : `死过 ${twinDeathsSeen} 只双子就掉出过 ${twinChests} 只匣：掉落口那道按 Boss type 的记账门没生效 → 一局落两座，「一局只落一座」这条从详情页开始就是假话`);
+  }
+  if (twinDeathsSeen < 2) {
+    // 只死一只时「第二只不再掉」这一支根本没被走过 —— 明写在日志里，别让下一位把绿读成「门验过了」
+    console.log(`双子这局只死过 ${twinDeathsSeen} 只（快照账 ${boss4Drops} / 强引用账 ${twinsDeaths}）：「一局只掉一只」的反证（死两只、掉两只）这次没走到，要验它得让两只都倒下`);
+  }
+  if (!twinGrants) errors.push('匣掉过却没授予一次：拾取→CHEST_GRANTS.core_diplo 断了一环（chest.js 那句裸 CHEST_GRANTS[kind] 没跑到？）');
+  if (twinGrants > twinChests) errors.push(`授予 ${twinGrants} 次却只掉过 ${twinChests} 只匣：拾取以外的地方在发这件道具`);
+  if (databus.bossChests.core_diplo !== twinGrants) {
+    errors.push(`HUD 计数 core_diplo ×${databus.bossChests.core_diplo} 与授予次数 ${twinGrants} 对不上：右栏那格与详情页那行会少报/多报`);
+  }
+  const tb = databus.player && databus.player.twinBattery;
+  // ★判 === 1 而不是 > 0：这一件的授予写的是 `= 1`（不叠层，boss4 一局只出现一次），终态只可能是 1
+  if (tb !== 1) errors.push(`授予过 ${twinGrants} 次，终态玩家却是 twinBattery=${tb}：授予写的字段和 databus 那条门读的不是一个，或者这一件被当成了可叠层（+= 1）`);
+  if (twinPeak === 0) errors.push(`授予过 ${twinGrants} 次却一座都没落下：databus.update 里「有道具且台上一座都没有就落一座」那条门断了`);
+  if (twinPeak > 1) errors.push(`场上同时有过 ${twinPeak} 座炮座：授予不叠层、生成门判的是「台上一座都没有」，两条里有一条被改成了每帧落座`);
+  // 「不跟着你走」的行为学凭据：这座道具的全部意义就是不动，任何跟随逻辑都把它写成第五只跟班
+  if (twinDrift) errors.push(`炮座离开过落地那一刻的坐标 ${twinDrift} 帧：这件道具买的就是「只守身边那一小块地」，加了跟随就等于金匣炮台白做了一遍`);
+  // 世界跑到的时刻：玩家一死 main.js 就不再驱动 databus.update，此后 cdT 停在原地
+  const twinAliveSec = gameOverAt < 0 ? frames * DT : gameOverAt;
+  twinActiveMs = twinOnAt < 0 ? 0 : (twinAliveSec * 1000 - twinOnAt) / (DT * 1000) * MEM_STEP;
+  // ★上界同样折 frameMs 那把钟：cdT 按 stub 的 17ms/帧 走，twinOnAt 却是 16.667ms/帧 的时刻，
+  //   不折算的话长局会攒出好几帧的差额，把正确行为判成超频（炮台那条 2181 行同一笔账）
+  twinSalvoBound = (Math.floor((twinActiveMs + probePumpMs) / TWIN_CD) + 1) * twinPeak;
+  if (twinSalvos > twinSalvoBound) {
+    errors.push(`齐射 ${twinSalvos} 轮超出节拍上界 ${twinSalvoBound}（落座后 ${(twinActiveMs / 1000).toFixed(0)} 秒 + 探针偷泵的 ${(probePumpMs / 1000).toFixed(1)} 秒 ÷ 每 ${TWIN_CD / 1000} 秒一拍 × ${twinPeak} 座）：`
+      + '有炮弹在没到拍的时候被打出去了，单座 DPS 会翻倍而详情页上看不出来');
+  }
+  // 驱动链：到点就问，圈里没怪也问 —— 这一条才是「座子活着」的证据，「打了几发」在不动的实体上不是
+  if (twinActiveMs >= TWIN_CD * 2 && !twinFireAsked) {
+    errors.push(`座子在场跑了 ${(twinActiveMs / 1000).toFixed(0)} 秒，fire() 却一次都没被问到：databus 那条 twinBatteries 循环没接进世界，地上是一尊雕像`);
+  }
+  // ★cdPeak 这条要分叉：每次到点都有怪可打时，cdT 每轮归零、永远观测不到 TWIN_CD 那一档，
+  //   所以「攒满过」或「真开过火」二者成立其一即可（两条都不成立 = 计时器根本没走）
+  if (twinCdPeak < TWIN_CD && twinSalvos === 0) {
+    errors.push(`cdT 最高只到 ${twinCdPeak.toFixed(0)}（一拍是 ${TWIN_CD}）且整局零轮齐射：dt 累加那行没跑，或被谁每帧清零`);
+  }
+  // 发数：一轮必须恰好两只炮口各一发。★Set 而不是计数 —— 有一轮打单发、另一轮打三发时，总数对得上而形状已经坏了
+  for (const n of twinSalvoSizes) {
+    if (n !== TWIN_SALVO) {
+      errors.push(`有一轮齐射打了 ${n} 发（应为 ${TWIN_SALVO}，两只炮口各一发）：发数与炮口数脱钩，详情页那句「一轮 ${TWIN_SALVO * twinDamage(databus.player ? databus.player.attack : 0)} 点」就成了假话`);
+    }
+  }
+  if (twinShells !== twinSalvos * TWIN_SALVO) {
+    errors.push(`齐射 ${twinSalvos} 轮却出膛 ${twinShells} 发（应 ${twinSalvos * TWIN_SALVO}）：fire 里那个 TWIN_SALVO 循环和近失列表长度不一致，某一发凭空多/少`);
+  }
+  // 相邻两轮的下界。★两把钟要折算（同十字/按压那两条），外加一条探针豁免：
+  //   落在 A3 那串帧外泵里的读数时刻全是同一个数（frameMs 不动），差值读 0，那不是超频而是探针自己造的
+  const twinMinGap = (TWIN_CD * DT * 1000) / MEM_STEP - MEM_STEP;
+  for (let k = 1; k < twinSalvoAt.length; k++) {
+    if (twinSalvoPump[k] || twinSalvoPump[k - 1]) continue;
+    const gap = twinSalvoAt[k] - twinSalvoAt[k - 1];
+    if (gap < twinGapMin) twinGapMin = gap;
+    const spanned = memClockProbed && twinSalvoAt[k - 1] <= memClock.at && twinSalvoAt[k] > memClock.at;
+    const bound = twinMinGap - (spanned ? probePumpMs : 0);
+    if (gap < bound) {
+      errors.push(`第 ${k + 1} 轮齐射只隔了 ${Math.round(gap)}ms，短于折算后的节拍下界 ${bound.toFixed(0)}ms`
+        + `（TWIN_CD=${TWIN_CD}ms 走的是游戏那把 ${MEM_STEP}ms/帧 的钟${spanned ? `，本段已扣掉 A3 探针偷泵的 ${probePumpMs.toFixed(0)}ms` : ''}）：`
+        + '冷却没在开火那一刻归零，座子会连轮齐射');
+      break;
+    }
+  }
+  // 逐发几何自洽（实场这一遍只判得了自不自洽：目标在哪不知道，所以「方向从炮口算还是从中心算」交给下面的纯检）
+  const twinBad = [];
+  for (let si = 0; si + 1 < twinShellRows.length; si += 2) {
+    for (let k = 0; k < 2; k++) {
+      const r = twinShellRows[si + k];
+      const tag = `第 ${si / 2 + 1} 轮第 ${k + 1} 发`;
+      const mx = r.bx + (k ? TWIN_MUZZLE_DX : -TWIN_MUZZLE_DX);
+      const my = r.by + TWIN_MUZZLE_DY;
+      if (Math.abs(r.x - mx) > 1e-6 || Math.abs(r.y - my) > 1e-6) {
+        twinBad.push(`${tag} 出膛点 (${r.x.toFixed(1)}, ${r.y.toFixed(1)})，应 (${mx.toFixed(1)}, ${my.toFixed(1)})`);
+      }
+      if (Math.abs(Math.hypot(r.dx, r.dy) - 1) > 1e-6) twinBad.push(`${tag} 的方向向量长度 ${Math.hypot(r.dx, r.dy).toFixed(4)} 没归一：弹速会被目标距离带跑`);
+      if (r.damage !== twinDamage(r.attack)) twinBad.push(`${tag} 伤害 ${r.damage}，应 twinDamage(攻 ${r.attack}) = ${twinDamage(r.attack)}`);
+      if (r.radius !== TWIN_BULLET_RADIUS || r.color !== TWIN_BULLET_COLOR) twinBad.push(`${tag} 外观 r ${r.radius} / ${r.color}`);
+      if (r.maxRange !== TWIN_RANGE + BULLET_RANGE_BUFFER) twinBad.push(`${tag} 飞行距离 ${r.maxRange}，应 ${TWIN_RANGE + BULLET_RANGE_BUFFER}`);
+    }
+  }
+  if (twinBad.length) errors.push(`双联炮座的开火几何有 ${twinBad.length} 处不对（首例 ${twinBad[0]}）：${twinBad.slice(0, 3).join(' | ')}`);
+}
+
+// —— 双联炮座的几何纯检：实场量不到的三种档在这里摆出来 ——
+// ★为什么要这一组：座子钉在拾取那一刻的位置，bot 一跑开它那一圈里就没怪了（炮台当年的教训：位置固定的实体
+//   不能按玩家邻域归属战果）。所以「圈里两只各打一只」「只剩一只两发都给同一只」「圈外 1 像素不打」这三档
+//   在实场里全是运气，只有这里能各判一次
+function twinFixture(x = 0, y = 0) {
+  const b = Object.create(TwinBattery.prototype);
+  b.x = x; b.y = y; b.radius = TWIN_SIZE / 2; b.cdT = 0;
+  return b;
+}
+// 最小世界：fire() 只读 enemys 的 x/y/isDead、player 的 attack/pierce/burnBullets，和 pool.getItemByClass
+function twinStub(enemys, pool) {
+  return {
+    player: { attack: 26, pierce: 0, burnBullets: 0 },
+    enemys,
+    bullets: [],
+    pool: pool || { getItemByClass: () => new Bullet() },
+  };
+}
+// dt 一律 0.5 秒一步（= 500 毫秒，二进制精确），同上面 pumpTurret 那条理由：1/60 累加会让「恰好到拍」偶发红
+function pumpTwin(b, db, seconds) {
+  const n = Math.round(seconds / 0.5);
+  for (let k = 0; k < n; k++) b.update(0.5, db);
+  return b;
+}
+// 目标到「这条射线」的垂距：负方向（目标在炮口身后）算无穷远。★从炮口起算，不是从实体中心
+const twinRayMiss = (shell, tx, ty) => {
+  const ax = tx - shell.x;
+  const ay = ty - shell.y;
+  if (ax * shell.dx + ay * shell.dy <= 0) return Infinity;
+  return Math.abs(ax * shell.dy - ay * shell.dx);
+};
+const twinHits = (shell, e) => twinRayMiss(shell, e.x, e.y) < 1e-6;
+{
+  const b = twinFixture();
+  const db = twinStub([]);
+  pumpTwin(b, db, 30);
+  if (b.cdT !== TWIN_CD) {
+    errors.push(`射程内一只怪都没有、空转 30 秒后 cdT = ${b.cdT}（应钉在 ${TWIN_CD}）：欠债没被钉掉，怪一进圈就会先补出积压的那几轮`);
+  }
+  if (db.bullets.length !== 0) {
+    errors.push(`空转 30 秒打出了 ${db.bullets.length} 发：fire 里「没有目标就返回 false」那道门没生效，等于在给空气上弹药`);
+  }
+}
+{
+  // 积压那几拍必须由钉值吃掉：进圈第一帧只许出 TWIN_SALVO 发，而不是「欠了多少轮就补多少轮」
+  const b = twinFixture();
+  const db = twinStub([]);
+  pumpTwin(b, db, 30);
+  db.enemys.push({ x: 60, y: 0, radius: 10, isDead: false }, { x: -60, y: 40, radius: 10, isDead: false });
+  pumpTwin(b, db, 0.5);
+  if (db.bullets.length !== TWIN_SALVO) {
+    errors.push(`空转 30 秒后放进两只怪，第一帧打出了 ${db.bullets.length} 发（应恰好 ${TWIN_SALVO}）：要么钉回的 cdT 没钉、积压的那十几轮被一次补完，要么两只炮口没各出一发`);
+  } else {
+    const near = [{ x: 60, y: 0 }, { x: -60, y: 40 }];
+    for (let k = 0; k < TWIN_SALVO; k++) {
+      const s = db.bullets[k];
+      if (!twinHits(s, near[k])) {
+        errors.push(`第 ${k + 1} 发没打向近的那 ${k + 1} 只（应打 (${near[k].x}, ${near[k].y})，垂距 ${twinRayMiss(s, near[k].x, near[k].y).toFixed(1)}）：索敌那个插入排序或「一发对口」的配法写歪了`);
+      }
+    }
+    // 两个起点必须相差 2×TWIN_MUZZLE_DX：同一个点出两发 = 炮口横移那 18.3 像素被写丢了，画面上两张嘴只吐一条线
+    const sep = Math.hypot(db.bullets[0].x - db.bullets[1].x, db.bullets[0].y - db.bullets[1].y);
+    if (Math.abs(sep - TWIN_MUZZLE_DX * 2) > 1e-6) {
+      errors.push(`两发出膛点相距 ${sep.toFixed(2)}（应 ${TWIN_MUZZLE_DX * 2} = 左右两个炮口）：起点没按炮口分开，这件道具的「双联」只剩名字`);
+    }
+  }
+  if (b.x !== 0 || b.y !== 0) {
+    errors.push(`打过几发之后炮座挪到了 (${b.x}, ${b.y})：它买的就是「站在原地」`);
+  }
+  let steps = 0;
+  while (db.bullets.length < TWIN_SALVO * 2 && steps < 60) { pumpTwin(b, db, 0.5); steps++; }
+  const gapMs = steps * 500;
+  if (!(gapMs >= TWIN_CD && gapMs - 500 < TWIN_CD)) {
+    errors.push(`两轮之间的实测间隔 ${gapMs} 毫秒没落在 ${TWIN_CD} 那一拍上（上一档 ${gapMs - 500}）：冷却门或开火后的归零有一条写歪`);
+  }
+}
+{
+  // ★这一档是「方向从炮口算 / 从实体中心算」那条分界的凭据：怪正对着中心下方，
+  //   从中心算出的单位向量平移到炮口，会偏出 18.3 像素 —— 大于怪半径 10 + 弹半径 9 = 这一发凭空打空
+  const b = twinFixture();
+  const only = { x: 0, y: 100, radius: 10, isDead: false };
+  const db = twinStub([only]);
+  pumpTwin(b, db, 3);
+  if (db.bullets.length !== TWIN_SALVO) {
+    errors.push(`圈里只剩一只怪却打出 ${db.bullets.length} 发（应 ${TWIN_SALVO}）：近失列表空位时没回落到 near[0]，第二张嘴白着`);
+  } else {
+    for (let k = 0; k < TWIN_SALVO; k++) {
+      if (!twinHits(db.bullets[k], only)) {
+        errors.push(`第 ${k + 1} 发打不中正下方 100 像素处那只怪（垂距 ${twinRayMiss(db.bullets[k], only.x, only.y).toFixed(2)}）：`
+          + '方向是从实体中心算的而不是从炮口算的 —— 偏出去的量正好是炮口的横移 18.3，比怪半径加弹半径还大');
+      }
+    }
+  }
+}
+{
+  // 选目标：三只都在圈内 + 一只在圈外，两发必须落在最近的那两只上，圈外那只一律不管
+  const b = twinFixture();
+  const inside = [{ x: 0, y: 40, radius: 10, isDead: false }, { x: 70, y: 0, radius: 10, isDead: false }, { x: 0, y: -110, radius: 10, isDead: false }];
+  const outside = { x: TWIN_RANGE + 40, y: 0, radius: 10, isDead: false };
+  const db = twinStub([...inside, outside]);
+  pumpTwin(b, db, 3);
+  for (let k = 0; k < TWIN_SALVO; k++) {
+    const s = db.bullets[k];
+    if (!s) { errors.push('圈内三只却没能凑齐一轮两发：fire 的入列那一步断了'); break; }
+    if (twinHits(s, outside)) errors.push(`第 ${k + 1} 发打向了圈外 ${TWIN_RANGE + 40} 像素处那只怪：射程那道 lim 没生效，130 这个数字白写`);
+    const hitIdx = inside.findIndex((e) => twinHits(s, e));
+    if (hitIdx > k) errors.push(`第 ${k + 1} 发打了第 ${hitIdx + 1} 近的怪（应 ${k + 1} 近）：近失排序反了或者没截到 TWIN_SALVO 个`);
+  }
+}
+{
+  // 圈外 1 像素不许打；圈内 1 像素必须打 —— lim 那条平方比较的两侧都钉一遍
+  const out = twinFixture();
+  const dbOut = twinStub([{ x: TWIN_RANGE + 1, y: 0, radius: 10, isDead: false }]);
+  pumpTwin(out, dbOut, 10);
+  if (dbOut.bullets.length) errors.push(`怪在圈外 1 像素却打出 ${dbOut.bullets.length} 发：索敌那道 d2 >= lim 被写成别的比较`);
+  if (out.cdT !== TWIN_CD) errors.push(`圈外有怪、空转 10 秒后 cdT = ${out.cdT}（应钉在 ${TWIN_CD}）：这一档才是「攒着等怪进圈」那半条设计`);
+  const inn = twinFixture();
+  const dbIn = twinStub([{ x: TWIN_RANGE - 1, y: 0, radius: 10, isDead: false }]);
+  pumpTwin(inn, dbIn, 3);
+  if (dbIn.bullets.length !== TWIN_SALVO) errors.push(`怪贴着圈内沿 1 像素却只打出 ${dbIn.bullets.length} 发（应 ${TWIN_SALVO}）：射程边界读成了开区间，玩家会让开一格就彻底失去火力`);
+}
+{
+  // ★池里捞出来的必须是一颗「别人用过的」弹：Bullet.init 重置 radius/color/pierce/burn，唯独不碰 maxRange，
+  //   漏赋这一行不会报错，只会让炮弹按上一发那位主人的射程飞（炮台那条 2128 行同一个坑）
+  const stale = new Bullet();
+  stale.maxRange = 9999;
+  const b = twinFixture();
+  const db = twinStub([{ x: 0, y: -100, radius: 10, isDead: false }], { getItemByClass: () => stale });
+  pumpTwin(b, db, 3);
+  const s = db.bullets[0];
+  if (!s) errors.push('目标在正上方 100 像素处却一发没打：索敌那条平方距离比较写歪了');
+  else if (s.maxRange !== TWIN_RANGE + BULLET_RANGE_BUFFER) {
+    errors.push(`炮弹射程 = ${s.maxRange}（应 ${TWIN_RANGE + BULLET_RANGE_BUFFER}）：这一行漏赋，弹继承的是上一发那位主人的 9999`);
+  }
+}
+if (twinDamage(0) !== 1) errors.push(`攻 0 时单发 = ${twinDamage(0)}（应 1）：保底没兜住，这件道具会在纯值局里打出 0 伤害的弹`);
+if (twinDamage(26) !== 52) errors.push(`攻 26 时单发 = ${twinDamage(26)}（应 52 = floor(26 × ${TWIN_DAMAGE_RATIO})）：改 TWIN_DAMAGE_RATIO 要连这条期望一起改，它是「一轮两发 ≈ 重炮」那笔算术的凭据`);
+if (TWIN_CD <= 0 || TWIN_SALVO < 2) errors.push(`TWIN_CD=${TWIN_CD} / TWIN_SALVO=${TWIN_SALVO} 不成立：这一件的定义是「一拍两轮各两发」，常量被改歪时上面的期望会跟着一起变形，只有这条硬门能拦住`);
+
 
 // —— 左栏 +x 的全源断言：升级成长与三选一选卡现在也走同一条飘字链 ——
 // ★这三条与 BOSS_DROPS 开关无关，放在两端断言之外：掉落关着的那一局照样升级、照样选卡，
@@ -2361,8 +2771,11 @@ if (twinsDeaths >= 1) {
   if (fieldBlastCalls === 0) errors.push(`双子上场过却一次都没结算到爆发伤害（抛囊泡 ${fieldVesicles} 枚、自爆 ${fieldBursts} 次）：player.applyBlast 那条通道没接上`);
   if (fieldBlastCalls > 0 && !(fieldBlastDmg > 0)) errors.push(`applyBlast 结算了 ${fieldBlastCalls} 次却累计 0 点伤害：减防把爆发吃干了，通道等于没开`);
 }
-// 丧兄激怒：要「真死过一只」才判得下去，光看秒数会误伤短局
-if (twinsDeaths >= 1) {
+// 丧兄激怒：要「兄弟死了之后场上还站着一只」才判得下去，光看死亡只数会误伤两只同一帧一起倒的局
+if (twinsDeaths >= 1 && twinsGrieving === 0) {
+  console.log(`双子死了 ${twinsDeaths} 只却有 0 帧「兄弟已死、同屏还有活体」：这一局两只在同一帧一起倒，激怒天生没机会发生，本节跳过`);
+}
+if (twinsGrieving > 0) {
   if (!twinsEnraged) {
     errors.push(`${twinsDeaths} 只双子已经死了，活着的那只却始终没进激怒态：spawner 的 twin 活引用没接上，或 update 里那句 isDead return 把自己该做的轮询也挡掉了`);
   } else {
@@ -2469,9 +2882,11 @@ function vesicleRun(offset) {
   }
 }
 
-// 暂停详情页的文案探针：把九种加成挂满，逼九行 describe 各拼一次并真画出来。
+// 暂停详情页的文案探针：把九种加成挂满、四件 Boss 掉落道具各算「拾过一次」，逼每一行 describe 各拼一次并真画出来。
 // ★这类 bug 只住在字符串里：bombDamage 收攻击力却传了整个 player，游戏照跑、数值检查全绿，
 //   只有详情页那一行写成「单枚 NaN 点」。不扫文本就永远发现不了
+// ★bossChests 必须自己凑而不照读实场：这一节要判的是「每个分支都跑得通」，而某一件这一局有没有被捡到是运气，
+//   关掉旋钮那一跑更是必然为 0 —— 拿实场计数当门，「没打到 boss4」会伪装成「详情页没这一行」，两条结论完全不同
 {
   const real = databus.player;
   const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
@@ -2481,6 +2896,9 @@ function vesicleRun(offset) {
   for (const k in OWNED) probe[k] = OWNED[k];
   probe.shieldBroken = 0;
   databus.player = probe;
+  const chestsBak = databus.bossChests;
+  databus.bossChests = { ...chestsBak };
+  for (const k of Object.values(BOSS_DROPS).flat()) databus.bossChests[k.id] = 1;
   // 临时把 measureText 报成 0：wrapLines 判的是「这行加一个字还塞得下吗」，
   // 报 0 才是永远不折行；报大宽度会每字符折一行，配上 slice(0,2) 只剩头两个字，NaN 那半句根本进不了文本
   ctx.measureText = () => ({ width: 0 });
@@ -2495,18 +2913,18 @@ function vesicleRun(offset) {
   for (const t of ITEM_BAR) {
     if (!drawnTexts.has(t.name)) errors.push(`详情页没画出「${t.name}」这一行：ITEM_BAR 有格但 describe 走不到它`);
   }
-  // Boss 掉落道具那一行走的是同一条 ownedItems()，但它是「拾取过才占位」，所以门要挂在持有上：
-  // 关掉开关、或整局没打到 boss1 时这一行本来就不该出现，无条件硬查会变成假红
+  // Boss 掉落道具那一行走的是同一条 ownedItems()：拾取过才占位，而上面已经把四件各凑成「拾过一次」，
+  // 所以这里四行都必须出现 —— 少一行就是 ownedItems 那张循环没吃到 BOSS_DROPS，或者 glyph 撞了名被顶掉
   for (const k of Object.values(BOSS_DROPS).flat()) {
     if ((databus.bossChests[k.id] || 0) > 0 && !drawnTexts.has(k.name)) {
-      errors.push(`详情页没画出「${k.name}」这一行：拾取了 ${databus.bossChests[k.id]} 次，ownedItems 却没把它收进卡片`);
+      errors.push(`详情页没画出「${k.name}」这一行：bossChests 里记了 ${databus.bossChests[k.id]} 次，ownedItems 却没把它收进卡片`);
     }
   }
   // —— 主动键的文案扫描：三个数必须出现在同一行里，且是现读常量拼出来的那三个 ——
   // ★上一节那条 A7 只证明 describe 里有 case，这一条证明那个 case 真的跑出来了、数没写死：
   //   「3 秒 / 40 秒」在别处一个都不出现（这件道具不涨左栏任何一行、也没有 +x 飘字），
   //   所以找不到就是这一行少了数字，而不是被别的文案撞绿
-  if ((databus.bossChests.core_biofilm || 0) > 0) {
+  {
     const line = [...drawnTexts].find((t) => t.includes('减半'));
     if (!line) {
       errors.push('详情页没有含「减半」的那行：describe 的 membrane 分支没跑出来，玩家读不到这件道具到底做什么');
@@ -2518,6 +2936,22 @@ function vesicleRun(offset) {
       }
     }
   }
+  // —— 双联炮座的文案扫描：同一条理由，这一件的四个数也只住在这一行里 ——
+  // ★射程 130 必须出现在文案里：它是这一件与金匣「炮台」唯一的区别（那一件 220），
+  //   玩家不看这行就分不清脚下落的是哪一座，而 describe 漏写射程不会有任何读数变红
+  {
+    const line = [...drawnTexts].find((t) => t.includes('双联炮座'));
+    if (!line) {
+      errors.push('详情页没有含「双联炮座」的那行：describe 的 twinBore 分支没跑出来，玩家读不到这座炮的节拍和射程');
+    } else {
+      for (const token of [`${TWIN_CD / 1000} 秒`, `${TWIN_RANGE} 像素`, `${twinDamage(probe.attack)} 点`]) {
+        if (!line.includes(token)) {
+          errors.push(`详情页那行「${line}」里没有「${token}」：数字是写死的，改 TWIN_CD / TWIN_RANGE / TWIN_DAMAGE_RATIO 不会跟着走`);
+        }
+      }
+    }
+  }
+  databus.bossChests = chestsBak;
 }
 const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
 if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
@@ -2570,14 +3004,14 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   // 行数值和上面那段文案探针共用同一张配方：两处口径不一样，就会出现一个测到 13 行、另一个测到 12 行
   Object.assign(probe, {
     bulletCount: 4, pierce: 3, shield: 3, shieldBroken: 0, companions: 3, bomber: 3, turrets: 3,
-    burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, laserCross: 1, membrane: 1,
+    burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, laserCross: 1, membrane: 1, twinBattery: 1,
   });
   const chestsBak = databus.bossChests;
   const screenBak = databus.screen;
   const overBak = databus.isGameOver;
   const upBak = databus.upgradeScreen.visible;
   databus.player = probe;
-  databus.bossChests = { core_cmv: 1, core_seafire: 1, core_biofilm: 1 };
+  databus.bossChests = { core_cmv: 1, core_seafire: 1, core_biofilm: 1, core_diplo: 1 };
   databus.screen = 'game';
   databus.isGameOver = false;
   databus.upgradeScreen.visible = false;
@@ -2727,12 +3161,13 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
         errors.push(`BOSS_DROPS '${k.id}' 的 icon '${k.icon}' 和金匣的 glyph 撞名：详情页会按金匣那条说明念它`);
       }
       if (!k.brief) errors.push(`BOSS_DROPS 的 '${k.id}' 没有 brief：describe 的 default 分支会交出空串，详情页那一行是空的`);
-      // ★只有 core_biofilm 额外要求有 case：它涨的层数不在左栏任何面板上，详情页就是玩家唯一的出口，
-      //   而 brief 是 config 里写死的一句话 —— 改 MEMBRANE_HOLD / MEMBRANE_CD 时它不会跟着走。
+      // ★core_biofilm 与 core_diplo 额外要求有 case：它们给的数（膜的时长/冷却、炮座的节拍/射程/单发）
+      //   不在左栏任何面板上，详情页就是玩家唯一的出口，
+      //   而 brief 是 config 里写死的一句话 —— 改 MEMBRANE_HOLD / MEMBRANE_CD / TWIN_CD / TWIN_RANGE 时它不会跟着走。
       //   另外两件不需要：巨细胞核涨的七行面板上正在显示，海火核心那条已有同型断言
-      if (k.id === 'core_biofilm' && !pauseSrc.includes(`case '${k.icon}'`)) {
-        errors.push(`pause.js 的 describe 没有 '${k.icon}' 分支：薄膜核心只能靠 config 里的 brief 说话，`
-          + '改 MEMBRANE_HOLD / MEMBRANE_CD 之后详情页会一直念旧数字');
+      if ((k.id === 'core_biofilm' || k.id === 'core_diplo') && !pauseSrc.includes(`case '${k.icon}'`)) {
+        errors.push(`pause.js 的 describe 没有 '${k.icon}' 分支：这一件只能靠 config 里的 brief 说话，`
+          + '改常量之后详情页会一直念旧数字');
       }
       for (const key of Object.keys(k.boost || {})) {
         if (!STAT_KEYS.includes(key)) {
@@ -2779,7 +3214,7 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   }
   // ★turret.js 进的是这一组（连 Date.now( 都不许出现），不是下面那组纯显示体：它会开火，
   //   读墙上时钟的后果是三选一面板一关就补出积压的那几发，而这条链上的每一发都是真伤害
-  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js'), path.join('player', 'turret.js')]) {
+  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js'), path.join('player', 'turret.js'), path.join('player', 'twinBattery.js')]) {
     const s = src(rel);
     // 读墙上时钟会在三选一面板期间偷跑（main.js 那时跳过 databus.update），面板一关就连发
     if (s.includes('Date.now(')) errors.push(`${rel} 里出现 Date.now(：计时必须按 dt 累加`);
@@ -2881,9 +3316,23 @@ console.log(`membrane (薄膜核心 ${BIOFILM_ON ? 'on' : 'off（MEMBRANE 旋钮
     : `授予 ${membraneGrants} / 按成 ${membranePresses} / 膜 ${membraneFrames} 帧（这一段要的全是 0）`,
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level}`
   + ` / 死亡 ${gameOverAt < 0 ? '整局没死' : `${gameOverAt.toFixed(1)}s（整局上限 ${seconds}s）`}`);
+// ★同前两件：这一行必须把可达性本身（DIPLO_ON）与这一局 boss4 死了几只一起印出来，
+//   否则 TWIN=0 那一跑的零、或整局没打死双子的零，都会被下一位读成回归
+// ★利用率是软读数不是断言：座子钉在拾取那一刻不动，bot 一跑开它那一圈里就没怪，低才是常态。
+//   硬断言只钉「到点被问过」+「cdT 攒满过或真开过火」+「漂移 0 帧」这三条驱动链（见上面那节）
+console.log(`twin battery (双子核心 ${DIPLO_ON ? 'on' : 'off（TWIN 旋钮掐掉 boss4 那一行）'}):`,
+  DIPLO_ON
+    ? `双子死 ${twinDeathsSeen} 只（快照账 ${boss4Drops} / 强引用账 ${twinsDeaths}）/ 匣 ${twinChests} 只（门=一局只掉一只）/ 授予 ${twinGrants} / 场上峰值 ${twinPeak} 座`
+      + ` | 到点被问 ${twinFireAsked} 次 → 齐射 ${twinSalvos} 轮共 ${twinShells} 发（每轮发数档 ${[...twinSalvoSizes].join('/') || '-'}，应恒 ${TWIN_SALVO}）`
+      + ` | 落座后世界跑了 ${(twinActiveMs / 1000).toFixed(0)}s、节拍上界 ${twinSalvoBound} 轮 → 利用率 ${twinSalvoBound ? (twinSalvos / twinSalvoBound * 100).toFixed(0) : 0}%`
+      + ` | 最小间隔 ${twinGapMin === Infinity ? '-' : `${Math.round(twinGapMin)}ms`}（折算下界 ${((TWIN_CD * DT * 1000) / MEM_STEP - MEM_STEP).toFixed(0)}ms）`
+      + ` | cdT 峰值 ${twinCdPeak.toFixed(0)} / 漂移 ${twinDrift} 帧 / 落座于 ${twinOnAt < 0 ? '未落地' : `${(twinOnAt / 1000).toFixed(1)}s`}`
+      + ` | 单发 ${databus.player ? twinDamage(databus.player.attack) : '-'} 点（攻 ${databus.player && databus.player.attack} × ${TWIN_DAMAGE_RATIO}）射程 ${TWIN_RANGE}`
+    : `匣 ${twinChests} / 授予 ${twinGrants} / 座 ${twinPeak} / 齐射 ${twinSalvos}（这一段要的全是 0）`,
+  `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level}`);
 // ★报表行必须读出 TWINS 钉值和这一局 boss4 的实际出场时刻：否则未来会话看到一行 0 分不清是回归还是根本没出场
 console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${BOSS_FOURTH_SPAWN_TIME}s):`,
-  `${twinsGroups.length} groups / peak ${twinsPeak} / deaths ${twinsDeaths}`,
+  `${twinsGroups.length} groups / peak ${twinsPeak} / deaths ${twinsDeaths} / 丧兄窗口 ${twinsGrieving} 帧`,
   `| thrown ${fieldVesicles} / boomed ${fieldVesicleBooms} / hit ${vesicleHits} / in-flight peak ${maxVesicles}`,
   `| 抛弹 cd 到点 ${twinsThrowReady} 次（被 throwMinDist 挡 ${twinsThrowBlocked}）`,
   `| bursts ${fieldBursts} / hit ${burstHits} | stains ${fieldStains}`,

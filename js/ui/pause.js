@@ -5,6 +5,7 @@ import {
   BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT, XP_PICKUP_RANGE,
   LASER_CROSS_CD, laserCrossDamage,
   MEMBRANE_HOLD, MEMBRANE_REDUCE, MEMBRANE_CD,
+  TWIN_CD, TWIN_SALVO, TWIN_RANGE, twinDamage,
 } from '../consts';
 import { safeTop } from '../render';
 import { CHEST_KIND_BY_ID } from '../npc/monster/config';
@@ -50,6 +51,11 @@ function describe(item, player) {
     // ★三个数一律现读常量：减半比例是这件道具的名字（MEMBRANE_REDUCE），可调的是两个时长，
     //   写死一份副本的话以后调 HOLD/CD 就只改得动实场、改不动详情页（同 laserCross 那条口径）
     case 'membrane': return `按右下角的键，${MEMBRANE_HOLD / 1000} 秒内受到的伤害减半（${Math.round(MEMBRANE_REDUCE * 100)}%，接触、爆发和中毒都算），${MEMBRANE_CD / 1000} 秒内只能按一次；当前${player.membraneT > 0 ? '生效中' : '待按'}`;
+    // 双子核心（Boss 掉落道具）：这一件和上面两条都不一样 —— 计时器不住在角色身上，落在地上那座实体里，
+    //   所以这里没有「当前状态」可报，报的是【此刻开一炮是多少血】（跟班/炸弹/炮台三行同一口径：吃当前攻击力）
+    // ★射程 130 必须说出口：这是它与金匣炮台（220，直径盖过屏宽 = 等于没范围）唯一的行为差别，
+    //   也是「一局只落一座的重炮」买的那件东西 —— 玩家要靠这个数判断「这块地值不值得站」
+    case 'twinBore': return `脚下落下一座双联炮座，每 ${TWIN_CD / 1000} 秒向 ${TWIN_RANGE} 像素内最近的两怪齐射一轮，单发 ${twinDamage(player.attack)} 点、一轮 ${twinDamage(player.attack) * TWIN_SALVO} 点，不跟着你走`;
     default: return (CHEST_KIND_BY_ID[item.id] || {}).brief || '';
   }
 }

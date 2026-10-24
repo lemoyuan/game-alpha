@@ -276,7 +276,12 @@ export default class Main {
     // Boss 掉落道具：BOSS_DROPS 里哪只挂了行就掉哪只的匣，拾取效果一律见 chestGrant.js 注册表
     if (BOSS_DROPS_ENABLED) {
       const kinds = BOSS_DROPS[e.type];
-      if (kinds && kinds.length) {
+      // ★一局只掉一只：上面那句「每只濒死 Boss 各调一次」是关键 —— 双子是 pair:2 一次出场两只，
+      //   不记这笔账就会掉两只一模一样的匣，而「一局只掉一只」是 2026-10-24 用户拍板的口径
+      //   （boss1/2/3 各只有一只，所以这条以前不可能被发现）。记在 e.type 而不是 kind.id 上：
+      //   问的从来是「这只 Boss 掉过没有」，账本在 databus.reset() 里每局清空
+      if (kinds && kinds.length && !databus.bossLootDropped[e.type]) {
+        databus.bossLootDropped[e.type] = true;
         const kind = kinds[Math.floor(Math.random() * kinds.length)];
         // ★必须收回海岸线内：匣子没有磁吸，只有走过去踩得到（chest.js 的 dist 判定），
         //   掉到 playable 区域外就永远捡不到。上面那段休眠的专属匣用的是裸 e.x/e.y —— 那是它下线前就有的坑，别照抄
@@ -334,6 +339,9 @@ export default class Main {
     // 炮台排在三种跟随体之前：它是地面上的固定件，会跟着走的那几只和角色本人都该盖住它。
     // ★但不在赤潮那一层：地贴压在所有实体下面，而炮台是一件立着的东西，得压在怪之上才读得出它站在那儿
     for (const t of databus.turrets) t.draw(ctx);
+    // 炮座和炮台同一层、同一条理由：都是地上立着的东西，得压在怪之上才读得出它站在那儿，
+    // 而会跟着走的跟随体和角色本人都该盖住它
+    for (const b of databus.twinBatteries) b.draw(ctx);
     if (databus.player) {
       for (const p of databus.bossPets) p.draw(ctx);
       for (const comp of databus.companions) comp.draw(ctx);
