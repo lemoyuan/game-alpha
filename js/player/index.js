@@ -11,6 +11,7 @@ import {
   XP_PICKUP_RANGE,
   POISON_TICK, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT,
   LASER_CROSS_CD,
+  MEMBRANE_HOLD, MEMBRANE_CD, membraneDamage,
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
@@ -46,6 +47,12 @@ export default class Player extends Sprite {
     this.laserCrossT = 0;               // 距下一次可触发的毫秒数（dt 累加，同下面 vialGainT 那条）：★不用 Date.now，
                                         //   三选一面板开着时 main.js 整条跳过 databus.update，墙上时钟会照走，
                                         //   后果是「选卡那几秒攒出一根免费十字」，关门瞬间白放一发
+    this.membrane = 0;                  // 有没有「薄膜核心」（Boss 掉落道具，见 config 的 BOSS_DROPS.boss3）。★只取 0 / 1，不是层数：
+                                        //   boss3 一局只掉一只，且没有任何常量乘这个数 —— 所以 chestGrant 那行写的是 = 1 而不是 += 1，
+                                        //   以后读代码的人一眼看出这件不叠层（海火核心那种「层数买伤害」的经济在这里不存在）
+    this.membraneT = 0;                 // 膜剩余毫秒数（dt 累加，同上面 laserCrossT：面板开着时必须跟着冻住，否则 3 秒保护在选卡界面里白烧完）
+    this.membraneCdT = 0;               // 主动键冷却剩余毫秒数（dt 累加）：★在放火那一刻顶满，不在膜烧完时才顶，
+                                        //   否则「按一次等 3 秒再等 40 秒」会把真实周期写成 43 秒
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变
@@ -76,6 +83,11 @@ export default class Player extends Sprite {
     // 海火核心的触发冷却：和上面减速、下面血瓶同一把 dt 尺，所以三选一面板开着时一起冻住
     this.laserCrossT = Math.max(0, this.laserCrossT - dt * 1000);
 
+    // 主动键那层膜的两个计时器同样按 dt 走：面板开着时「这 3 秒」必须跟着停，
+    // 否则一次选卡就能把保护整段烧完，玩家等于被面板偷走一次技能
+    this.membraneT = Math.max(0, this.membraneT - dt * 1000);
+    this.membraneCdT = Math.max(0, this.membraneCdT - dt * 1000);
+
     // 中毒：同样的 dt 时钟，但走自己这条路结算——不碰 takeDamage，所以不吃受击无敌帧、也不被护盾挡。
     // 无敌帧是「一次撞击」的限流器，护盾挡的是「一次攻击」，毒素既不被撞完也不该被盾白吞
     if (this.poisonLeft > 0) {
@@ -83,7 +95,9 @@ export default class Player extends Sprite {
       this.poisonTickLeft -= dt * 1000;
       if (this.poisonTickLeft <= 0) {
         this.poisonTickLeft += POISON_TICK;
-        this.hp -= this.poisonDamage;
+        // ★中毒跳是三条掉血通道里的第三条，所以膜也要在这里过一遍：
+        //   2026-10-24 拍板「三条全盖」，漏掉这一条的话「按膜蹚赤潮」这条合法解就是假的
+        this.hp -= this.membraneOn() ? membraneDamage(this.poisonDamage) : this.poisonDamage;
       }
       if (this.poisonLeft === 0) {
         this.poisonDamage = 0;
@@ -186,10 +200,33 @@ export default class Player extends Sprite {
       this.shieldBroken++; // 记一笔：道具格要的是「拾取过几层」，破掉的不该从花名册里退场
       return;
     }
+    // 先扣防御力（加法）再过膜（乘法）：顺序会改变结论，所以全项目只留这一条通路，见 consts 的 membraneDamage
     const dmg = Math.max(1, amount - this.defence);
-    this.hp -= dmg;
+    this.hp -= this.membraneOn() ? membraneDamage(dmg) : dmg;
+    // ★膜生效期间挨的每一下仍然掉血（membraneDamage 有 Math.max(1,…) 兜底），所以海火核心的十字照旧一根根放得出来；
+    //   而上面那道护盾 return 在这行之前 —— 膜不消耗护盾层，被盾挡掉的那一下也照旧不送十字
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
     this.fireLaserCross(databus);
+  }
+
+  /**
+   * 主动技「薄膜」在不在身上的唯一判据：三条掉血通道（takeDamage / applyBlast / 中毒跳）都问这一句。
+   * ★只看 membraneT 不看 membrane：放火那一刻两个数一起写，但「有道具」和「膜正开着」是两件事，
+   *   分开判才写得出「按下去但没生效」这种空按（见 activateMembrane 的返回值）
+   */
+  membraneOn() {
+    return this.membrane > 0 && this.membraneT > 0;
+  }
+
+  /**
+   * 右下角主动键唯一的放火口（main.js 的触点、预览台的操作台按钮都从这里过，不许有第二条路）。
+   * 返回 false 时一个数都不动 —— 那一下是空按，HUD 上不该有任何代价，也不该把冷却顶满
+   */
+  activateMembrane() {
+    if (this.membrane <= 0 || this.membraneT > 0 || this.membraneCdT > 0) return false;
+    this.membraneT = MEMBRANE_HOLD;
+    this.membraneCdT = MEMBRANE_CD; // ★放火那一刻就顶满：真实周期是 40 秒而不是 43 秒
+    return true;
   }
 
   /**
@@ -209,7 +246,7 @@ export default class Player extends Sprite {
     // ★不在这里索敌：朝向只在触发那一刻定一次，之后按固定角速度转，同「子弹不得追踪/拐弯」那条规则
     cross.x = this.x;
     cross.y = this.y;
-    cross.init(this.laserCross, Math.atan2(this.dirY, this.dirX));
+    cross.init(this.laserCross, this.attack, Math.atan2(this.dirY, this.dirX));
     databus.laserCrosses.push(cross);
   }
 
@@ -226,8 +263,10 @@ export default class Player extends Sprite {
    *   双子初值 18 时操作台实测站桩 3.27 秒死亡（40 血），就是这个数没按这条算出来的代价
    */
   applyBlast(amount) {
+    // 第二条不吃无敌帧的通道同样要过膜：这一条才是「按下去能活过最坏三秒」里最狠的那部分
+    // （双子自溶爆 18 一下、不吃无敌帧），漏掉它的话膜在最需要的那一下上等于不存在
     const dmg = Math.max(1, amount - this.defence);
-    this.hp -= dmg;
+    this.hp -= this.membraneOn() ? membraneDamage(dmg) : dmg;
     if (settings.vibrate) wx.vibrateShort({ type: 'heavy' });
   }
 
@@ -328,6 +367,41 @@ export default class Player extends Sprite {
     const blink = now < this.invincibleUntil && Math.floor(now / 80) % 2;
     // 贴图按「枪口朝右（+x）」出图，这里旋转到索敌方向，人物就永远举枪对准目标
     const angle = Math.atan2(this.dirY, this.dirX);
+
+    // 主动技「薄膜」：画在角色之前，所以人是浮在膜上的（膜是「套在外面的一层」，不是身上的贴图）
+    // ★刻意不照护盾那样画成「贴身一根圈」：护盾那圈在 radius+5，膜再画一圈就会读成同一个东西。
+    //   这里走 Boss 自己那套语言（bossFilm.drawFilm）：有面积的平涂 + 一圈描边，不用渐变也不用 shadowBlur
+    if (this.membraneOn()) {
+      const restP = this.membraneT / MEMBRANE_HOLD;   // 剩余比例：dt 时钟的派生量，面板开着时自然停住
+      const R = this.radius + 12;                     // 28：和护盾的 21 拉开一档，两圈同帧也读得出是两层
+      const spin = (1 - restP) * 0.9;                 // 慢转：相位由剩余时长推出来，不用构造期随机数也不碰墙上时钟
+      ctx.save();
+      ctx.globalAlpha = 0.26;                         // 概念页实测 0.16 在 1× 上几乎只剩描边起作用，平涂那层要给足才读得出「有面积」
+      ctx.beginPath();
+      for (let i = 0; i <= 60; i++) {
+        const a = (i / 60) * Math.PI * 2;
+        const r = R * (1 + 0.13 * Math.cos(5 * a + spin - Math.PI / 2)); // 五叶软边：膜的轮廓不是正圆，才读得出是「一层活的东西」
+        const x = this.x + Math.cos(a) * r;
+        const y = this.y + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = UI.membrane;
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = UI.membrane;
+      ctx.stroke();
+      if (restP < 0.5) { // 剩余时长短弧：只在后半程出现、越接近结束越长（照 bomber.js:137-151 那条口径）
+        ctx.beginPath();
+        ctx.strokeStyle = UI.cream;
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = 'round';
+        ctx.arc(this.x, this.y, R + 4, Math.PI / 2, Math.PI / 2 + (Math.PI / 2) * ((0.5 - restP) * 2));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     if (!this.drawSprite(ctx, angle, blink ? 0.35 : 1)) {
       ctx.fillStyle = blink ? 'rgba(52,152,219,0.4)' : '#3498db';
       ctx.beginPath();

@@ -4,7 +4,7 @@ import Player from './player/index';
 import Arena from './arena/index';
 import Camera from './camera/index';
 import Joystick from './ui/joystick';
-import Hud from './ui/hud';
+import Hud, { skillButtonRect } from './ui/hud';
 import UpgradeScreen from './ui/upgrade';
 import PauseScreen from './ui/pause';
 import HomeScreen from './ui/home';
@@ -46,6 +46,7 @@ export default class Main {
     databus.homeScreen.init(databus, () => { this.startRequested = true; });
 
     wx.onTouchStart((e) => this.handleGameOverTap(e));
+    wx.onTouchStart((e) => this.handleSkillTap(e));
 
     this.lastTime = Date.now();
     this.loop();
@@ -272,7 +273,7 @@ export default class Main {
         databus.chests.push(chest);
       }
     }
-    // Boss 掉落道具（当前只有 boss1 的「巨细胞核」，拾取效果见 chestGrant.js）
+    // Boss 掉落道具：BOSS_DROPS 里哪只挂了行就掉哪只的匣，拾取效果一律见 chestGrant.js 注册表
     if (BOSS_DROPS_ENABLED) {
       const kinds = BOSS_DROPS[e.type];
       if (kinds && kinds.length) {
@@ -381,6 +382,24 @@ export default class Main {
         b.action();
         return;
       }
+    }
+  }
+
+  // 右下主动键（Boss 掉落道具「薄膜核心」）：矩形取自 hud.js 的 skillButtonRect()，
+  // 与那儿的绘制、joystick.js 的让位是同一个函数——三处各量一次迟早对不齐，症状是键点不动
+  // ★三选一面板开着时不响应：面板就是游戏暂停的形态，而膜的计时器按 dt 走、面板期间本来就冻住，
+  //   此时放火等于把一次机会花在停表上——两端必须是同一个结论，不能计时器停了键还能按
+  // ★没拿到道具时不响应：那一格整块没画，触点也不该存在
+  // 不需要 startRequested 那种跨帧延迟：这里不改 screen、不重建局，不会把摇杆带进新一局
+  handleSkillTap(e) {
+    if (databus.screen !== 'game' || databus.isGameOver || databus.isPaused) return;
+    if (databus.upgradeScreen.visible) return;
+    if (databus.player.membrane <= 0) return;
+    const t = e.touches[0];
+    const b = skillButtonRect();
+    if (t.clientX >= b.x && t.clientX <= b.x + b.w &&
+        t.clientY >= b.y && t.clientY <= b.y + b.h) {
+      databus.player.activateMembrane();
     }
   }
 

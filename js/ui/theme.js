@@ -26,6 +26,7 @@ export const UI = {
   toxic: '#C15BD8',        // 中毒状态：赤潮毒素的滴落描边与跳血提示。刻意避开海火自己的青 #22d3ee（毒圈要能在自家池子里被看见）、mint（那是增益）和 red（那是伤害/生命）
   burn: '#FF6B35',         // 燃烧子弹：怪物身上的火苗与跳血字。刻意避开 gold #F5B041（HUD 那一列宝箱道具全是这个金，13px 字号下橙金不分）、red #E74C3C（那是伤害/生命）、toxic #C15BD8（那是赤潮毒素，两套 DoT 必须一眼分开）
   blood: '#E8355C',        // 突变型刺头身上的红斑 + 掉落血块。刻意避开 red #E74C3C（那是伤害飘字，而且喷子的识别色就是它，同色会让突变体读成第二只喷子）、bossChestBand #7B1E12（那是 Boss 专属匣的暗砖红）、toxic #C15BD8（那是赤潮毒素）；往洋红偏一点才既像「血」又不和自家红撞
+  membrane: '#EAECEE',     // 主动技「薄膜」：玩家身上那层膜 + 右下主动键的盘色。★故意取膜王本体那个色（config.js 的 boss3.color），玩家一眼读出「这层东西是从它身上来的」。避开 cream（那是通用面板色，满屏都是，键不突出）和 mint（概念页实测：绿色那层读成「这块地要落毒」，和赤潮池/毒渍的酸绿是同一族语言）
 };
 
 export const R_CARD = 16;   // 卡片圆角
@@ -287,6 +288,33 @@ export function wrapLines(ctx, text, maxW, size) {
 }
 
 /**
+ * 主动技「薄膜」的图形：一圈五叶扰动的软膜 + 中心一颗实心核（膜王本体那层膜的轮廓语言收成一枚图标）
+ * ★形状只在这里定义一次，三个盘面各按自己的底色给 body/mark：
+ *   道具栏（奶白主体，itemGlyph 家族口径）、地上的匣与图鉴徽章（跟随调用方色，icon 口径）、右下主动键（生效时整块盘翻墨，图形必须跟着翻白）
+ * ★为什么不写死奶白：概念页实测（.preview/membrane-concept.html B2 组）——写死 UI.cream 的同一颗图标
+ *   落在象牙白键盘面上只剩一圈描边、落在道具金盘上却是一整块实心，两处读到的是两件事
+ * 调用方负责先 translate 到中心并设好 strokeStyle / lineWidth / lineJoin
+ * @param {Function} body 主体（自己 fill + stroke） @param {Function} mark 内核（只 fill）
+ */
+export function membraneGlyph(ctx, h, body, mark) {
+  const lobe = (R, amp, phase) => {
+    ctx.beginPath();
+    for (let i = 0; i <= 60; i++) {
+      const a = (i / 60) * Math.PI * 2;
+      const r = R * (1 + amp * Math.cos(5 * a + phase));
+      const x = Math.cos(a) * r;
+      const y = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  };
+  // 相位 -π/2：让一个波瓣正朝上，六等分里那颗最像「扣下来一顶」；取 0 时顶上是一道谷，读起来像被咬了一口
+  body(() => lobe(h * 0.92, 0.13, -Math.PI / 2));
+  mark(() => { ctx.beginPath(); ctx.arc(0, 0, h * 0.30, 0, Math.PI * 2); });
+}
+
+/**
  * 代码绘制的卡通图标：统一「居中于 cx/cy，占 s×s，粗描边 + 平涂」
  * color 是主体填充色，描边恒为 UI.ink
  */
@@ -507,6 +535,11 @@ export function icon(ctx, name, cx, cy, s, o = {}) {
       dot(0, 0, h * 0.18, UI.cream);
       break;
     }
+    case 'membrane':
+      // 薄膜核心：五瓣软圈跟调用方颜色平涂 + 中心一颗墨核（地上的匣、图鉴徽章读的就是这一层名字）
+      // 形状在 membraneGlyph 里只定义一次，这一层只负责「主体跟调用方色、内核用墨」这套 icon 家族口径
+      membraneGlyph(ctx, h, solid, (path) => { path(); ctx.fillStyle = UI.ink; ctx.fill(); });
+      break;
     case 'flame':
       // 燃烧子弹：外焰是上尖下圆的火舌（跟随调用方 color 平涂），芯一颗奶白内焰负责读出层次
       // ★内焰不要改成 ink 描边：HUD 这一行图标只有 14px，描边会和外焰轮廓糊成一片
@@ -996,6 +1029,14 @@ export function itemGlyph(ctx, key, cx, cy, s) {
       ctx.fill();
       break;
     }
+    case 'membrane':
+      // 薄膜核心：五瓣软圈奶白实心 + 中心一颗墨核（主动键、地上的匣、详情页三处同一形状，见 membraneGlyph）
+      // ★和上面 shield 那圈空心壳必须拉开：护盾读「挡掉一下」、薄膜读「套在身上的一层皮」，
+      //   两者语义都是减伤，道具栏里看混了这件道具就白做。分开靠的是「实心软圈包着一颗核」对「挖空的圈」
+      // ★墨描边在这块暗红盘上近乎看不见：同上面 laserCross 那条实测（ink 对 bossChestBand 只有 1.42:1），
+      //   所以这里也不补贴纸外框，形状靠奶白主体自己的轮廓站住
+      membraneGlyph(ctx, h, body, mark);
+      break;
     default:
       icon(ctx, key, 0, 0, s, { color: UI.cream });
       break;

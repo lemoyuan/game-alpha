@@ -1,10 +1,11 @@
 import {
-  canvasW, xpForLevel, ITEM_BAR, HUD_TILE, PAUSE_BTN,
+  canvasW, canvasH, xpForLevel, ITEM_BAR, HUD_TILE, PAUSE_BTN,
+  MEMBRANE_BTN, MEMBRANE_HOLD, MEMBRANE_CD,
   STAT_POP_STAGGER, STAT_POP_MS, STAT_POP_RISE, statBoostText,
 } from '../consts';
-import { safeTop, capsuleBottom } from '../render';
+import { safeTop, safeBottom, capsuleBottom } from '../render';
 import { MONSTER_TYPES, BOSS_CHESTS, BOSS_DROPS } from '../npc/monster/config';
-import { UI, FS, R_BTN, sticker, bar, badge, chip, icon, itemGlyph, label, labelMid } from './theme';
+import { UI, FS, R_BTN, BORDER, sticker, bar, badge, chip, icon, itemGlyph, membraneGlyph, label, labelMid } from './theme';
 
 const P = 12; // HUD 与屏幕边缘的安全间距
 const CHIP_W = 64; // 实测字宽：「击杀 1234」10px 粗体 46px、「12:34」13px 粗体 40px，64 宽左右各留 9~12px
@@ -23,6 +24,20 @@ export function hudRowTop() {
 // ★三处必须共用这一个函数，各自算一次迟早对不齐（对不齐的症状是按钮点不动、或摇杆把这一格吞掉）
 export function pauseButtonRect() {
   return { x: canvasW - P - PAUSE_BTN, y: hudRowTop(), w: PAUSE_BTN, h: PAUSE_BTN };
+}
+
+// 右下主动键（Boss 掉落道具「薄膜核心」）的位置：绘制在这里，命中判定在 main.js，摇杆让位在 ui/joystick.js。
+// ★和 pauseButtonRect 同一条规矩：三处共用这一个函数，各自算一次迟早对不齐
+// 贴着底部安全区上沿而不是屏幕底边：全面屏手势条那 20 来像素上按下去会先被系统吃掉
+// ★未获得道具时这一格整块不画（见 drawSkillButton 开头），所以这个矩形只是「有道具时」才有效，
+//   命中侧必须先判 player.membrane —— 凭空多一个能按的地方会被读成摇杆的一部分
+export function skillButtonRect() {
+  return {
+    x: canvasW - P - MEMBRANE_BTN,
+    y: canvasH - safeBottom - P - MEMBRANE_BTN,
+    w: MEMBRANE_BTN,
+    h: MEMBRANE_BTN,
+  };
 }
 
 // 本局已持有的道具：金匣十种按 ITEM_BAR 的固定顺序，Boss 专属匣与 Boss 掉落道具追在后面
@@ -206,6 +221,7 @@ export default class Hud {
     const panelY = rowB + (bosses.length ? 36 : 8);
     this.drawStats(ctx, player, panelY);
     this.drawItems(ctx, databus, panelY);
+    this.drawSkillButton(ctx, player);
 
     // Toast
     const now = Date.now();
@@ -286,5 +302,95 @@ export default class Hud {
         labelMid(ctx, `${it.n}`, bx, by + 0.5, { size: 9, bold: true, color: UI.textOnDark });
       });
     }
+  }
+
+  // 右下主动键（「薄膜核心」）：拿到道具才存在，三态各画各的
+  // ★生效态是整块盘翻成墨色，不是加一圈高光：这一键的承诺是「这 3 秒我不容易死」，
+  //   「现在生效了没有」必须余光扫一眼就有答案（概念页 .preview/membrane-concept.html B2 组定的这块）
+  // ★生效期间不叠冷却扇形：两根钟压进同一个盘就都读不出哪根在走，而此刻只有「膜还剩多久」值得读
+  // ★不画冷却秒数：56px 盘上再压一层 10px 字会把图标啃掉，而能不能按这件事盘色已经说完了
+  drawSkillButton(ctx, player) {
+    if (player.membrane <= 0) return;
+
+    const b = skillButtonRect();
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const r = b.w / 2;
+    const disc = r - 2; // 盘面半径：让出外圈那一圈白贴纸
+    const on = player.membraneOn();
+    const cdLeft = on ? 0 : player.membraneCdT / MEMBRANE_CD;
+    const restP = on ? player.membraneT / MEMBRANE_HOLD : 1;
+
+    // 白色贴纸外框 → 硬投影 → 盘面平涂 → 墨描边，照 badge 的口径：键也是 HUD 控件，得和道具格一个家族
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = UI.sticker;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy + 2, disc, 0, Math.PI * 2);
+    ctx.fillStyle = UI.shadow;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, disc, 0, Math.PI * 2);
+    ctx.fillStyle = on ? UI.ink : UI.membrane;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = UI.ink;
+    ctx.stroke();
+
+    // 键上那颗膜：形状只在 theme.membraneGlyph 里定义一次，这里只给底色对应的一套 body/mark
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = on ? UI.cream : UI.ink;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = cdLeft > 0 ? 0.35 : 1; // 冷却里压暗一层，和扇形叠出「还不能按」
+    membraneGlyph(
+      ctx,
+      r * 0.61,
+      (path) => { path(); ctx.fillStyle = on ? UI.cream : UI.ink; ctx.fill(); ctx.stroke(); },
+      (path) => { path(); ctx.fillStyle = on ? UI.ink : UI.cream; ctx.fill(); }
+    );
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    if (cdLeft > 0) {
+      // 冷却：暗扇形从 12 点顺时针盖住「还没好的那段」，随冷却走完自己收窄到没有
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, disc, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * cdLeft);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(10,12,24,0.55)';
+      ctx.fill();
+      return;
+    }
+
+    if (on) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 4.5, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(234,236,238,0.75)';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      // ★剩余时长短弧的口径照 js/player/bomber.js:137-151：只在后半程出现、90°、越接近结束越长。
+      //   刚按下去那 1.5 秒不需要读条，「快没了」才需要
+      if (restP < 0.5) {
+        ctx.beginPath();
+        ctx.strokeStyle = UI.cream;
+        ctx.lineWidth = 3;
+        ctx.arc(cx, cy, r + 4.5, Math.PI / 2, Math.PI / 2 + (Math.PI / 2) * ((0.5 - restP) * 2));
+        ctx.stroke();
+      }
+      return;
+    }
+
+    // 就绪：一圈虚线 = 「这个位置现在能按」。虚线不是实心环：环要留给生效那一态
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 4.5, 0, Math.PI * 2);
+    ctx.strokeStyle = UI.cream;
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 }

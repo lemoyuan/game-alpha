@@ -33,4 +33,13 @@ export const CHEST_GRANTS = {
     databus.player.laserCross += 1;
     databus.bossChests.core_seafire = (databus.bossChests.core_seafire || 0) + 1;
   },
+  // Boss 掉落道具「薄膜核心」：右下那枚主动键从这一刻起才存在。
+  // ★写 = 1 而不是 += 1：膜王一局只死一只，这件不叠层——player.membrane 只取 0/1，
+  //   没有任何常量乘它（减伤比例 MEMBRANE_REDUCE 是定值）。写成 += 会让以后来读的人以为存在「两层膜更硬」这档强度
+  // ★和前两件的分工各不相同：巨细胞核涨属性（所以由 applyBoost 弹 +x 瀑布）、海火核心被动挨打触发（只多一层计数），
+  //   这一件既不涨属性也不自动放——它给的是一个要你伸手按的键，拾取那一刻的反馈因此只有 toast
+  core_biofilm: (databus) => {
+    databus.player.membrane = 1;
+    databus.bossChests.core_biofilm = (databus.bossChests.core_biofilm || 0) + 1;
+  },
 };

@@ -1,7 +1,7 @@
 import { UI } from './theme';
-import { pauseButtonRect } from './hud';
+import { pauseButtonRect, skillButtonRect } from './hud';
 
-const PAD = 8; // 暂停按钮的可点范围向外扩这么多：手指不必精确落在 26 像素的方贴上
+const PAD = 8; // HUD 触点向外扩这么多：手指不必精确落在那几枚 26~56 像素的贴面上
 
 export default class Joystick {
   constructor() {
@@ -22,9 +22,15 @@ export default class Joystick {
       if (this.active || this.touchId !== null) return;
       if (databus.isPaused) return; // 暂停页与三选一开着时，屏幕底下不该有东西被拖动
       const t = e.touches[0];
-      const pb = pauseButtonRect();
-      if (t.clientX >= pb.x - PAD && t.clientX <= pb.x + pb.w + PAD
-        && t.clientY >= pb.y - PAD && t.clientY <= pb.y + pb.h + PAD) return;
+      // 摇杆要让位的 HUD 触点。★两枚矩形都由 hud.js 算（pauseButtonRect / skillButtonRect），
+      //   这里只列名单：以后加第三枚键只要补一项，各自量一遍迟早对不齐
+      // ★主动键只在画出来的时候才让位：道具没拿到时那一格是空的，凭空吞掉一块起手位比键点不动更难查
+      const blocks = [pauseButtonRect()];
+      if (databus.player.membrane > 0) blocks.push(skillButtonRect());
+      for (const rc of blocks) {
+        if (t.clientX >= rc.x - PAD && t.clientX <= rc.x + rc.w + PAD
+          && t.clientY >= rc.y - PAD && t.clientY <= rc.y + rc.h + PAD) return;
+      }
       this.active = true;
       this.touchId = t.identifier;
       this.baseX = t.clientX;

@@ -95,6 +95,11 @@
   <button data-nav="grantcross">授予海火核心（受伤放十字激光）</button>
   <button data-nav="chestcross">摆一只海火掉落匣</button>
   <button data-nav="hurt">挨一下（触发十字激光）</button>
+  <button data-nav="grantmem">授予薄膜核心（右下主动键）</button>
+  <button data-nav="chestmem">摆一只薄膜掉落匣</button>
+  <button data-nav="membrane">按一下主动键（走 activateMembrane）</button>
+  <button data-nav="tapmem">模拟手指点键位（走触点链路）</button>
+  <button data-nav="allitems">凑满所有道具并打开详情页（看溢出与滚动）</button>
   <button data-nav="mutant">摆一只突变刺头（血斑 + 血块）</button>
   <div class="grp">战斗中</div>
   <button data-nav="stand">站桩（停自动跑，让 Boss 上桌）</button>
@@ -287,6 +292,35 @@ function sendStick(type, x, y) {
   ev.__auto = true;
   stage.dispatchEvent(ev);
 }
+
+// 模拟一记真实手指点击：入参是【画布逻辑坐标】，内部换算成 stage 的 CSS 坐标再发
+// ★sendStick 的 x/y 是 CSS 坐标（它只做 r.left + x，不乘缩放），所以这里必须按 stage 逻辑尺寸与
+//   getBoundingClientRect 的比值换算 —— 直接喂逻辑坐标会整偏一档，验出来的「键点不动」是台的锅不是游戏的锅
+// ★松手延后一拍：同一拍里发完 down/up，触点链路里按帧读状态的那些守卫就读不到这一下了
+window.__tap = (lx, ly, holdMs = 90) => {
+  const r = stage.getBoundingClientRect();
+  const sx = r.width / stage.width;
+  const sy = r.height / stage.height;
+  sendStick('pointerdown', lx * sx, ly * sy);
+  setTimeout(() => sendStick('pointerup', lx * sx, ly * sy), holdMs);
+};
+
+// 模拟一记真实手指拖动：从画布逻辑坐标 (lx, ly) 起手，纵向拖 dy 个逻辑像素后松手
+// ★分几步发 pointermove 而不是一步到位：暂停详情页认的是「按下那一刻的基准 + 累计位移」，
+//   一步也能滚，但过阈值那一帧的行为就拍不到了，而 DRAG_SLOP 那段判的正是「先小动再大动」
+// ★坐标换算和 __tap 同一套：sendStick 收的是 stage 的 CSS 坐标，喂逻辑坐标会整偏一档
+window.__drag = (lx, ly, dy, holdMs = 400, steps = 6) => {
+  const r = stage.getBoundingClientRect();
+  const sx = r.width / stage.width;
+  const sy = r.height / stage.height;
+  const px = lx * sx;
+  const py = ly * sy;
+  sendStick('pointerdown', px, py);
+  for (let i = 1; i <= steps; i++) {
+    setTimeout(() => sendStick('pointermove', px, py + (dy * sy * i) / steps), (holdMs * i) / (steps + 1));
+  }
+  setTimeout(() => sendStick('pointerup', px, py + dy * sy), holdMs);
+};
 
 function holdStick() {
   // 站桩偏好对所有开局按钮生效：自动跑会把 Boss 一直甩在身后（实测距离稳定 400+，射程 320 全空），
@@ -503,7 +537,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
     }
     // 宝箱道具这几条不打断正在打的局：只有停在首页或已结算时才新开一局
     if (nav === 'grantpet' || nav === 'chestpet' || nav === 'chestplain' || nav === 'grantcore' || nav === 'chestcore'
-      || nav === 'grantcross' || nav === 'chestcross') {
+      || nav === 'grantcross' || nav === 'chestcross' || nav === 'grantmem' || nav === 'chestmem') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { clampToCoast } = await import('./js/arena/coast.js');
       const { default: Chest } = await import('./js/npc/chest.js');
@@ -540,6 +574,17 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       } else if (nav === 'chestcross') {
         place('core_seafire');
         say('海火掉落匣已摆在右前方：走过去踩，之后每次真正掉血从身上放出一道旋转十字（盾挡掉的那一下不放）');
+      } else if (nav === 'grantmem') {
+        const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+        const { skillButtonRect } = await import('./js/ui/hud.js');
+        const { MEMBRANE_HOLD, MEMBRANE_CD } = await import('./js/consts.js');
+        CHEST_GRANTS.core_biofilm(databus); // 绕过掉落：授予这一刻只多出一枚键，减伤要等按下去
+        const b = skillButtonRect();
+        say(`薄膜核心已授出（只有一层，不叠）：右下角多出一枚 ${b.w}×${b.h} 的主动键，键心 (${Math.round(b.x + b.w / 2)}, ${Math.round(b.y + b.h / 2)})；`
+          + `按下去 ${MEMBRANE_HOLD / 1000} 秒内受击 / 爆发 / 中毒一起减半，${MEMBRANE_CD / 1000} 秒只能按一次`);
+      } else if (nav === 'chestmem') {
+        place('core_biofilm');
+        say('薄膜掉落匣已摆在右前方：踩下去那一刻右下角才出现主动键（没拿到之前那一格整块不画）');
       } else {
         place(); // 不传 kind = 走七种随机加成的普通金匣
         say('普通金匣已摆在右前方');
@@ -568,8 +613,68 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
         return;
       }
       const fired = databus.laserCrosses.length - beforeCross;
-      say(`掉 ${beforeHp - p.hp} 血（余 ${p.hp}）→ 放出 ${fired} 根十字，${p.laserCross} 层`
+      // 【膜中】这一段是给主动键看的：膜生效期间每一下仍然要掉血（Math.max(1,…) 兜底），
+      //   掉血才是海火核心的触发口 —— 少了这个标记就只能靠猜「这半血是膜减过还是没减」
+      say(`掉 ${beforeHp - p.hp} 血（余 ${p.hp}）${p.membraneOn() ? '【膜中】' : ''}→ 放出 ${fired} 根十字，${p.laserCross} 层`
         + (fired ? '' : `（冷却还剩 ${Math.round(p.laserCrossT)}ms）`));
+      return;
+    }
+    // 主动键验收·逻辑口：走 activateMembrane() 而不是直接写 membraneT —— 验的是「按下去发生了什么」，不是字段
+    if (nav === 'membrane') {
+      if (databus.screen !== 'game' || databus.isGameOver) startRun();
+      const p = databus.player;
+      const { MEMBRANE_HOLD, MEMBRANE_CD } = await import('./js/consts.js');
+      const ok = p.activateMembrane();
+      say(ok
+        ? `膜已开 ${MEMBRANE_HOLD}ms：受击 / 爆发 / 中毒三条通道一起减半，冷却 ${MEMBRANE_CD / 1000} 秒在放火这一刻就顶满`
+        : `空按（${p.membrane <= 0 ? '还没拿到道具'
+            : p.membraneT > 0 ? `膜还在身上，剩 ${Math.round(p.membraneT)}ms`
+            : `冷却还剩 ${(Math.round(p.membraneCdT / 100) / 10).toFixed(1)} 秒`}），两个数都不消耗`);
+      return;
+    }
+    // 主动键验收·触点口：真发一记 pointerdown/up 到键心，整条链路（wx 触摸 → main.handleSkillTap → 矩形 → activateMembrane）都走
+    if (nav === 'tapmem') {
+      if (databus.screen !== 'game' || databus.isGameOver) {
+        say('先开始一局（这一条不打断结算页）');
+        return;
+      }
+      const { skillButtonRect } = await import('./js/ui/hud.js');
+      const b = skillButtonRect();
+      const cx = Math.round(b.x + b.w / 2);
+      const cy = Math.round(b.y + b.h / 2);
+      const p = databus.player;
+      const read = () => `${Math.round(p.membraneT)}ms/${Math.round(p.membraneCdT)}ms`;
+      const before = read();
+      window.__tap(cx, cy);
+      setTimeout(() => {
+        const after = read();
+        say(`点键心 (${cx}, ${cy})：膜/冷却 ${before} → ${after}`
+          + (after !== before ? ' → 触点链路通了' : ` → 这一下没改状态（${p.membrane <= 0 ? '本来就没有键' : '空按，或摇杆把这一格抢走了'}）`));
+      }, 220);
+      return;
+    }
+    // 详情页溢出的最坏情况：十种金匣加成 + 三件 Boss 掉落道具一次凑齐，再把这一页打开
+    // ★为什么凑而不打：真局凑满 13 件要跑十几分钟，而这一页要看的是「溢出之后长什么样、拖得动多少」
+    if (nav === 'allitems') {
+      if (databus.screen !== 'game' || databus.isGameOver) startRun();
+      const { BONUSES } = await import('./js/npc/chest.js');
+      const { CHEST_GRANTS } = await import('./js/npc/chestGrant.js');
+      const { ownedItems } = await import('./js/ui/hud.js');
+      const d = databus;
+      // ★必须按 b.step 加而不是裸 +1：pickupRange 存的是像素（step = XP_PICKUP_STEP），
+      //   裸加 1 会让 ownedItems 算出 0.033 这种小数层数，道具栏那枚徽章就写成「×0.03333333」溢出 chip
+      BONUSES.forEach((b, i) => { d.player[b.key] += b.step * (1 + (i % 2)); });
+      CHEST_GRANTS.core_cmv(d);
+      CHEST_GRANTS.core_seafire(d);
+      if (d.player.membrane <= 0) CHEST_GRANTS.core_biofilm(d);
+      const items = ownedItems(d);
+      const L = d.pauseScreen.layout(items);
+      d.pauseScreen.show();
+      const maxScroll = Math.max(0, L.contentH - L.bodyH);
+      say(`详情页 ${items.length} 行：内容 ${L.contentH}px、视口 ${L.bodyH}px、最大滚动 ${maxScroll}px`
+        + (maxScroll > 0
+          ? `（拖得动 ${maxScroll}px，试 __drag(${Math.round(L.x + L.w / 2)}, ${Math.round(L.bodyY + 60)}, -${maxScroll})）`
+          : '（没溢出，这一档不该出现滚动条）'));
       return;
     }
     // 激怒态验收：不打断当前局，走标准 takeDamage 通路放倒还在场的兄（掉落/经验/回收全是真的）

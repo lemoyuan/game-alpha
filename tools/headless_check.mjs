@@ -97,7 +97,10 @@ const ctx = makeCtx();
 const canvas = { width: 390, height: 844, getContext: () => ctx, toDataURL: () => '' };
 const touchHandlers = { start: [], move: [], end: [], cancel: [] };
 const store = new Map();
-const winInfo = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 47 }, pixelRatio: 2 });
+// ★safeArea.bottom 必须给：右下那颗主动键贴着底部安全区上沿，源码在 bottom 缺失时按「没有底部安全区」处理，
+//   于是键被画到 canvas 最下边（844 − 12 − 56），和真机差 24 像素 —— 命中/摇杆让位两条读数就都不是真机上那一块。
+//   820 = 浏览器实测的全面屏底边留白 24（render.js:14 的 canvasHeight − safeArea.bottom）
+const winInfo = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 47, bottom: 820 }, pixelRatio: 2 });
 
 let firstCanvas = true;
 
@@ -222,6 +225,21 @@ if (LASER !== undefined && LASER !== '1') {
   else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss2: [], $1boss2Parked: [')}`);
 }
 
+// 薄膜核心（主动键）单独一头旋钮，写法照抄上面的 LASER：MEMBRANE=0 把副本里 BOSS_DROPS.boss3 那一行
+// 挪到表不读的兄弟键上，于是这一件在游戏内整条不可达（不掉匣、不授予、键永远画不出来也按不下去），
+// 而 id 仍然进 CHEST_KIND_BY_ID —— 注册面扫描照旧覆盖它，「关掉」那一端量的是掉落与按键链，不是删表。
+// ★同样必须先从 BOSS_DROPS 切一刀：config.js 的 BOSS_CHESTS 里也有一行 boss3: []，命中的是谁取决于切法
+const MEMBRANE = process.env.MEMBRANE;
+if (MEMBRANE !== undefined && MEMBRANE !== '1') {
+  const f = path.join(COPY, 'npc', 'monster', 'config.js');
+  const code = fs.readFileSync(f, 'utf8');
+  const at = code.indexOf('export const BOSS_DROPS = {');
+  const re = /^(\s*)boss3: \[/m;
+  const tail = at < 0 ? '' : code.slice(at);
+  if (!re.test(tail)) errors.push(`副本 config.js 的 BOSS_DROPS 里找不到 boss3: [ ，MEMBRANE=${MEMBRANE} 这一组等于没跑`);
+  else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss3: [], $1boss3Parked: [')}`);
+}
+
 // 双子的出场时刻也改副本钉值：TWINS=1 把 boss4 的最早出场时刻从 480 秒压到 150 秒。
 // ★必须有这一条：480 那一档走的是「上一只死 + BOSS_RESPAWN_GAP 120 秒」的节奏，
 //   900 秒的测试局很可能整局都不出场，那样下面每一条双子断言都是空跑 —— 读到的零是抽样零，不是代码零
@@ -247,7 +265,9 @@ const {
 } = await import(fileUrl(path.join(COPY, 'npc', 'monster', 'config.js')));
 const { CHEST_GRANTS } = await import(fileUrl(path.join(COPY, 'npc', 'chestGrant.js')));
 // HUD 左栏那七行的 key：BOSS_DROPS 的 boost 不许有落在这七行之外的项（见下面的注册面扫描）
-const { STAT_ROWS } = await import(fileUrl(path.join(COPY, 'ui', 'hud.js')));
+// skillButtonRect：右下那颗主动键唯一的矩形来源。★断言必须调这个函数拿坐标，不许自己按常量重算 ——
+//   绘制/命中/摇杆让位三处共用的就是它，重算出来的那一块和真机上的不是同一块，探针就成了空跑
+const { STAT_ROWS, skillButtonRect, pauseButtonRect, ownedItems } = await import(fileUrl(path.join(COPY, 'ui', 'hud.js')));
 const STAT_KEYS = STAT_ROWS.map((r) => r.key);
 const Enemy = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'enemy.js')))).default;
 const {
@@ -257,12 +277,14 @@ const {
   TURRET_CD, TURRET_RANGE, TURRET_MUZZLE_LEN, TURRET_PIVOT_Y, TURRET_BULLET_RADIUS, TURRET_BULLET_COLOR, turretDamage, BULLET_RANGE_BUFFER,
   STAT_CORE_BOOST, statBoostText, STAT_POP_STAGGER, STAT_POP_MS, UPGRADES, LEVEL_UP_BONUS,
   LASER_CROSS_TELEGRAPH, LASER_CROSS_FIRE, LASER_CROSS_FADE, LASER_CROSS_SPIN,
-  LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_DMG, LASER_CROSS_HIT_GAP, LASER_CROSS_CD, laserCrossDamage,
+  LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_DMG_BASE, LASER_CROSS_DMG_ATK, LASER_CROSS_HIT_GAP, LASER_CROSS_CD, laserCrossDamage,
+  MEMBRANE_REDUCE, MEMBRANE_HOLD, MEMBRANE_CD, MEMBRANE_BTN, membraneDamage,
   canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
 // 卡片顶边要避开的那条线：wx 桩里给的是刘海机（safeTop 47 / 胶囊底边 83），详情页排版探针读这两个数
-const { safeTop, capsuleBottom } = await import(fileUrl(path.join(COPY, 'render.js')));
+// safeBottom 是同一件事的底边版本：右下那颗主动键贴着它上沿，下面 skillButtonRect 那组断言读它
+const { safeTop, safeBottom, capsuleBottom } = await import(fileUrl(path.join(COPY, 'render.js')));
 const { BONUSES } = await import(fileUrl(path.join(COPY, 'npc', 'chest.js')));
 const Player = (await import(fileUrl(path.join(COPY, 'player', 'index.js')))).default;
 // 这几件实体只要 import 就够（纯检直接驱动它们的原型，不经过主循环）
@@ -311,11 +333,32 @@ let crossDmg = 0;              // 十字累计造成的伤害：报 DPS 用
 let crossTexts = 0;            // 十字扫射期间抽到的飘字条数：静默改造后恒为 0，非 0 即红（见海火核心那组断言）
 const crossFireAt = [];        // 每次放出的时刻（毫秒，DT 累加）：相邻间隔用来验 CD
 const crossHpLossAt = [];      // 每次「真正掉血」的时刻：和 crossFireAt 配对用，一根十字必须对上一次掉血
-const crossInitLayers = [];    // 每根十字 init 时拿到的层数：验伤害公式与「层数只来自拾取」
+const crossInits = [];        // 每根十字 init 时拿到的（层数、传入的攻击力、场上此刻的攻击力、算出的伤害）：验伤害公式同源、验触发口传的是 player.attack、验「层数只来自拾取」
 let insideCross = false;       // 正在十字的 settle 里：这段时间的 Enemy.takeDamage 都算十字的战果
 let frameMs = 0;               // 主循环当前的仿真时刻：钩子只在装钩子那一帧闭包一次 i，读数必须走这个
+// —— Boss 掉落道具「薄膜核心」（全游戏第一个主动键）的账本 ——
+// ★和前两本（弹字 / 十字）同样分家：这一件买的不是属性也不是层数，而是「一局能按下几次、按下之后
+//   三条掉血通道各结多少」，读数全在结算点上。混进别的账里，任何一端归零都分不清是哪件出的事
+let sawMembraneChest = false;   // boss3 掉过「薄膜核心」那只匣（掉落口）
+let boss3Drops = 0;             // 膜王死了几只：0 时上面那条的零是抽样零，不能当断链判
+let membraneGrants = 0;         // CHEST_GRANTS.core_biofilm 被调的次数 = 拾取了几次
+let membraneFrames = 0;         // 膜生效的帧数：MEMBRANE=0 那一组必须与按压次数一起为 0
+let membranePresses = 0;        // 成功按压次数（含测台的自动按臂）
+let membraneGamePresses = 0;    // 其中经由 wx 触点 → main.js 那一路的：这条才是「键真接上了」的凭据
+let membraneRefused = 0;        // 空按（返回 false）次数：非 0 才说明冷却/持续那两道门真在挡
+let memPressLeaks = 0;          // 空按却动了 membraneT / membraneCdT 的次数：A5
+const membranePressAt = [];     // 每次成功按压的时刻（frameMs）：相邻间隔验冷却下界
+const memHitRows = [];          // 受击通道逐笔账 { amount, defence, on, lost }
+const memBlastRows = [];        // 爆发通道逐笔账 { amount, defence, on, lost }
+const memPoisonRows = [];       // 中毒跳通道逐笔账 { amount, on, lost }：这条不吃防御力，字段也不同
+let memClockProbed = false;     // 冻结探针是否已跑（一局只跑一次）
+let memClock = null;            // 探针读数 { t0, t1, c0, c1, t2, c2 }
+let memTapProbed = false;       // 真手指探针是否已跑
+let memTapLanded = false;       // 键位中心那一下是否真的放了火
+let memTapStrayed = false;      // 偏出矩形的场外那一下是否也放了火（必须恒 false）
+let memCaller = 'game';         // 调用方标记：测台自动按臂那一下按 'harness'，其余都是真链路
 // BOSS_DROPS 全表的 id：判「这只匣子是不是掉落道具」按 id 认，不按「有没有某个字段」认。
-// ★LASER=0 那一组把 boss2 那一行挪到了兄弟键 boss2Parked 上，Object.values 照样扫得到，
+// ★LASER=0 / MEMBRANE=0 那两组把各自那一行挪到了兄弟键 boss2Parked / boss3Parked 上，Object.values 照样扫得到，
 //   所以这张 id 集在两端都完整 —— 掐断的是掉落口，不是注册面
 const DROP_IDS = new Set();
 for (const kinds of Object.values(BOSS_DROPS)) for (const k of kinds) DROP_IDS.add(k.id);
@@ -437,6 +480,9 @@ let suppressedTexts = 0; // 被上限吃掉的飘字数
 let gameOverAt = -1;    // 第一次 game over 的游戏时刻（秒），-1 = 活到了最后：
                         //   玩家一死 main.js 就不再驱动 databus.update，这一秒之后的每一条实场读数都是冻结帧上的旧值
 
+// 站桩的 bot 会不会真死：默认 1 = 每帧把血回满（其余每一件道具的账都建立在这根钉子上，因为世界一冻
+// 就再也读不到数）。HPPIN=0 关掉它，只给主动键那两臂读「死亡时刻 / 整局长度」用
+const HPPIN = Number(process.env.HPPIN === undefined ? 1 : process.env.HPPIN);
 // 幸运值钉成定值再用：bot 每帧 pick(0) 抽到的卡里可能就有幸运，
 // 不钉住的话 LUCK=0 与 LUCK=4 那两组实测间隔量的其实是两种随机 build，A/B 直接不成立
 const LUCK = Number(process.env.LUCK || 0);
@@ -672,14 +718,21 @@ const zoneTintPeak = new Map();   // tint → 并发峰值：★赤潮那一桶�
   else CHEST_GRANTS.core_seafire = (db) => { crossGrants++; return orig(db); };
 }
 {
+  // 薄膜核心的授予计数：同一条理由先钉一次注册（漏登记时拾取会当场 TypeError，
+  //   而这一件的症状更阴 —— 掉了匣、开了、什么都不涨，HUD 也永远不长出那颗键）
+  const orig = CHEST_GRANTS.core_biofilm;
+  if (!orig) errors.push('CHEST_GRANTS 里没有 core_biofilm：chest.js 那句裸 CHEST_GRANTS[kind](databus) 会在拾取瞬间抛 TypeError');
+  else CHEST_GRANTS.core_biofilm = (db) => { membraneGrants++; return orig(db); };
+}
+{
   const proto = LaserCross.prototype;
   const origInit = proto.init;
   proto.init = function (...args) {
     crossFires++;
     crossFireAt.push(frameMs);
     const r = origInit.apply(this, args);
-    // 读的是 origInit 跑完之后的 this.damage：公式若断在 consts，这里当场和 laserCrossDamage 对不上
-    crossInitLayers.push({ layers: args[0], dmg: this.damage });
+    // 读的是 origInit 跑完之后的 this.damage：公式若断在 consts、或触发口传的不是 player.attack，这里当场对不上
+    crossInits.push({ layers: args[0], attack: args[1], live: databus.player.attack, dmg: this.damage });
     return r;
   };
   const origSettle = proto.settle;
@@ -783,6 +836,74 @@ for (let i = 0; i < frames; i++) {
       return orig.call(this, amount);
     };
   }
+  // —— 主动键「薄膜核心」的实场账：三条掉血通道逐笔记 { 传入量, 当时防御, 膜在不在, 实际掉血 }（A2）——
+  // ★分成三条判而不是一条「总伤害」：漏接哪一条就只红哪一条。混成一笔账时，
+  //   「毒跳那行掉了 membraneDamage」只会让总数偏小一点点，而偏小和「这一局恰好没什么毒」长得一模一样
+  // ★都是包实例不包原型：下面那些纯检会直接 Player.prototype.xxx.call(假玩家)，挂原型会把纯检计进现场账
+  // ★on 一律在调用【之前】读：takeDamage / applyBlast 内部不动 membraneT，只有 player.update 顶部那两行会减它。
+  //   唯一反过来的是中毒跳（见下面的 update 包装）：它自己就发生在减表之后
+  if (p && !p.__memHitHooked) {
+    p.__memHitHooked = true;
+    const orig = p.takeDamage;
+    p.takeDamage = function (amount, now, db) {
+      const on = this.membraneOn();
+      const hp0 = this.hp;
+      const r = orig.call(this, amount, now, db);
+      // 只在真掉血时记：无敌帧压掉的那一下、护盾挡掉的那一下都不结算，也就都不是膜的一条样本
+      if (hp0 !== this.hp) memHitRows.push({ amount, defence: this.defence, on, lost: hp0 - this.hp });
+      return r;
+    };
+  }
+  if (p && !p.__memBlastHooked) {
+    p.__memBlastHooked = true;
+    const orig = p.applyBlast;
+    p.applyBlast = function (amount) {
+      const on = this.membraneOn();
+      const hp0 = this.hp;
+      const r = orig.call(this, amount);
+      memBlastRows.push({ amount, defence: this.defence, on, lost: hp0 - this.hp });
+      return r;
+    };
+  }
+  if (p && !p.__memPoisonHooked) {
+    p.__memPoisonHooked = true;
+    const orig = p.update;
+    p.update = function (dt, db) {
+      const tick0 = this.poisonTickLeft;
+      const left0 = this.poisonLeft;
+      const pd0 = this.poisonDamage;
+      const hp0 = this.hp;
+      const r = orig.call(this, dt, db);
+      // 跳血的凭据是 poisonTickLeft 的上涨沿（结算那行先 += POISON_TICK 再往下走），不是预测「这帧该不该跳」：
+      //   预测等于把 update 里那三行照抄一遍，谁改了节拍这条会跟着改错而永远绿
+      // ★只在瓶子不管事的时候记账：pumpVial 也在同一次 update 里往 hp 上加钱，开了 VIAL 时
+      //   hp0 − hp 是两笔账的差，量不出毒这一笔（VIAL 默认 0，见上面的钉值）
+      if (left0 > 0 && this.poisonTickLeft > tick0 && this.vial <= 0) {
+        // on 在调用之后读：膜的两个计时器在 update 顶部就减完了，中毒跳排在它后面，问到的就是结算那一刻
+        memPoisonRows.push({ amount: pd0, on: this.membraneOn(), lost: hp0 - this.hp });
+      }
+      return r;
+    };
+  }
+  // 按压的账：成功/空按都从这里过，所以「空按不许动计时器」（A5）也在这一层判
+  if (p && !p.__memPressHooked) {
+    p.__memPressHooked = true;
+    const orig = p.activateMembrane;
+    p.activateMembrane = function () {
+      const t0 = this.membraneT;
+      const c0 = this.membraneCdT;
+      const r = orig.call(this);
+      if (r) {
+        membranePresses++;
+        membranePressAt.push(frameMs);
+        if (memCaller === 'game') membraneGamePresses++;
+      } else {
+        membraneRefused++;
+        if (this.membraneT !== t0 || this.membraneCdT !== c0) memPressLeaks++;
+      }
+      return r;
+    };
+  }
   // 双子实例钩子：detonateSelf 只在实例上包一次（同上，纯检直接驱动原型），起爆次数才算得准
   for (const e of databus.enemys) {
     if (e.type !== 'boss4' || e.__burstHooked) continue;
@@ -798,7 +919,10 @@ for (let i = 0; i < frames; i++) {
   //   现场读数会永远是 0，而那个 0 和「功能根本没接上」长得一模一样
   // VIAL 同理：输送那条节拍只在「残血」时才走，全程钉满的话 vialOutTicks 恒为 0，
   //   而这份 0 和「pumpVial 压根没接上」同样分不开
-  if (p) p.hp = (LEECH > 0 || VIAL > 0) ? p.maxHp - 4 : p.maxHp;
+  // ★HPPIN=0 把这根钉子整条关掉：主动键的承诺是「按下去能活过最坏三秒」，而这句话在每帧回满血的世界里
+  //   根本没有真值可读 —— 只有让站桩的 bot 真会死，ON/OFF 两臂的死亡时刻才量得出差别（见下面报表那行）
+  //   默认仍然是 1：那根钉子是其余所有账（十字 / 毒 / 爆发 / 嗜血）不被死亡冻住的前提
+  if (HPPIN && p) p.hp = (LEECH > 0 || VIAL > 0) ? p.maxHp - 4 : p.maxHp;
   if (p) p.luck = LUCK; // 金匣概率是幸运的单变量函数，钉住它才谈得上量间隔
   // 燃烧层数不能照抄 luck 那种「每帧顶部赋值」：金匣的 player[key] += step 就发生在同一帧的
   // chests.update 里、排在 player.update 之前，赋值会漏出一帧。漏出不要紧，燃烧能在怪身上烧满 5 秒，
@@ -848,6 +972,34 @@ for (let i = 0; i < frames; i++) {
     if (i * DT < 5) p.companions = Math.max(p.companions, 1);
     else if (databus.companions.length) { p.companions = 0; databus.companions.length = 0; }
   }
+  // —— 主动键的两臂：先探一次「真手指」，再让自动按臂每帧问一遍 ——
+  // 探针的窗口是「道具已到手 + 膜没在 + 冷却空」那一帧，整局只做一次，且排在自动按之前抢那一下
+  //   （否则这个窗口会被自动按臂在同一帧消费掉，探针永远轮不到）
+  // ★坐标一律从 skillButtonRect() 取，不自己按常量重算：绘制 / 命中 / 摇杆让位三处共用的就是这一个函数，
+  //   重算出来的那块和真机上按到的那块可以差一整格，而读数照样「看着合理」
+  if (!memTapProbed && p && p.membrane > 0 && p.membraneT === 0 && p.membraneCdT === 0
+    && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+    memTapProbed = true;
+    const b = skillButtonRect();
+    // 先点场外：这是整局唯一一次「场外那一下必须什么都不干」还判得动的时刻 —— 按成一次以后膜就起来了，
+    //   之后再点都会被持续/冷却两道门挡掉，那种「没反应」和「命中判定根本不在矩形上」长得一模一样
+    const n0 = membraneGamePresses;
+    fire('start', touch(b.x + b.w / 2, b.y - 20, 9));
+    memTapStrayed = membraneGamePresses > n0;
+    const n1 = membraneGamePresses;
+    fire('start', touch(b.x + b.w / 2, b.y + b.h / 2, 9));
+    memTapLanded = membraneGamePresses > n1;
+  }
+  // 自动按臂 = 一个「冷却一空就按」的机器人。★默认开着，两个原因：
+  //   1) 膜只在按下那 3 秒里存在，不自动按的话 A2 三条通道根本凑不齐「膜内」的样本；
+  //   2) MEMBRANE=0 那一臂要的恰好是「按 0 次、膜 0 帧」，两臂共用同一个入口，差别只在道具可达不可达
+  // ★走 activateMembrane() 而不是直接写 membraneT：这条臂量的是那三道门本身，
+  //   负向测试把「放火那一刻顶满冷却」删掉时，下面的按压间隔会立刻露出来
+  if (p && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+    memCaller = 'harness';
+    p.activateMembrane();
+    memCaller = 'game';
+  }
   // TWINS=1：把 Boss 指针按到 boss4 那一行。★只钉 config 里的 time 不够 —— 指针要先走完
   //   boss1/2/3 三行，每行都得等上一只死了再攒满 120 秒冷却，短局里那条门根本过不去，
   //   双子一次不出场而每一条双子断言都读成"通过"，那就是空跑
@@ -890,6 +1042,7 @@ for (let i = 0; i < frames; i++) {
       if (DROP_IDS.has(c.kindDef.id)) {
         sawDropChest = true;
         if (c.kindDef.id === 'core_seafire') sawCrossChest = true;
+        if (c.kindDef.id === 'core_biofilm') sawMembraneChest = true;
       }
       if (c.kindDef.boost) sawStatChest = true;
       c.x = p.x;
@@ -954,6 +1107,9 @@ for (let i = 0; i < frames; i++) {
     if (p.poisonLeft > 0) poisonFrames++;
     if (p.poisonTickLeft > prevPoisonTick) poisonTicks++;
     prevPoisonTick = p.poisonTickLeft;
+    // 膜生效帧数：世界冻住（玩家已死）之后 membraneOn() 读的是最后一次的真值，别再往上涨，
+    //   否则「按 0 次却有 N 帧膜」那条零断言会被冻帧顶红
+    if (!databus.isGameOver && p.membraneOn()) membraneFrames++;
   }
   const up = databus.upgradeScreen;
   if (up && up.visible && !up.selectAnim) {
@@ -1002,6 +1158,7 @@ for (let i = 0; i < frames; i++) {
     if (databus.enemys.includes(dyingBoss)) continue;
     bossDrops++;
     if (dyingBoss.type === 'boss2') boss2Drops++;
+    if (dyingBoss.type === 'boss3') boss3Drops++;
     if (firstBossDeathAt < 0) firstBossDeathAt = i * DT;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
@@ -1098,7 +1255,37 @@ for (let i = 0; i < frames; i++) {
       + ` boss=${b ? b.type : '-'}${b && b.state ? ':' + b.state : ''}`
       + ` film=${b && b.film !== undefined ? Math.round(b.film) : '-'}`
       + ` lasers=${databus.lasers.length} zones=${databus.zones.length} pets=${databus.bossPets.length} burning=${burning}`
-      + ` twins=${twins}${twins && twinsEnraged ? '(enraged)' : ''} vesicles=${databus.vesicles.length} cross=${databus.laserCrosses.length}`);
+      + ` twins=${twins}${twins && twinsEnraged ? '(enraged)' : ''} vesicles=${databus.vesicles.length} cross=${databus.laserCrosses.length}`
+      + ` membrane=${p && p.membraneOn() ? 'on' : 'off'} 键=${skillButtonRect().x.toFixed(0)},${skillButtonRect().y.toFixed(0)}`);
+  }
+  // A3 时钟冻结探针（一局只跑一次，放在帧尾）：把 isPaused 钉成 true 泵 60 帧，膜的两个计时器都不许动；
+  //   解冻再泵 60 帧，两个数必须开始降。
+  // ★为什么要真泵而不是纯检：stub 的 Date.now 在 step() 里无条件 +17，所以谁把 membraneT 改成墙上时钟基准
+  //   （membraneUntil = Date.now() + HOLD 那种写法），面板开着时它照样走完 —— 只有冻住世界再泵才量得出来，
+  //   而那条 bug 的画面症状是「一次选卡把 3 秒保护偷干净」
+  // ★代价写在位置里：中间这 120 次 step 不走本体的逐帧读数，那 2 秒里的 Boss 死亡可能少计一次
+  //   （只有「恰好在这一刻血皮被补死」才碰得到，且只会让 boss drops 那行偏小，不会假红）
+  if (!memClockProbed && p && p.membraneT > 0 && p.membraneCdT > 0
+    && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+    memClockProbed = true;
+    const t0 = p.membraneT;
+    const c0 = p.membraneCdT;
+    const on0 = p.membraneOn();
+    const at = frameMs;
+    // ★冻结段必须泵得比一次膜的时长还长：把基准存成 Date.now() 的那种写法，字段本身在暂停期间也是停着的
+    //   （update 整段被 main.js 跳过），只有 membraneOn() 会悄悄翻假 —— 只比字段的话这种写法正好溜过去
+    // ★这里就地算每帧毫秒：MEM_STEP 是循环之后才声明的 const，在暂时性死区里读它会直接抛
+    const freezeFrames = Math.ceil(MEMBRANE_HOLD / Math.round(DT * 1000)) + 5;
+    databus.isPaused = true;
+    for (let k = 0; k < freezeFrames; k++) step();
+    const t1 = p.membraneT;
+    const c1 = p.membraneCdT;
+    const on1 = p.membraneOn();
+    databus.isPaused = false;
+    for (let k = 0; k < 60; k++) step();
+    // ★at 必须记下来：这些泵是在帧循环之外推进 stub 时钟的，frameMs 一帧都没跟着走。
+    //   解冻那 60 帧把冷却又烧掉 (c1 − c2) 毫秒，而时间戳读不出来 —— 不折算的话 A4 会被自己的探针打红
+    memClock = { t0, c0, t1, c1, t2: p.membraneT, c2: p.membraneCdT, on0, on1, at, freezeFrames };
   }
 }
 
@@ -1233,10 +1420,15 @@ if (!SEAFIRE_ON) {
       + '上一根还没淡完下一根就亮起，挨打越密越像常驻光柱，而"同时在场只有一根"那条判据会静默失效');
   }
   const STEP = Math.round(DT * 1000);
+  // ★下界要折算那把钟：冷却全按 dt 累加，而 dt 取自 stub 的 Date.now —— step() 每帧把它拨 +17，
+  //   crossFireAt 记的 frameMs 却是每帧 16.667。一根 4000ms 的冷却实际只花 4000 ÷ 17 ≈ 236 帧，
+  //   按 frameMs 读出来就是 3933ms，照「CD 减一格」判会假红（同 1696 行那条注释是同一个坑）
+  const minGap = (LASER_CROSS_CD * DT * 1000) / STEP - STEP;
   for (let k = 1; k < crossFireAt.length; k++) {
     const gap = crossFireAt[k] - crossFireAt[k - 1];
-    if (gap < LASER_CROSS_CD - STEP) {
-      errors.push(`第 ${k + 1} 根十字只隔了 ${gap}ms 就放出，短于 LASER_CROSS_CD=${LASER_CROSS_CD}ms：`
+    if (gap < minGap) {
+      errors.push(`第 ${k + 1} 根十字只隔了 ${gap}ms 就放出，短于折算后的冷却下界 ${minGap.toFixed(0)}ms`
+        + `（LASER_CROSS_CD=${LASER_CROSS_CD}ms 走的是游戏那把 ${STEP}ms/帧 的钟）：`
         + '冷却门没挡住下一次挨打，站进怪堆里十字会连成一根常驻光棒');
       break;
     }
@@ -1246,18 +1438,24 @@ if (!SEAFIRE_ON) {
     errors.push(`CD(${LASER_CROSS_CD}ms) 已大于整段扫射(${CROSS_SWEEP_MS}ms)，场上却同时有过 ${crossPeak} 根十字：`
       + '要么冷却没生效，要么十字没在 FADE 放完后回收');
   }
-  // 伤害公式：每根十字的伤害必须正好等于「层数 × 每层基数」，读的是 init 之后的实例字段
-  const badDmg = crossInitLayers.filter((c) => c.dmg !== laserCrossDamage(c.layers));
+  // 伤害公式：拿 init 实际收到的那两个参数现算一遍纯函数，对不上就是实体里的赋值没走 consts
+  const badDmg = crossInits.filter((c) => c.dmg !== laserCrossDamage(c.layers, c.attack));
   if (badDmg.length) {
-    errors.push(`${badDmg.length} 根十字的伤害不等于 laserCrossDamage(层数)（首例 层${badDmg[0].layers} 伤害${badDmg[0].dmg}）：`
-      + 'init 里那句赋值和 consts 的公式不同源，改每层基数只会改到一半');
+    errors.push(`${badDmg.length} 根十字的伤害不等于 laserCrossDamage(层数, 攻击力)（首例 层${badDmg[0].layers} 攻${badDmg[0].attack} 伤害${badDmg[0].dmg}）：`
+      + 'init 里那句赋值和 consts 的公式不同源，改底伤或攻击力系数只会改到一半');
   }
-  const badLayers = crossInitLayers.filter((c) => !(c.layers >= 1 && c.layers <= crossGrants));
+  // 触发口传对字段：伤害现在吃攻击力，所以传错字段不会报错、只会静默变弱（传成 defence 就是常态 20 点）
+  const wrongAtk = crossInits.filter((c) => c.attack !== c.live);
+  if (wrongAtk.length) {
+    errors.push(`${wrongAtk.length} 根十字收到的攻击力是 ${wrongAtk[0].attack}，而场上此刻是 ${wrongAtk[0].live}：`
+      + 'fireLaserCross 传的不是 player.attack —— 公式照样算得出数，只是这件道具从此不吃攻击成长');
+  }
+  const badLayers = crossInits.filter((c) => !(c.layers >= 1 && c.layers <= crossGrants));
   if (badLayers.length) {
     errors.push(`十字的层数读出 ${badLayers[0].layers}，而整局只授予过 ${crossGrants} 次：层数来源不是 player.laserCross，或它被别处加成过`);
   }
-  for (let k = 1; k < crossInitLayers.length; k++) {
-    if (crossInitLayers[k].layers < crossInitLayers[k - 1].layers) {
+  for (let k = 1; k < crossInits.length; k++) {
+    if (crossInits[k].layers < crossInits[k - 1].layers) {
       errors.push('十字的层数往回走过：一局之内海火核心只进不出，回退说明读的是别的字段或被 reset 过');
       break;
     }
@@ -1271,6 +1469,181 @@ if (!SEAFIRE_ON) {
   if (crossTexts) {
     errors.push(`十字扫射期间还抽了 ${crossTexts} 条飘字：光束的伤害没静默。`
       + `实测过一根就占掉全部飘字的 95%，把玩家普攻的数字挤没（DAMAGE_TEXT_MAX=${DAMAGE_TEXT_MAX} 时抑制率 28.7%）`);
+  }
+}
+
+// —— 主动键「薄膜核心」的断言：A1 两端 / A2 三条通道逐笔记账 / A3 时钟 / A4 冷却下界 / A5 空按不消耗 ——
+// ★门读表本身，理由和上面的 SEAFIRE_ON 一模一样：MEMBRANE=0 只是把 boss3 那一行挪出这张表，
+//   道具仍然登记着（注册面扫描照旧覆盖），所以「表里这一号空不空」就是游戏内可达性的唯一真相
+const BIOFILM_ON = BOSS_DROPS.boss3.length > 0;
+// 三条通道各自的算法：前两条先扣防御力再过膜，中毒跳两条都不过（见 player/index.js 那三段注释）
+const memExpect = (row, subDefence) => {
+  const base = subDefence ? Math.max(1, row.amount - row.defence) : row.amount;
+  return row.on ? membraneDamage(base) : base;
+};
+const memSaved = (row, subDefence) => (row.on ? memExpect({ ...row, on: false }, subDefence) - row.lost : 0);
+const memChannels = [
+  { name: '受击 takeDamage', rows: memHitRows, sub: true },
+  { name: '爆发 applyBlast', rows: memBlastRows, sub: true },
+  { name: '中毒跳', rows: memPoisonRows, sub: false },
+];
+// 纯检：三条通道 × 膜在/没在，各算一次。
+// ★为什么还要这一组：实场那三本账只证明「跑到的那些笔对得上」，而爆发通道只在双子在场时才有样本、
+//   膜内样本更是撞运气。这六条才是「三条通道各自真的过了 membraneDamage」的最小充分证据，
+//   也是负向测试「把毒跳那行的 membraneDamage 去掉」必定红的那一条
+function memRun(channel, on, amount, defence = 0) {
+  const q = Object.create(Player.prototype);
+  q.x = 0; q.y = 0; q.radius = 14;
+  q.hp = 40; q.maxHp = 40; q.defence = defence; q.shield = 0; q.shieldBroken = 0;
+  q.membrane = 1; q.membraneT = on ? MEMBRANE_HOLD : 0; q.membraneCdT = on ? MEMBRANE_CD : 0;
+  q.invincibleUntil = 0; q.laserCross = 0; q.laserCrossT = 0; q.kills = 0;
+  q.poisonLeft = 0; q.poisonTickLeft = 0; q.poisonDamage = 0; q.slowLeft = 0; q.slowMult = 1;
+  q.vial = 0; q.vialDrops = 0;
+  q.lastAttack = Date.now(); // 让 update 里攻击那一段整条跳过：纯检不打怪，只问掉血那一行
+  const db = { joystick: null, enemys: [], addDamageText() {} };
+  if (channel === 'poison') {
+    q.poisonLeft = 2000; q.poisonTickLeft = 0; q.poisonDamage = amount;
+    Player.prototype.update.call(q, DT, db);
+  } else if (channel === 'blast') {
+    Player.prototype.applyBlast.call(q, amount);
+  } else {
+    Player.prototype.takeDamage.call(q, amount, 0, db);
+  }
+  return q;
+}
+const memPure = {
+  hitOff: memRun('hit', false, 10),
+  hitOn: memRun('hit', true, 10),
+  hitOffDef: memRun('hit', false, 10, 3),
+  hitOnDef: memRun('hit', true, 10, 3),
+  blastOff: memRun('blast', false, 18),
+  blastOn: memRun('blast', true, 18),
+  poisonOff: memRun('poison', false, 2),
+  poisonOn: memRun('poison', true, 2),
+  // ★1 点这一档不许省：membraneDamage 里那道 Math.max(1,…) 掉了，毒渍那一下就会变成 0 = 站毒不掉血，
+  //   而「封走位」整条价值当场失效，上面那几条大额样本却一个都对不上不出来
+  poisonOnMin: memRun('poison', true, 1),
+};
+const memHpOf = (q) => 40 - q.hp;
+for (const [name, q, want] of [
+  ['受击/膜外', memPure.hitOff, 10],
+  ['受击/膜内', memPure.hitOn, membraneDamage(10)],
+  ['受击/膜外/有防', memPure.hitOffDef, 7],
+  ['受击/膜内/有防', memPure.hitOnDef, membraneDamage(7)],
+  ['爆发/膜外', memPure.blastOff, 18],
+  ['爆发/膜内', memPure.blastOn, membraneDamage(18)],
+  ['毒跳/膜外', memPure.poisonOff, 2],
+  ['毒跳/膜内', memPure.poisonOn, membraneDamage(2)],
+  ['毒跳/膜内/1点', memPure.poisonOnMin, 1],
+]) {
+  const got = memHpOf(q);
+  if (got !== want) {
+    errors.push(`纯检「${name}」掉血 ${got}（应 ${want}）：这条通道的膜没接对 —— `
+      + '三种可能各有症状：没调 membraneDamage（掉满了）、先过膜再扣防御（有防那两条对不上）、'
+      + 'membraneDamage 里的 Math.max(1,…) 被删（1 点那两条掉 0）');
+  }
+}
+// ★详情页那行写的是「减半」两个字，所以 50% 这个数字本身要钉住：把 MEMBRANE_REDUCE 改成 0.45 不会让
+//   上面任何一条算式红（它们都现读同一个函数），但玩家读到的那两个字就成了假话。
+//   这条不是「不许调平衡」，是「调平衡时连文案一起改」—— 要动强度按 consts 那条注释动 HOLD/CD
+if (membraneDamage(10) !== 5) {
+  errors.push(`membraneDamage(10) = ${membraneDamage(10)} 而不是 5：MEMBRANE_REDUCE 已不是 0.5，`
+    + '而详情页那行写着「减半」。要么把文案改成现读比例的措辞，要么把常量调回去');
+}
+
+const MEM_STEP = Math.round(DT * 1000);
+const memMinGap = (MEMBRANE_CD * DT * 1000) / MEM_STEP - MEM_STEP;
+let memGapMin = Infinity;
+for (let k = 1; k < membranePressAt.length; k++) {
+  memGapMin = Math.min(memGapMin, membranePressAt[k] - membranePressAt[k - 1]);
+}
+if (!BIOFILM_ON) {
+  if (sawMembraneChest) errors.push('薄膜核心已不可达却掉出过匣：MEMBRANE=0 的旋钮没把 BOSS_DROPS.boss3 那一行掐住');
+  if (membraneGrants) errors.push(`薄膜核心已不可达却授予过 ${membraneGrants} 次：CHEST_GRANTS.core_biofilm 被掉落以外的地方调用了`);
+  if (databus.bossChests.core_biofilm) errors.push(`薄膜核心已不可达但 HUD 计数里有 core_biofilm ×${databus.bossChests.core_biofilm}：右栏会凭空多出一格`);
+  if (databus.player && databus.player.membrane) errors.push(`薄膜核心已不可达玩家却有 membrane=${databus.player.membrane}：这一件还有别的写入口`);
+  // ★这一条是整组里最要紧的「关掉等价式」：道具不可达时，自动按臂每帧都在问 activateMembrane，
+  //   所以按成 0 次 + 膜 0 帧同时成立，才说明键的守卫真的看道具，而不是「恰好没人按」
+  if (membranePresses || membraneFrames) {
+    errors.push(`薄膜核心已不可达却按成 ${membranePresses} 次、膜生效 ${membraneFrames} 帧：`
+      + 'activateMembrane 的第一道门（membrane <= 0）没生效，或者膜的两个计时器还有别的写入口');
+  }
+} else if (!BOSS_DROPS_ENABLED) {
+  if (membranePresses || membraneFrames) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却按成 ${membranePresses} 次、膜 ${membraneFrames} 帧：掉落以外的地方把道具发出去了`);
+} else if (boss3Drops === 0) {
+  errors.push('薄膜核心开着却整局没死过膜王（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+} else {
+  if (!sawMembraneChest) errors.push(`死了 ${boss3Drops} 只膜王，场上却没出现薄膜核心那只匣：main.js 的掉落口没按 Boss 号对上表`);
+  if (!membraneGrants) errors.push('匣掉过却没授予一次：拾取→CHEST_GRANTS.core_biofilm 断了一环（这件不叠层，授予那行写的是 = 1）');
+  if (databus.bossChests.core_biofilm !== membraneGrants) {
+    errors.push(`HUD 计数 core_biofilm ×${databus.bossChests.core_biofilm} 与授予次数 ${membraneGrants} 对不上：右栏那格与详情页那行会少报/多报`);
+  }
+  if (!databus.player || !databus.player.membrane) errors.push(`授予过 ${membraneGrants} 次，终态玩家却没有膜：授予写的字段和 membraneOn() 读的不是一个`);
+  if (!membranePresses) errors.push(`授予过 ${membraneGrants} 次却整局一次都没按成：自动按臂没跑、或 activateMembrane 的三道门里有一道恒假`);
+  if (!membraneFrames) errors.push(`按成 ${membranePresses} 次却一帧都不在膜里：membraneOn() 和 activateMembrane 写的不是同一个计时器`);
+  if (!memTapProbed) errors.push('触点探针整局没跑上（没遇到一次「道具在手 + 膜没在 + 冷却空」的帧）：真手指那条链是空跑');
+  else {
+    if (!memTapLanded) errors.push('按 skillButtonRect() 的中心没放火：main.js 的命中没接 / 守卫链多了一道 / 键位矩形和绘制用的不是同一个函数');
+    if (memTapStrayed) errors.push('偏出矩形 20 像素的场外那一下也放了火：命中没收在 skillButtonRect() 里，写成「有道具就按哪儿都算」');
+    if (!membraneGamePresses) errors.push(`自动按臂按成 ${membranePresses} 次，却没有一次走 wx 触点那一路：键从没接进主循环`);
+  }
+  // A2：三条通道各自判，坏一条只红那一条
+  for (const ch of memChannels) {
+    const bad = ch.rows.filter((r) => r.lost !== memExpect(r, ch.sub));
+    if (bad.length) {
+      const f = bad[0];
+      errors.push(`${ch.name} 有 ${bad.length} 笔账对不上膜（首例 传入 ${f.amount} 防御 ${f.defence ?? 0} `
+        + `膜${f.on ? '在' : '没'} 实掉 ${f.lost}，应 ${memExpect(f, ch.sub)}）：这一条通道的减伤公式没走 consts 的 membraneDamage，`
+        + '或者先过膜再扣防御（顺序会改变结论，全项目只留一条通路）');
+    }
+  }
+  const memOnRows = memChannels.reduce((n, ch) => n + ch.rows.filter((r) => r.on).length, 0);
+  if (membranePresses && !memOnRows) {
+    errors.push(`按成 ${membranePresses} 次、膜 ${membraneFrames} 帧，三条通道却没有一笔账落在膜里：A2 的「膜内」那一半是空跑`
+      + '（跑长一点，或开 TWINS=1 把双子叫到膜内来）');
+  }
+  // A3：时钟。★这条钉的是「面板开着时那 3 秒不许白烧」，也是 Date.now 写法唯一会露馅的地方
+  if (!memClockProbed) errors.push('冻结探针整局没跑上（没遇到一次「膜在 + 冷却在 + 面板没开」的帧）：A3 是空跑');
+  else {
+    if (memClock.t1 !== memClock.t0 || memClock.c1 !== memClock.c0) {
+      errors.push(`isPaused=true 泵了 ${memClock.freezeFrames} 帧，membraneT ${memClock.t0}→${memClock.t1}、membraneCdT ${memClock.c0}→${memClock.c1}：`
+        + '三选一/暂停页开着时 main.js 整段跳过 databus.update，这两个计时器必须冻住。'
+        + '把基准存成 Date.now() 的写法就是在这里露馅（10-04 那次的同型 bug）');
+    }
+    // ★字段冻住还不够：deadline 那种写法（membraneUntil = Date.now() + HOLD，判定读 Date.now < until）
+    //   在暂停期间字段照样不动，露馅的是判定 —— 症状是「开一次三选一，那 3 秒保护被面板偷走」
+    if (memClock.on0 && !memClock.on1) {
+      errors.push(`isPaused 期间泵了 ${memClock.freezeFrames} 帧（已超一次膜的 ${MEMBRANE_HOLD}ms），两个字段都没动、膜却判成没有了：`
+        + 'membraneOn() 读的是 Date.now() 而不是这两个 dt 计时器，面板开着时保护白烧');
+    }
+    if (!(memClock.t1 > 0) || !(memClock.t2 < memClock.t1) || !(memClock.c2 < memClock.c1)) {
+      errors.push(`解冻再泵 60 帧：membraneT ${memClock.t1.toFixed(0)}→${memClock.t2.toFixed(0)}、cdT ${memClock.c1.toFixed(0)}→${memClock.c2.toFixed(0)}（两个都必须降）：`
+        + '回到战斗后计时器不走 = update 顶部那两行 dt 累加没接上');
+    }
+  }
+  // A4：冷却下界。★两把钟必须折算：stub 每帧把 Date.now 拨 17ms，而 membranePressAt 记的 frameMs 每帧 16.667
+  const memProbeBurn = memClockProbed ? memClock.c1 - memClock.c2 : 0;
+  for (let k = 1; k < membranePressAt.length; k++) {
+    const gap = membranePressAt[k] - membranePressAt[k - 1];
+    // 只给「跨过冻结探针的那一段」补探针烧掉的冷却：其余各段没有额外泵帧，下界照旧全额
+    const spanned = memClockProbed && membranePressAt[k - 1] <= memClock.at && membranePressAt[k] > memClock.at;
+    const bound = memMinGap - (spanned ? memProbeBurn : 0);
+    if (gap < bound) {
+      errors.push(`第 ${k + 1} 次按压只隔了 ${Math.round(gap)}ms，短于折算后的冷却下界 ${bound.toFixed(0)}ms`
+        + `（MEMBRANE_CD=${MEMBRANE_CD}ms 走的是游戏那把 ${MEM_STEP}ms/帧 的钟${spanned ? `，本段已扣掉 A3 探针偷偷烧的 ${memProbeBurn.toFixed(0)}ms` : ''}）：`
+        + '冷却没在放火那一刻顶满，键会连按 → 实际强度是「3 秒减伤无限续」而不是「40 秒一次」');
+      break;
+    }
+  }
+  // A5：空按不许有代价（膜期间再点会变成续时间，强度翻倍而详情页上看不出来）
+  if (memPressLeaks) errors.push(`${memPressLeaks} 次空按（返回 false）却动了 membraneT / membraneCdT：空按有代价，或膜被再点续上了`);
+  if (membraneRefused === 0) errors.push(`按成 ${membranePresses} 次却一次空按都没有：自动按臂每帧都在问，持续/冷却那两道门一次都没挡过 = 没生效`);
+  // 膜不许比按的次数长。★slack 给的 3 倍是「面板开着时 dt 停表但帧照走」那部分，
+  //   真漏子（膜不烧完 / 每帧续时间）会是几十倍而不是一倍，所以这条照样有区分度
+  const memFramesBound = membranePresses * Math.ceil(MEMBRANE_HOLD / MEM_STEP) * 3;
+  if (membraneFrames > memFramesBound) {
+    errors.push(`膜生效 ${membraneFrames} 帧，而 ${membranePresses} 次按压最多该有 ${memFramesBound} 帧：`
+      + '计时器没烧完（或每帧被续上），详情页那句「3 秒」说的是假话');
   }
 }
 
@@ -2129,35 +2502,179 @@ function vesicleRun(offset) {
       errors.push(`详情页没画出「${k.name}」这一行：拾取了 ${databus.bossChests[k.id]} 次，ownedItems 却没把它收进卡片`);
     }
   }
+  // —— 主动键的文案扫描：三个数必须出现在同一行里，且是现读常量拼出来的那三个 ——
+  // ★上一节那条 A7 只证明 describe 里有 case，这一条证明那个 case 真的跑出来了、数没写死：
+  //   「3 秒 / 40 秒」在别处一个都不出现（这件道具不涨左栏任何一行、也没有 +x 飘字），
+  //   所以找不到就是这一行少了数字，而不是被别的文案撞绿
+  if ((databus.bossChests.core_biofilm || 0) > 0) {
+    const line = [...drawnTexts].find((t) => t.includes('减半'));
+    if (!line) {
+      errors.push('详情页没有含「减半」的那行：describe 的 membrane 分支没跑出来，玩家读不到这件道具到底做什么');
+    } else {
+      for (const token of [`${MEMBRANE_HOLD / 1000} 秒`, `${MEMBRANE_CD / 1000} 秒`, `${Math.round(MEMBRANE_REDUCE * 100)}%`]) {
+        if (!line.includes(token)) {
+          errors.push(`详情页那行「${line}」里没有「${token}」：数字是写死的，改常量不会跟着走`);
+        }
+      }
+    }
+  }
 }
 const badTexts = [...drawnTexts].filter((t) => /NaN|undefined|Infinity/.test(t));
 if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.length} 条：${badTexts.slice(0, 3).join(' | ')}`);
 
-// —— 详情页排版守门：★ROW_H 是死的、行数是活的，加一种就是把整张卡片往下顶 50 像素，
-//   顶穿屏幕不是崩、是「点开就关不掉」
+// —— 详情页排版守门：★行数是活的、视口是死的，所以这里按 0..24 行逐档过几何。
+//   上一版探针钉的是「最坏 12 行」那一档，第 13 种道具落地当天它就开始说假话 ——
+//   把当前最坏情况写进断言，等于把「以后不会再加了」当成事实，而这一局面恰恰一直在加东西
 {
-  // 最坏行数 = 金匣那 10 格 + BOSS_DROPS 全表（巨细胞核 + 海火核心 = 12 行），两处都归 ownedItems() 收进同一张卡
-  // ★12 行的卡片高 712，刘海机上「居中」和「让开胶囊」两个上界打架，layout 里那道 min 选择把卡片往上顶
-  //   （实测 y 从 143 压到 124、底边 836 ≤ 844）。所以往上顶换来的新风险是顶边啃进胶囊 —— 下面那条就是钉它的
-  // ★刻意不含 BOSS_CHESTS 那 1 行：专属匣整条下线中（BOSS_CHESTS_ENABLED = false），游戏内不可达。
-  //   哪天把它翻回 true 就是 13 行，压 y 也兜不住了（顶边会啃进胶囊）—— 到那时先做滚动或分栏
-  const worstRows = [
-    ...ITEM_BAR.map((t) => ({ id: t.glyph, name: t.name })),
-    ...Object.values(BOSS_DROPS).flat().map((k) => ({ id: k.id, name: k.name })),
-  ];
-  const L = databus.pauseScreen.layout(worstRows);
-  if (L.y + L.h > canvasH) {
-    errors.push(`详情页最坏 ${worstRows.length} 行的卡片底边 ${Math.round(L.y + L.h)} 掉出屏幕 ${canvasH}：加行数之前先给这一页做滚动或分栏`);
+  const ps = databus.pauseScreen;
+  const rowsFor = (n) => Array.from({ length: n }, (_, i) => ({ id: 'probe' + i, name: '探针' + i }));
+  const Ls = [];
+  for (let n = 0; n <= 24; n++) {
+    const L = ps.layout(rowsFor(n));
+    Ls.push(L);
+    if (L.y < capsuleBottom + 8) {
+      errors.push(`详情页 ${n} 行的卡片顶边 ${Math.round(L.y)} 贴进微信胶囊（底边 ${capsuleBottom}）：胶囊盖在画布之上，那下面的触点游戏收不到`);
+    }
+    if (L.y + L.h > canvasH - 8) {
+      errors.push(`详情页 ${n} 行的卡片底边 ${Math.round(L.y + L.h)} 掉出屏幕 ${canvasH}：视口没夹住内容高，再加行就一路顶穿`);
+    }
+    if (L.btn.y + L.btn.h > canvasH) {
+      errors.push(`详情页 ${n} 行的「继续战斗」按钮底边 ${Math.round(L.btn.y + L.btn.h)} 掉出屏幕 ${canvasH}：玩家点开这一页就回不去战斗`);
+    }
+    if (L.bodyY + L.bodyH > L.btn.y) {
+      errors.push(`详情页 ${n} 行的内容区底边 ${Math.round(L.bodyY + L.bodyH)} 压到「继续战斗」按钮顶边 ${Math.round(L.btn.y)}：两者之间必须留边距，否则被切断的半行会盖在按钮上`);
+    }
+    if (L.contentH < L.bodyH) {
+      errors.push(`详情页 ${n} 行的可见内容区高 ${L.bodyH} 比内容总高 ${L.contentH} 还大：夹取上界会成负数，这一档自以为滚得动`);
+    }
   }
-  if (L.btn.y + L.btn.h > canvasH) {
-    errors.push(`详情页「继续战斗」按钮底边 ${L.btn.y + L.btn.h} 掉出屏幕 ${canvasH}：玩家点开这一页就回不去战斗`);
+  // ★视口真的夹住了内容高：20 行和 24 行的可见区必须一样高（删掉 layout 里那道 min 这条必红），
+  //   而内容总高还在涨、所以这两档必须滚得动 —— 探针自己也要能被证伪，不然就是空跑
+  if (Ls[24].bodyH !== Ls[20].bodyH) {
+    errors.push(`详情页视口跟着行数一起长（20 行 ${Ls[20].bodyH} → 24 行 ${Ls[24].bodyH}）：layout 里那道 min 没了，卡片迟早顶穿屏幕`);
   }
-  // 让位让的是「点不动」而不是「看不见」：胶囊盖在画布之上，游戏代码收不到它下面的触点
-  if (L.y < capsuleBottom) {
-    errors.push(`详情页最坏 ${worstRows.length} 行的卡片顶边 ${Math.round(L.y)} 啃进微信胶囊（底边 ${capsuleBottom}）：`
-      + `压 y 已经兜不住了，这一页该做滚动或分栏，别再加行`);
+  if (Ls[24].contentH <= Ls[24].bodyH) errors.push('24 行的内容总高没超过可见区：这一档本该能滚，下面的拖动与滚动条断言全是空跑');
+  // ★12 行是滚动上线之前刘海机上的实际最坏情况，实测卡片顶边 124、高 712。这一档必须和从前一模一样：
+  //   手里不足 12 件道具的玩家不该看到任何变化，包括「行没变多、卡片却矮了 25 像素」这种说不出口的回归
+  if (Ls[12].y !== 124 || Ls[12].h !== 712) {
+    errors.push(`详情页 12 行的卡片成了 y=${Ls[12].y} h=${Ls[12].h}（上线前实测 124 / 712）：视口把本来整张放得下的行数也收进去了`);
   }
-  if (safeTop <= 0) errors.push('详情页探针所在的环境没模拟刘海机（safeTop=' + safeTop + '）：上面三条读数都是空跑');
+  const max13 = Ls[13].contentH - Ls[13].bodyH;
+  if (ps.clampScroll(1e9, Ls[13]) !== max13) errors.push(`拖到底没夹在 ${max13} 上（读到 ${ps.clampScroll(1e9, Ls[13])}）：上界算错，最后一行下面会拖出一大片空白`);
+  if (ps.clampScroll(-1e9, Ls[13]) !== 0) errors.push('往上越界没夹回 0：第一行会被拖进卡片标题里');
+  if (ps.clampScroll(999, Ls[9]) !== 0) errors.push('9 行（内容没超出视口）还能滚出非零位移：这一列本来该钉死在 0，动了就是改掉 12 行以内的老手感');
+
+  // —— 拖动这套动作走一遍真桩：几何对了不等于摸得到，下面每一条都经过 wx.onTouchStart/Move/End 那几个闭包
+  const real = databus.player;
+  const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
+  // 行数值和上面那段文案探针共用同一张配方：两处口径不一样，就会出现一个测到 13 行、另一个测到 12 行
+  Object.assign(probe, {
+    bulletCount: 4, pierce: 3, shield: 3, shieldBroken: 0, companions: 3, bomber: 3, turrets: 3,
+    burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, laserCross: 1, membrane: 1,
+  });
+  const chestsBak = databus.bossChests;
+  const screenBak = databus.screen;
+  const overBak = databus.isGameOver;
+  const upBak = databus.upgradeScreen.visible;
+  databus.player = probe;
+  databus.bossChests = { core_cmv: 1, core_seafire: 1, core_biofilm: 1 };
+  databus.screen = 'game';
+  databus.isGameOver = false;
+  databus.upgradeScreen.visible = false;
+  const items = ownedItems(databus);
+  const L = ps.layout(items);
+  const maxScroll = Math.max(0, L.contentH - L.bodyH);
+  const cx = Math.round(L.x + L.w / 2);
+  const cy = Math.round(L.bodyY + 60); // 内容区里的一条行上：不是按钮、不是卡外
+  const lift = { touches: [], changedTouches: [], timeStamp: now };
+  if (maxScroll <= 0) {
+    errors.push(`滚动探针只造出 ${items.length} 行、视口 ${L.bodyH}，滚不动：上面那张配方和 ownedItems 脱节了，下面的断言都是空跑`);
+  } else {
+    // 1) 右上角那颗键还打得开这一页 —— 这次把 touchstart 拆成「打开 / 关闭 / 登记拖动」三段，最容易悄悄断的就是第一段
+    ps.visible = false; ps.scroll = 0; ps.drag = null; databus.isPaused = false;
+    const pb = pauseButtonRect();
+    fire('start', touch(Math.round(pb.x + pb.w / 2), Math.round(pb.y + pb.h / 2), 9));
+    if (!ps.visible) errors.push('点右上角暂停键打不开详情页：touchstart 的 open 分支被滚动这次改动挪坏了');
+
+    // 2) 按在卡片身上不许关 —— 这条既是「点空白处关闭」的反面，也是滚动的入场券
+    fire('start', touch(cx, cy, 1));
+    if (!ps.visible) errors.push('按在卡片身上把详情页关掉了：卡内触点被当成「点空白处」，这一列就没法滚');
+    if (!ps.drag) errors.push('按在卡片上没登记拖动候选：onTouchMove 拿不到 dy，滚动整条不存在');
+    fire('move', touch(cx, cy - 4, 1));
+    if (ps.scroll !== 0) errors.push(`手指只走 4 像素就滚了 ${ps.scroll}：阈值没起作用，读说明时的轻微手抖会晃列表`);
+    fire('move', touch(cx, cy - 4000, 1));
+    if (Math.round(ps.scroll) !== maxScroll) errors.push(`拖到底读数 ${ps.scroll}（该是 ${maxScroll}）：位移不是按按下那一刻的绝对定位算的，或夹取没走 clampScroll`);
+    fire('move', touch(cx, cy + 4000, 1));
+    if (ps.scroll !== 0) errors.push(`拖回顶部没回到 0（读数 ${ps.scroll}）：按下那一刻的基准丢了，回看第一行会卡在中间`);
+    fire('end', lift);
+    if (ps.drag) errors.push('松手后 drag 没清空：下一根手指会接着驱动这根已经抬起的手指');
+    if (!ps.visible) errors.push('拖动结束把详情页关掉了：touchend 不该参与关闭判定');
+
+    // 3) 轻点一下卡片：既不滚动也不关闭（玩家读某条说明就是这一下）
+    fire('start', touch(cx, cy + 100, 2));
+    fire('end', lift);
+    if (!ps.visible || ps.scroll !== 0) errors.push(`轻点卡片的结果是 visible=${ps.visible} scroll=${ps.scroll}（想要 true / 0）：点一下被读成了拖动或关闭`);
+
+    // 4) 两条关闭路径都还留在 touchstart 上：按下去就走，不等松手（手感与从前一致）
+    fire('start', touch(Math.round(L.btn.x + 10), Math.round(L.btn.y + 10), 3));
+    if (ps.visible) errors.push('点「继续战斗」没能关掉详情页：按钮矩形和这次的新布局对不上');
+    if (databus.isPaused) errors.push('详情页关了但 isPaused 没解：战斗永远停在遮罩后面，角色不动、怪照打');
+    ps.show();
+    fire('start', touch(cx, L.y - 20, 4));
+    if (ps.visible) errors.push('点卡片外的空白处没能关掉详情页：那条关闭路径和「卡内不关闭」的边界画错了');
+    // 5) 关掉再打开必须回到第一行：留着上一次的滚动位置，玩家会以为上面从来没有过道具
+    //   ★这里直接摆读数是故意的：关闭那条路径不负责清 scroll（清它是 show 的活），绕开这一步就测不到归零
+    ps.scroll = maxScroll;
+    fire('start', touch(Math.round(pb.x + pb.w / 2), Math.round(pb.y + pb.h / 2), 5));
+    if (!ps.visible) errors.push('关掉之后按右上角再也打不开详情页：open 分支只在第一趟能走通');
+    if (ps.scroll !== 0) errors.push(`重新打开详情页停在 scroll=${ps.scroll} 而不是 0：show() 没归零，第一行要玩家自己拖回去`);
+
+    // —— 裁剪框与滚动条：桩里 ctx.clip() 是空函数，不记就看不出「半行有没有真的被切断」
+    // ★theme.js 里 sprite/itemGlyph 自己也有 rect+clip 那一对，所以这里收全部裁剪、按内容区那一框去查找，不假设只有一次
+    const rects = [];
+    const clips = [];
+    let lastRect = null;
+    ctx.fillRect = (...a) => { rects.push(a); };
+    ctx.rect = (...a) => { lastRect = a; };
+    ctx.clip = () => { clips.push(lastRect); lastRect = null; };
+    const drawOnce = () => {
+      rects.length = 0; clips.length = 0; lastRect = null;
+      ps.visible = true;
+      ps.draw(ctx);
+      ps.visible = false;
+      const body = clips.find((c) => c && c[0] === L.x && c[1] === L.bodyY && c[2] === L.w && c[3] === L.bodyH);
+      // 只认内容区右侧那几条窄矩形：整张卡里「宽 ≤ 6 且贴着卡片右边」的只有滚动条
+      return { body, bars: rects.filter((r) => r[2] <= 6 && r[0] >= L.x + L.w - 14) };
+    };
+    ps.scroll = 0;
+    const d0 = drawOnce();
+    if (!d0.body) {
+      errors.push(`详情页没有一框裁剪在内容区（${[L.x, L.bodyY, L.w, L.bodyH].join(',')}）上：没有这一道，滚出视口的行会直接画到「继续战斗」按钮上`);
+    }
+    if (d0.bars.length !== 2) errors.push(`${items.length} 行（滚得动）时内容区右侧画出 ${d0.bars.length} 条窄矩形，该是轨道 + 滑块共 2 条：滚动条没出现，玩家看不出这一列还能拖`);
+    ps.scroll = maxScroll;
+    const d1 = drawOnce();
+    if (!d1.body) errors.push('滚到底时裁剪框自己跟着动了：裁剪的是那块视口，不是内容的位移');
+    if (d1.bars.length !== 2) errors.push(`滚到底时滚动条剩 ${d1.bars.length} 条窄矩形：那一列不该在滚动过程中消失`);
+    else if (d0.bars.length === 2 && Math.round(d1.bars[1][1]) === Math.round(d0.bars[1][1])) {
+      errors.push(`滑块在滚动前后都停在 y=${Math.round(d0.bars[1][1])}：这根条不跟着位移走就不是进度指示器，只是装饰`);
+    }
+    // 12 行以内不该出现滚动条：内容本来就整张放得下，那两根灰条是纯噪音
+    databus.bossChests = { core_cmv: 1, core_seafire: 1 };
+    ps.scroll = 0;
+    const d12 = drawOnce();
+    if (d12.bars.length !== 0) errors.push(`12 行（滚不动）时内容区右侧画了 ${d12.bars.length} 条窄矩形：溢出没夹住，滚动条在不需要的时候也出现了`);
+    ps.scroll = 0; ps.drag = null;
+  }
+  ps.hide();
+  databus.player = real;
+  databus.bossChests = chestsBak;
+  databus.screen = screenBak;
+  databus.isGameOver = overBak;
+  databus.upgradeScreen.visible = upBak;
+  delete ctx.fillRect;
+  delete ctx.rect;
+  delete ctx.clip;
 }
 
 // —— 注册面扫描：这一节专治静默失效。漏一处不是崩，是 HUD 少一格、或者开箱有 toast 而什么都不涨
@@ -2210,11 +2727,53 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
         errors.push(`BOSS_DROPS '${k.id}' 的 icon '${k.icon}' 和金匣的 glyph 撞名：详情页会按金匣那条说明念它`);
       }
       if (!k.brief) errors.push(`BOSS_DROPS 的 '${k.id}' 没有 brief：describe 的 default 分支会交出空串，详情页那一行是空的`);
+      // ★只有 core_biofilm 额外要求有 case：它涨的层数不在左栏任何面板上，详情页就是玩家唯一的出口，
+      //   而 brief 是 config 里写死的一句话 —— 改 MEMBRANE_HOLD / MEMBRANE_CD 时它不会跟着走。
+      //   另外两件不需要：巨细胞核涨的七行面板上正在显示，海火核心那条已有同型断言
+      if (k.id === 'core_biofilm' && !pauseSrc.includes(`case '${k.icon}'`)) {
+        errors.push(`pause.js 的 describe 没有 '${k.icon}' 分支：薄膜核心只能靠 config 里的 brief 说话，`
+          + '改 MEMBRANE_HOLD / MEMBRANE_CD 之后详情页会一直念旧数字');
+      }
       for (const key of Object.keys(k.boost || {})) {
         if (!STAT_KEYS.includes(key)) {
           errors.push(`BOSS_DROPS '${k.id}' 的 boost 有 '${key}'，不在 HUD 面板那七行里：`
             + `这项会悄悄涨（或加到 undefined 上）却没有对应的 +x 行可弹，玩家看不见`);
         }
+      }
+    }
+  }
+  // —— 主动键的矩形：绘制 / 命中 / 摇杆让位三处必须共用 skillButtonRect 这一个函数 ——
+  // ★这一条查的是「三处各写一遍迟早对不齐」。症状都不是崩：摇杆没让位 → 起手落在那一格就被吃掉、
+  //   「主动键偶尔点不动」而暂停键因为让位了照样好用（记忆里有这条最难查）；main.js 没引用 → 按到的位置和画出来的差一整格。
+  //   NaN 的矩形和「命中没接」在触点上长得一样（都点不着），所以四个数也要先钉成有限
+  {
+    const hudSrc = src(path.join('ui', 'hud.js'));
+    const joySrc = src(path.join('ui', 'joystick.js'));
+    const mainSrc = src(path.join('main.js'));
+    // ★先剥注释、再要求读到「带括号的调用」：这条扫描实测过零区分度 —— 把 joystick.js 那行让位删掉后，
+    //   import 那一行和上面那句注释（也写着 skillButtonRect）都还在，裸 includes 照样绿
+    const called = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '').includes('skillButtonRect()');
+    if (!/export function skillButtonRect/.test(hudSrc)) {
+      errors.push('hud.js 没有导出 skillButtonRect：键位矩形失去了唯一来源，绘制/命中/让位三处会各自按常量重算');
+    }
+    if (!called(joySrc)) {
+      errors.push('joystick.js 没有真的调用 skillButtonRect()：摇杆把右下这一格吞掉了，真手指按下去是起手不是放火');
+    }
+    if (!called(mainSrc)) {
+      errors.push('main.js 没有真的调用 skillButtonRect()：触点命中没和绘制共用同一个矩形，画面上的键和摸得到的键是两块地');
+    }
+    const sb = skillButtonRect();
+    if (![sb.x, sb.y, sb.w, sb.h].every(Number.isFinite)) {
+      errors.push(`skillButtonRect 读出不有限的数 ${JSON.stringify(sb)}：多半是 render.js 的 safeBottom 兜底没接住（拿不到 safeArea 时该是 0 而不是 undefined）`);
+    } else {
+      if (sb.w !== MEMBRANE_BTN || sb.h !== MEMBRANE_BTN) {
+        errors.push(`主动键的矩形是 ${sb.w}×${sb.h}，而 MEMBRANE_BTN=${MEMBRANE_BTN}：画出来的盘子和判定的方块不同源`);
+      }
+      if (sb.x < 0 || sb.y < 0 || sb.x + sb.w > canvasW || sb.y + sb.h > canvasH) {
+        errors.push(`主动键的矩形掉出画布外 ${JSON.stringify(sb)}（${canvasW}×${canvasH}）：这一格在真机上根本摸不到`);
+      }
+      if (sb.y + sb.h > canvasH - safeBottom) {
+        errors.push(`主动键底边 ${Math.round(sb.y + sb.h)} 压进底部安全区（上沿 ${canvasH - safeBottom}）：iOS 手势条会盖住它`);
       }
     }
   }
@@ -2285,9 +2844,9 @@ console.log('boss drops:', bossDrops, '| boss chest:', BOSS_CHESTS_ENABLED
 //   不是回归 —— 同 2026-10-06「报表恒印 off 被当回归查了半天」那条坑
 console.log(`cross laser (海火核心 ${SEAFIRE_ON ? 'on' : 'off（LASER 旋钮掐掉 boss2 那一行）'}):`,
   SEAFIRE_ON
-    ? `海火死 ${boss2Drops} 只 / 拾取 ${crossGrants} 次 / 层数最高 ${crossInitLayers.length ? Math.max(...crossInitLayers.map((c) => c.layers)) : 0}`
+    ? `海火死 ${boss2Drops} 只 / 拾取 ${crossGrants} 次 / 层数最高 ${crossInits.length ? Math.max(...crossInits.map((c) => c.layers)) : 0}`
       + ` | 掉血 ${crossHpLosses} 次（盾挡 ${crossBlockedShield}）→ 放出 ${crossFires} 根，同时在场峰值 ${crossPeak}`
-      + ` | 结算帧 ${crossSettles} / 命中 ${crossHits} 次 共 ${crossDmg} 点（每层 ${LASER_CROSS_DMG}·束宽 ${LASER_CROSS_WIDTH}·束长 ${LASER_CROSS_LEN}·同怪间隔 ${LASER_CROSS_HIT_GAP}ms）`
+      + ` | 结算帧 ${crossSettles} / 命中 ${crossHits} 次 共 ${crossDmg} 点（单下 ${LASER_CROSS_DMG_BASE}+${LASER_CROSS_DMG_ATK}×攻，整局最高 ${crossInits.length ? Math.max(...crossInits.map((c) => c.dmg)) : 0}·束宽 ${LASER_CROSS_WIDTH}·束长 ${LASER_CROSS_LEN}·同怪间隔 ${LASER_CROSS_HIT_GAP}ms）`
       + ` | 它的飘字 ${crossTexts} 条（光束已静默，这条要 0）`
     : `海火死 ${boss2Drops} / 授予 ${crossGrants} / 放出 ${crossFires}（这一段要的全是 0）`,
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`);
@@ -2304,6 +2863,24 @@ console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms
 console.log(gameOverAt < 0
   ? 'game over: none —— 世界整局都在跑，下面所有实场读数全程有效'
   : `game over: t=${gameOverAt.toFixed(1)}s —— 此后 databus.update 停摆，实场读数全部停在这一帧，任何"0"都要先按这条判`);
+// ★同理要读可达性本身 + HPPIN：HPPIN=1（默认）时每帧把 hp 钉回满，死亡时刻这条永远读不出对比，
+//   「按膜能不能活过最坏三秒」那一组必须换成 HPPIN=0 跑
+const memSavedTotal = memChannels.reduce((n, ch) => n + ch.rows.reduce((m, r) => m + memSaved(r, ch.sub), 0), 0);
+const memOnOf = (ch) => ch.rows.filter((r) => r.on).length;
+console.log(`membrane (薄膜核心 ${BIOFILM_ON ? 'on' : 'off（MEMBRANE 旋钮掐掉 boss3 那一行）'}, HPPIN=${HPPIN ? '1 每帧回满→死亡时刻不可读' : '0 让它死'}):`,
+  BIOFILM_ON
+    ? `膜王死 ${boss3Drops} 只 / 授予 ${membraneGrants} / 按成 ${membranePresses}（其中触点 ${membraneGamePresses}）/ 空按 ${membraneRefused}`
+      + ` | 膜内 ${membraneFrames} 帧 ≈ ${(membraneFrames * DT).toFixed(1)}s`
+      + ` | 三条通道记账 受击 ${memChannels[0].rows.length}/${memOnOf(memChannels[0])}`
+      + ` 爆发 ${memChannels[1].rows.length}/${memOnOf(memChannels[1])}`
+      + ` 毒跳 ${memChannels[2].rows.length}/${memOnOf(memChannels[2])}（斜杠后是落在膜里的笔数）`
+      + ` | 膜内省下 ${memSavedTotal} 血`
+      + ` | 按压最小间隔 ${memGapMin === Infinity ? '-' : `${Math.round(memGapMin)}ms`}（折算下界 ${memMinGap.toFixed(0)}ms）`
+      + ` | 冻结探针 ${memClockProbed ? `泵 ${memClock.freezeFrames} 帧：膜 ${memClock.t0.toFixed(0)}→${memClock.t1.toFixed(0)}→${memClock.t2.toFixed(0)}、cd ${memClock.c0.toFixed(0)}→${memClock.c1.toFixed(0)}→${memClock.c2.toFixed(0)}、判定 ${memClock.on0 ? '在' : '没'}→${memClock.on1 ? '在' : '没'}` : '没跑上'}`
+      + ` | 触点 ${memTapProbed ? `${memTapLanded ? '矩形内命中' : '矩形内没命中'}${memTapStrayed ? ' / 矩形外却放了火' : ' / 矩形外没反应'}` : '没跑上'}`
+    : `授予 ${membraneGrants} / 按成 ${membranePresses} / 膜 ${membraneFrames} 帧（这一段要的全是 0）`,
+  `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level}`
+  + ` / 死亡 ${gameOverAt < 0 ? '整局没死' : `${gameOverAt.toFixed(1)}s（整局上限 ${seconds}s）`}`);
 // ★报表行必须读出 TWINS 钉值和这一局 boss4 的实际出场时刻：否则未来会话看到一行 0 分不清是回归还是根本没出场
 console.log(`twins (TWINS=${TWINS === undefined ? 'off' : TWINS}, boss4 time=${BOSS_FOURTH_SPAWN_TIME}s):`,
   `${twinsGroups.length} groups / peak ${twinsPeak} / deaths ${twinsDeaths}`,

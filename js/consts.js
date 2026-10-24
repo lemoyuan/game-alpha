@@ -145,8 +145,12 @@ export const LASER_CROSS_WIDTH = 22;      // 主束宽度（像素），也就�
 export const LASER_CROSS_LEN = 300;       // 光束长度（像素）。★不读 player.attackRange（同炮台 TURRET_RANGE 那条：射程跟着升级悄悄变大，详情页就写不出稳定读数），
                                           //   也不照抄 Boss 的 470 —— 470 的口径是「≥ 屏幕半对角，跑不出扇面」，那是威胁的几何；
                                           //   一件武器每下放满全屏，玩家就读不出它什么时候够不着了
-export const LASER_CROSS_DMG = 6;         // 每层每次结算的伤害。★层数 × 固定基数，走燃烧子弹 BURN_DMG 那条口径，不按攻击力取比例（炸弹/炮台那样）：
-                                          //   它是反击不是火力，再乘一次攻击力等于让「攻击 +3」那张卡顺带把它也抬高，两层乘法谁都没法读
+export const LASER_CROSS_DMG_BASE = 20;   // 每次结算的固定底伤
+export const LASER_CROSS_DMG_ATK = 1.5;   // 每次结算吃多少倍攻击力。★它现在按攻击力取比例（同 bombDamage / turretDamage 那条口径），
+                                          //   推翻的是初版「只做反击、不跟 build 走」的定法：怪血 90 秒后按时间一路涨到 ×5，
+                                          //   固定 6 点到后期对一只 100 血的怪整段扫射只刮掉 18，连「解围」都算不上
+                                          //   系数不照炸弹（2.0）读：同一只怪在一段扫射里要结 3 次，单怪实际倍率是 4.5×攻击力 + 60 底伤，
+                                          //   这一根本来就比一枚炸弹铺得宽，再按溅射那个量级给就是「挨一下打比整套 build 还狠」
 export const LASER_CROSS_HIT_GAP = 500;   // 同一只怪两次结算的最小间隔（毫秒）。必须有：怪没有受击无敌帧，而贴身距离里四根束会同时压在一只怪身上
                                           //   （垂距 < 束半宽 + 怪半径），不限流就是四层束一起结。扫射 1500 ÷ 500 = 一只怪最多挨 3 次
 export const LASER_CROSS_CD = 4000;       // 两次触发的最小间隔（毫秒）。★必须大于三段之和（260+1500+240 = 2000）：否则被围攻时上一根还没淡完下一根已经亮起，
@@ -155,7 +159,31 @@ export const LASER_CROSS_CD = 4000;       // 两次触发的最小间隔（毫�
                                           //   所以 4000 才是真正起作用的那道闸
 
 // 单根十字每次结算伤害的唯一口径：实体 laserCross.js 与详情页 pause.js 都从这里取（同 turretDamage / bombDamage）
-export const laserCrossDamage = (layers) => layers * LASER_CROSS_DMG;
+// ★先 floor 再乘层数：奇数攻击力会算出 x.5，收成整数才报得出「每次结算 N 点」这种整数读数（底伤 20 恒为正，不需要 turret 那句 Math.max 兜底）
+export const laserCrossDamage = (layers, attack) => layers * Math.floor(LASER_CROSS_DMG_BASE + attack * LASER_CROSS_DMG_ATK);
+
+// ===== 主动技·薄膜（Boss 掉落道具「薄膜核心」：按右下角的键，3 秒内三条掉血通道全部减半）=====
+// ★全游戏第一个主动键，也是第一件「不涨任何属性、只给一次操作权」的 Boss 掉落物 —— 所以它同样没有左栏 +x 飘字
+//   （那条瀑布只由 applyBoost 触发），拾取反馈靠「开启「薄膜核心」」那条 toast + 右下角多出来的那一格
+// ★三条通道全盖（受击 takeDamage / 爆发 applyBlast / 中毒跳结算）是 2026-10-24 用户拍板的，不是偷懒：
+//   这一键的承诺是「这 3 秒我不容易死」，只盖 takeDamage 一条的话，受击已被 PLAYER_INVINCIBLE=1500 限流到
+//   1.5 秒最多结算一下，3 秒里省不到十几点，按下去读不出收益 —— 就是赤潮池当年「技能存在于代码里而不存在于玩家身体里」的同型事故。
+//   代价写清楚：赤潮池/毒渍「封走位」的价值被削掉覆盖窗口比例 = MEMBRANE_HOLD ÷ MEMBRANE_CD ≈ 7.5%，
+//   所以池子仍然是威胁，只多出一条「卡着冷却按膜蹚毒」的合法解
+export const MEMBRANE_REDUCE = 0.5;   // 膜在时砍掉多少伤害。★50% 是这件道具的名字，不许为了微调强度动它（要动只动下面两个时长）
+export const MEMBRANE_HOLD = 3000;    // 一次膜的持续毫秒。★按 dt 累加：三选一面板/暂停开着时必须冻住
+export const MEMBRANE_CD = 40000;     // 两次按压的最小间隔，放火那一刻顶满（15 分钟一局 ≈ 22 次）
+export const MEMBRANE_BTN = 56;       // 右下主动键边长。★比暂停键 PAUSE_BTN=26 大一倍：这是战斗中要摸的键，不是设置键
+
+// 量级账（为什么 50% 落在这是对的）：最坏三秒 = 双子激怒囊泡 11/秒 + Boss 接触 ~9/秒 + 赤潮 4/秒 ≈ 25 点/秒
+// × 3 = 75 点，而 PLAYER_MAX_HP = 40 且 LEVEL_UP_BONUS 不涨血 —— 减半后 37.5 点，正好是
+// 「按下去能活过最坏三秒，但只够三秒」：超过三秒照样死，天然自限，不需要再给键加别的限制
+// ★不叠层：boss3 一局只掉一只，player.membrane 只取 0/1，没有任何常量乘它（授予那行因此写 = 1 而不是 += 1）
+
+// 膜生效时伤害的唯一口径：三个结算点（takeDamage / applyBlast / 中毒跳）都从这里过，详情页也读它
+// ★作用在【扣完防御力之后】的数上：防御力是加法、膜是乘法，先后顺序会改变结论，所以只留一条通路
+// ★Math.max(1, …) 不许删：赤潮 2 点/跳减半是 1，双子毒渍 1 点减半会变成 0 = 站毒不掉血 = 封走位整条失效
+export const membraneDamage = (dmg) => Math.max(1, Math.round(dmg * (1 - MEMBRANE_REDUCE)));
 
 export const DAMAGE_TEXT_MAX = 160; // 伤害飘字并发上限。★这个数不是拍的：实测 480 秒满 build（bot 每帧抽卡、786 击杀）的并发峰值是零燃烧 120 条、三层燃烧 112 条。曾经按 60 定，结果常态吃掉约 4% 的伤害数字，热闹时段普攻会「不掉字」；按 120 定又刚好压在零燃烧那条尾巴上，最热的几帧照样丢字。它只该兜失控，不该参与常态调度
 

@@ -3,7 +3,7 @@ import { paintBeam, paintTelegraph } from '../npc/monster/laser';
 import { UI } from '../ui/theme';
 import {
   LASER_CROSS_TELEGRAPH, LASER_CROSS_FIRE, LASER_CROSS_FADE, LASER_CROSS_SPIN,
-  LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_DMG, LASER_CROSS_HIT_GAP, laserCrossDamage,
+  LASER_CROSS_WIDTH, LASER_CROSS_LEN, LASER_CROSS_HIT_GAP, laserCrossDamage,
 } from '../consts';
 
 /**
@@ -32,7 +32,7 @@ export default class LaserCross extends Sprite {
     this.phase = 0;           // 0 蓄力 / 1 扫射 / 2 淡出
     this.phaseT = 0;          // 当前段已经过的毫秒数
     this.clock = 0;           // 本根十字已经过的总毫秒数，只用来给同目标限流（不用 Date.now：面板冻住时限流表会照跑）
-    this.damage = LASER_CROSS_DMG;
+    this.damage = 0;          // init 在触发那一刻按攻击力快照（同子弹开火时快照 burnDamage：飞在路上的十字不许中途变强）
     this.beamW = LASER_CROSS_WIDTH;
     this.len = LASER_CROSS_LEN;
     this.tint = UI.red;
@@ -41,11 +41,12 @@ export default class LaserCross extends Sprite {
   }
 
   /**
-   * @param {number} layers 海火核心的层数（player.laserCross），只涨每次结算的血
+   * @param {number} layers 海火核心的层数（player.laserCross），买的是「每次结算的伤害翻几倍」；束数恒为 4，不随层数变
+   * @param {number} attack 触发那一刻的角色攻击力（player.attack），单下伤害 = 层数 ×（20 + 1.5 × 攻击力）
    * @param {number} angle  触发那一刻的角色朝向，四根束里有一根从它出发
    */
-  init(layers, angle) {
-    this.damage = laserCrossDamage(layers);
+  init(layers, attack, angle) {
+    this.damage = laserCrossDamage(layers, attack);
     this.spin = angle;
     this.phase = 0;
     this.phaseT = 0;
@@ -95,10 +96,9 @@ export default class LaserCross extends Sprite {
   }
 
   /**
-   * 扫射段的逐帧结算。★不吃暴击，两个理由都记在 consts 的 LASER_CROSS_DMG 上：
-   * 它的伤害不按攻击力取比例，再乘 critMult 等于把「暴击 +10%」那张卡也接进这件道具；
-   * 而一轮扫射要结几十只怪，逐只掷会让暴击率在 AOE 上偷偷翻倍（bomb.js detonate 那条旧账），
-   * 整根掷一次又说不清"三段 × 每段多次结算"里到底掷了几回。所以两边都不接。
+   * 扫射段的逐帧结算。★吃攻击力（在 init 里快照），但不吃暴击，两个理由：
+   * 一轮扫射要结几十只怪，逐只掷会让暴击率在 AOE 上偷偷翻倍（bomb.js detonate 那条旧账）；
+   * 整根掷一次又说不清"三段 × 每段多次结算"里到底掷了几回。所以攻击力接、暴击率不接。
    */
   settle(databus) {
     for (const e of databus.enemys) {
