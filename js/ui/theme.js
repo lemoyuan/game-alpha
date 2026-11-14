@@ -925,6 +925,25 @@ export function itemGlyph(ctx, key, cx, cy, s) {
         ctx.closePath();
       });
       break;
+    case 'killBlast':
+      // 炸壳：六角不规则爆闪星（奶白实心 + 墨描边）+ 中心一颗墨核。
+      // ★长尖 ~0.9h 与短谷 ~0.55h 交替：等长的细尖星在 1× 金盘上被 1.69px 描边吞成一颗齿轮（概念页实测），
+      //   粗细错落的六角才读得出「炸开」。爆风实体（player/killBlast.js）画的是同一组星芒，图标与爆炸同一张脸
+      body(() => {
+        ctx.beginPath();
+        const pts = [
+          [0.99, -90], [0.55, -60], [0.90, -30], [0.58, 0],
+          [0.99, 30], [0.52, 60], [0.88, 90], [0.58, 120],
+          [0.97, 150], [0.55, 180], [0.90, 210], [0.58, 240],
+        ];
+        pts.forEach(([rr, deg], i) => {
+          const a = deg * Math.PI / 180, x = Math.cos(a) * h * rr, y = Math.sin(a) * h * rr;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+      });
+      mark(() => { ctx.beginPath(); ctx.arc(0, 0, h * 0.20, 0, Math.PI * 2); });
+      break;
     case 'pickupRange':
       // 中心一颗宝石 + 左右两条粗箭头条：四条细线箭头在 26px 盘上会整条消失
       body(() => {

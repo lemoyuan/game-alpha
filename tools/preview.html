@@ -412,6 +412,7 @@ const STATS = [
   { key: 'leech', label: '嗜血层数', step: 1 },
   { key: 'vial', label: '血瓶层数', step: 1 },
   { key: 'vialDrops', label: '瓶内存量', step: 1 },
+  { key: 'killBlast', label: '炸壳层数', step: 1 },
 ];
 
 // 占位符给真实出厂值，不抄常量表：一个 new Player() 就是游戏的初始 build
@@ -673,8 +674,8 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       }, 220);
       return;
     }
-    // 详情页溢出的最坏情况：十种金匣加成 + 四件 Boss 掉落道具一次凑齐，再把这一页打开
-    // ★为什么凑而不打：真局凑满 14 件要跑十几分钟，而这一页要看的是「溢出之后长什么样、拖得动多少」
+    // 详情页溢出的最坏情况：十一种金匣加成 + 四件 Boss 掉落道具一次凑齐，再把这一页打开
+    // ★为什么凑而不打：真局凑满 15 件要跑十几分钟，而这一页要看的是「溢出之后长什么样、拖得动多少」
     if (nav === 'allitems') {
       if (databus.screen !== 'game' || databus.isGameOver) startRun();
       const { BONUSES } = await import('./js/npc/chest.js');

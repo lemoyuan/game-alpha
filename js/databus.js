@@ -64,6 +64,10 @@ export default class DataBus {
     // ★上面那句「不再加列表」在这里破例的原因：headless 的 thrown / booms / 「一轮几枚」三条断言
     //   口径全是「玩家自己的炸弹」，两家共用一条数组等于把道具报表读成敌我混合，而且敌方弹根本不该暴击
     this.vesicles = [];
+    // 炸壳（金匣第 11 种加成）：每杀一只普通小怪在原地落一枚瞬时爆炸实体，由 main.js 击杀口生成。
+    // ★和 bombs/vesicles 同形（一次结清 AoE + 爆风放完回收），但自己一条列表：headless 的「玩家自己的炸弹」
+    //   三条断言（thrown/booms/一轮几枚）口径全是 bomber 扔的那几枚，混进来会把道具报表读成敌我混合
+    this.killBlasts = [];
     this.bossPets = [];   // 迷你毒王跟班（融合匣开出）：不挂 player.companions 计数，由宝箱授予直接管理
     this.bossChests = {}; // 本局 Boss 专属匣开启记录：id → 次数，HUD 右栏读它
     this.damageTexts = [];
@@ -81,6 +85,9 @@ export default class DataBus {
     // 炸弹排在生成它的 bomber 循环之前：同上面两条子弹循环的次序，本帧扔出的那一枚下一帧才开始飞
     for (const b of this.bombs) b.update(dt, this);
     for (const v of this.vesicles) v.update(dt, this); // 次序同上面 bombs：本帧抛出的那一枚下一帧才开始飞
+    // 炸壳排在 enemys 之前（同 bombs/vesicles）：第一帧 detonate 把周围怪打成 isDead，本帧 checkCollisions 再结算那些死亡、
+    //   落下一环的爆炸 —— 连锁因此每帧只往外推一环，而不是一帧清屏（见 main.js 击杀口）
+    for (const kb of this.killBlasts) kb.update(dt, this);
     for (const e of this.enemys) e.update(dt, this);
     // 燃烧跳血单独一遍，且必须挂在这里：Enemy.update 里放不下它——毒王 Boss 从不调 super.update，
     // 海火只在 chase、膜王只在 idle、菌群只在 lost 才调，写进 Enemy.update 等于燃烧在三只 Boss 身上失效
@@ -160,6 +167,10 @@ export default class DataBus {
 
   removeVesicle(index) {
     this.vesicles.splice(index, 1);
+  }
+
+  removeKillBlast(index) {
+    this.killBlasts.splice(index, 1);
   }
 
   removeEnemyBullet(index) {

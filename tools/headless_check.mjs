@@ -329,6 +329,7 @@ const {
   MEMBRANE_REDUCE, MEMBRANE_HOLD, MEMBRANE_CD, MEMBRANE_BTN, membraneDamage,
   TWIN_CD, TWIN_SALVO, TWIN_DAMAGE_RATIO, TWIN_RANGE, TWIN_BULLET_RADIUS, TWIN_BULLET_COLOR,
   TWIN_SIZE, TWIN_MUZZLE_DX, TWIN_MUZZLE_DY, twinDamage,
+  KILL_BLAST_DMG_RATIO, KILL_BLAST_K, KILL_BLAST_R_MIN, KILL_BLAST_R_MAX, KILL_BLAST_MS, killBlastDamage, killBlastRadius,
   canvasW, canvasH,
 } = await import(fileUrl(path.join(COPY, 'consts.js')));
 const { UI } = await import(fileUrl(path.join(COPY, 'ui', 'theme.js')));
@@ -344,6 +345,7 @@ const BloodVial = (await import(fileUrl(path.join(COPY, 'player', 'bloodVial.js'
 const Turret = (await import(fileUrl(path.join(COPY, 'player', 'turret.js')))).default;
 const TwinBattery = (await import(fileUrl(path.join(COPY, 'player', 'twinBattery.js')))).default;
 const LaserCross = (await import(fileUrl(path.join(COPY, 'player', 'laserCross.js')))).default;
+const KillBlast = (await import(fileUrl(path.join(COPY, 'player', 'killBlast.js')))).default;
 const Bullet = (await import(fileUrl(path.join(COPY, 'player', 'bullet.js')))).default;
 const Companion = (await import(fileUrl(path.join(COPY, 'player', 'companion.js')))).default;
 const BloodClot = (await import(fileUrl(path.join(COPY, 'npc', 'bloodclot.js')))).default;
@@ -388,6 +390,7 @@ const crossFirePump = [];      // 与 crossFireAt 一一对应：这一根是否
 const crossHpLossAt = [];      // 每次「真正掉血」的时刻：和 crossFireAt 配对用，一根十字必须对上一次掉血
 const crossInits = [];        // 每根十字 init 时拿到的（层数、传入的攻击力、场上此刻的攻击力、算出的伤害）：验伤害公式同源、验触发口传的是 player.attack、验「层数只来自拾取」
 let insideCross = false;       // 正在十字的 settle 里：这段时间的 Enemy.takeDamage 都算十字的战果
+let insideKillBlast = false;   // 正在炸壳的 detonate 里：这段时间的 Enemy.takeDamage 都算炸壳的战果（同 insideCross 那条理由）
 let frameMs = 0;               // 主循环当前的仿真时刻：钩子只在装钩子那一帧闭包一次 i，读数必须走这个
 // —— Boss 掉落道具「薄膜核心」（全游戏第一个主动键）的账本 ——
 // ★和前两本（弹字 / 十字）同样分家：这一件买的不是属性也不是层数，而是「一局能按下几次、按下之后
@@ -614,6 +617,18 @@ let turretOnAt = -1;      // 实际落座的游戏时刻（秒），-1 = 还没�
 const TURRET_AT = 15;
 let turretScanPeak = 0;  // max(座数 × 怪数)：空闲时每帧都在扫，这是索敌开销的代理指标
 let firstBossDeathAt = -1; // 首只 Boss 死亡时刻：A/B 要比的是「整条曲线」，只看炮台自己那几发看不出中期崩塌
+// 炸壳层数同样钉成单变量：金匣十选一里就有它，不吞掉写入的话 KILLBLAST=0 那趟照样会长出层数，
+// 那条「关掉等价式」量不出来。★这一种和炮台最像的地方是「按事件生成、寿命极短」，所以峰值不是层数而是
+//   「同帧连环炸」的并发数：一锅端掉一群时，下一帧那群尸体各自又炸一次，峰值能短暂超过 1
+const KILLBLAST = Number(process.env.KILLBLAST || 0);
+let killBlastsSpawned = 0;   // KillBlast.init 调用次数 = 击杀口生成了几枚（每杀一只小怪一枚）
+let killBlastBooms = 0;      // detonate 次数：理论上恒等于 spawned，对不上就是有枚没结算或结算了两遍
+let maxKillBlasts = 0;       // 同屏爆风峰值：连环炸那一帧能 > 1，这是「一锅端会链式引爆」的读数
+let killBlastHits = 0;       // 爆炸真打到的「怪·次」总数（detonate 内 takeDamage 调用，按 insideKillBlast 归属）
+let killBlastDmg = 0;        // 累计爆炸伤害：> 0 才证明 detonate 那条结算不是白写的
+let killBlastCrits = 0;      // 暴击次数：每炸掷一次（不是每只怪掷一次），silent 之下只影响伤害不影响字色
+let killBlastTexts = 0;      // 爆炸期间抽到的飘字条数：silent 改造后恒为 0，非 0 即红（同 crossTexts 那条）
+const killBlastInits = [];   // 每枚 init 的 {layers, attack, live, dmg, r}：验层数只来自钉值、击杀口传的是当场 player.attack、伤害/半径走 consts 那一个公式（同 crossInits）
 let volleyRounds = 0;      // 跟班齐射轮数
 const volleySizes = new Set(); // 每轮实际新增的子弹数：只应有一个取值且等于层数
 let bombsThrown = 0;   // 扔出的枚数（按 Bomb.init 计，一轮 player.bomber 枚）
@@ -726,6 +741,7 @@ const bossAppeared = (type) => bossLog.some((r) => r.type === type);
     if (color === UI.burn) { burnTicks++; burnDmg += damage; }
     if (color === UI.blood) clotHeals++; // 血块被吃掉才会有的洋红跳字：主循环里那条回血线路的唯一实场读数
     if (insideCross) crossTexts++; // 静默改造前实测这个数字占全部飘字的 95.2%：现在光束走 silent，非 0 就是漏透传
+    if (insideKillBlast) killBlastTexts++; // 炸壳每杀一只就炸一次、一次压一群，走 silent 不灌飘字池；非 0 就是 detonate 漏传第 5 个参数
     const before = this.damageTexts.length;
     origAdd.call(this, x, y, damage, isCrit, color);
     // 不区分来源：白字被顶掉同样要紧，peak 撞到上限就说明这道闸在吃玩家该看到的数字
@@ -886,7 +902,38 @@ const bossAppeared = (type) => bossLog.some((r) => r.type === type);
   //   于是「光束静默」那条断言永远假红而游戏代码是对的。包别人的方法就是往里插一层，插的那层不许改口径
   proto.takeDamage = function (...args) {
     if (insideCross) { crossHits++; crossDmg += args[0]; }
+    if (insideKillBlast) { killBlastHits++; killBlastDmg += args[0]; if (args[1]) killBlastCrits++; }
     return orig.apply(this, args);
+  };
+}
+// 炸壳的实场账：init 数「击杀口生成了几枚」并快照爆风半径/单炸伤害，detonate 数「结算了几次」并把战果归到它名下。
+// ★constructor 守卫同炸弹那条：下面纯检会直接 new KillBlast 驱动原型，不加守卫夹具造的几枚会混进实场账
+{
+  const proto = KillBlast.prototype;
+  const origInit = proto.init;
+  proto.init = function (...args) {
+    if (this.constructor === KillBlast) {
+      killBlastsSpawned++;
+      const r = origInit.apply(this, args);
+      // 读 origInit 跑完之后的 this.damage / this.blastR：公式若断在 consts、或击杀口传的不是 player.attack，这里当场对不上
+      killBlastInits.push({
+        layers: args[2], attack: args[3], live: databus.player ? databus.player.attack : null,
+        dmg: this.damage, r: this.blastR,
+      });
+      return r;
+    }
+    return origInit.apply(this, args);
+  };
+  const origDetonate = proto.detonate;
+  proto.detonate = function (db) {
+    if (this.constructor !== KillBlast) return origDetonate.call(this, db);
+    killBlastBooms++;
+    insideKillBlast = true;
+    try {
+      return origDetonate.call(this, db);
+    } finally {
+      insideKillBlast = false;
+    }
   };
 }
 
@@ -1097,6 +1144,13 @@ for (let i = 0; i < frames; i++) {
     p.__turretPinned = true;
     // ★落座前恒读 0：这样第 15 秒之前既不会在起点长出座子，匣子那一下裸 += 也照样被 setter 吞掉
     Object.defineProperty(p, 'turrets', { configurable: true, get: () => (turretOnAt < 0 ? 0 : TURRET), set: () => {} });
+  }
+  // 炸壳层数同理钉死：金匣十选一里就有它，不吞掉写入的话 KILLBLAST=0 那趟照样会长出层数，
+  // 那条「关掉等价式」量不出来。★这一种不需要炮台那种落座延时 —— 爆炸在击杀那一帧就地生成，
+  //   bot 从开局就在杀怪，KILLBLAST>0 那趟第一只小怪倒下就能量到爆风
+  if (p && !p.__killBlastPinned) {
+    p.__killBlastPinned = true;
+    Object.defineProperty(p, 'killBlast', { configurable: true, get: () => KILLBLAST, set: () => {} });
   }
   // 跟班只能从宝箱随机开出，bot 480 秒往往一个都开不到 → companion.png 的绘制分支一行都没跑过。
   // 开局前 5 秒强制挂一个把加载与 drawSprite 走一遍，第 5 秒撤掉：
@@ -1335,6 +1389,15 @@ for (let i = 0; i < frames; i++) {
   if (databus.bombs.length > maxBombs) maxBombs = databus.bombs.length;
   if (databus.bombers.length > maxBombers) maxBombers = databus.bombers.length;
   if (databus.vials.length > maxVials) maxVials = databus.vials.length;
+  // 炸壳同屏峰值：★这一条和十字/血瓶那种「恒为 1」相反 —— 一锅端掉一群时，下一帧那群尸体各自又炸一次，
+  //   峰值能短暂 > 1，这正是「击杀会链式引爆」的读数，不是回归
+  if (databus.killBlasts.length > maxKillBlasts) maxKillBlasts = databus.killBlasts.length;
+  for (const kb of databus.killBlasts) {
+    if (!Number.isFinite(kb.x) || !Number.isFinite(kb.y) || !Number.isFinite(kb.blastR)) {
+      errors.push('炸壳坐标或爆风半径出现非有限值');
+      break;
+    }
+  }
   // 同时在场的十字根数：CD(4000) 大于整段扫射(260+1500+240=2000) 时这个峰值必须是 1，
   // 读成 2 就说明触发没被冷却挡住（十字会连成一根常驻光棒，见下面的断言）
   if (databus.laserCrosses.length > crossPeak) crossPeak = databus.laserCrosses.length;
@@ -2549,6 +2612,173 @@ if (turretShots > turretShotBound) {
 }
 // 远处的座子到点却一发没打是正确行为（它那一圈里就是没怪），所以利用率只做软读数、写在报表里，不硬断言
 
+// —— 炸壳（金匣第 11 种「击杀爆炸」）：先快照实场计数，再逐条断言，最后补纯检 ——
+// ★快照必须排在纯检之前：下面的纯检会直接 new KillBlast 调 init/detonate，那对原型钩子会把夹具造的几枚
+//   也计进 spawn/boom 账、killBlastInits 也会混进别的层数档（同炸弹 fieldThrown 那条理由）
+const fieldKillBlastsSpawned = killBlastsSpawned;
+const fieldKillBlastBooms = killBlastBooms;
+const fieldKillBlastInits = killBlastInits.slice();
+// 两端断言①：OFF 臂 —— 0 层这道门必须把生成整条关掉（金匣池里就有它，不钉住的话这趟照样会长出层数）
+if (KILLBLAST === 0 && (fieldKillBlastsSpawned || maxKillBlasts || killBlastHits)) {
+  errors.push(`炸壳 0 层却量到生成 ${fieldKillBlastsSpawned} 枚、同屏峰值 ${maxKillBlasts}、命中 ${killBlastHits} 次：0 层这道门没关掉，「没这个道具」的局也在跑新代码`);
+}
+// 两端断言②：ON 臂 —— bot 从开局就在杀怪，跑了这么久一枚都没生成 = 击杀口那条接线断了
+if (KILLBLAST > 0 && fieldKills > 0 && fieldKillBlastsSpawned === 0) {
+  errors.push(`炸壳 ${KILLBLAST} 层、整局杀了 ${fieldKills} 只却一枚爆风都没生成：main.js 击杀口那条 player.killBlast>0 的接线断了`);
+}
+// 生成数不许超过击杀数：每杀一只小怪才炸一枚，炸得比杀得多就是接线挂到了每帧/每只怪而不是死亡事件
+if (fieldKillBlastsSpawned > fieldKills) {
+  errors.push(`炸壳生成 ${fieldKillBlastsSpawned} 枚 > 整局击杀 ${fieldKills} 只：爆炸不是「一次击杀一枚」，挂到了别的循环上`);
+}
+// 引爆不许超过生成（炸了两遍），且生成过就必须真引爆过（detonate 那条结算不是白写的）
+if (fieldKillBlastBooms > fieldKillBlastsSpawned) {
+  errors.push(`炸壳引爆 ${fieldKillBlastBooms} 次 > 生成 ${fieldKillBlastsSpawned} 枚：有枚炸了两遍（detonated 门没拦住）`);
+}
+if (fieldKillBlastsSpawned > 0 && fieldKillBlastBooms === 0) {
+  errors.push(`炸壳生成 ${fieldKillBlastsSpawned} 枚却一次都没引爆：databus 那条 killBlasts update 循环或首帧 detonate 断了`);
+}
+// 每一枚 init 都必须：层数 = 钉值、攻击力 = 当场 player.attack、伤害/半径 = consts 那一个公式
+// ★这是「公式类道具拆两条断言」那条教训：只验 dmg===killBlastDamage(layers,attack) 时，把 attack 换成 defence 照样绿；
+//   attack===live 这一条才钉住「击杀口传进去的确实是攻击力那个字段」
+for (const it of fieldKillBlastInits) {
+  if (it.layers !== KILLBLAST) errors.push(`炸壳 init 拿到层数 ${it.layers}（应钉值 ${KILLBLAST}）：层数没钉住或击杀口读错了字段`);
+  if (it.live !== null && it.attack !== it.live) errors.push(`炸壳 init 拿到攻击力 ${it.attack}，而当场 player.attack=${it.live}：击杀口传的不是攻击力（换成别的字段了）`);
+  if (it.dmg !== killBlastDamage(it.layers, it.attack)) errors.push(`炸壳单炸伤害 ${it.dmg} ≠ killBlastDamage(${it.layers},${it.attack})=${killBlastDamage(it.layers, it.attack)}：实体没走 consts 那一个公式`);
+  if (it.r !== killBlastRadius(it.layers)) errors.push(`炸壳爆风半径 ${it.r} ≠ killBlastRadius(${it.layers})=${killBlastRadius(it.layers)}：实体没走 consts 那一个公式`);
+}
+// 单变量钉层数 → 实场半径只该有一个取值（半径与攻击力无关，是最干净的单变量读数）
+if (KILLBLAST > 0 && fieldKillBlastInits.length) {
+  const radii = [...new Set(fieldKillBlastInits.map((it) => it.r))];
+  if (radii.length !== 1 || radii[0] !== killBlastRadius(KILLBLAST)) {
+    errors.push(`炸壳钉成 ${KILLBLAST} 层，实场爆风半径却出现 ${JSON.stringify(radii)}（应只有 ${killBlastRadius(KILLBLAST)}）：层数没钉住或半径公式断了`);
+  }
+}
+// 静默：detonate 传了 silent，飘字池一条都不该抽（同 crossTexts 那条；非 0 就是漏透传第 5 个参数）
+if (killBlastTexts) {
+  errors.push(`炸壳结算期间还抽了 ${killBlastTexts} 条飘字：detonate 的 takeDamage 没传 silent，频繁 AoE 会灌满飘字池顶掉普攻数字`);
+}
+// 命中 > 0：bot 站在怪流中心，一锅炸下去必有邻怪在圈内。恒为 0 = detonate 的距离判据写歪或半径取成了 0
+// （这不是「可达≠发生」那种距离门控技能 —— 爆心就在死怪身上，怪是成簇来的，不像炮台那样可能整场空转）
+if (fieldKillBlastBooms > 0 && killBlastHits === 0) {
+  errors.push(`炸壳引爆 ${fieldKillBlastBooms} 次却一个怪都没命中：detonate 的平方距离判据写歪、blastR 取成 0、或遍历的不是 databus.enemys`);
+}
+
+// —— 炸壳纯检①：公式同源 + 饱和曲线形状（期望值硬写，不复用被测常量，否则是恒真断言）——
+// 设计锚点 @攻26：1层16/58 3层19/72 5层21/79；半径渐近 100、伤害渐近 26（floor 之下任何有限层最多 25）
+if (killBlastDamage(1, 26) !== 16) errors.push(`炸壳 1 层 @攻26 单炸 = ${killBlastDamage(1, 26)}（应 16）：改 KILL_BLAST_DMG_RATIO/K 要连这条期望一起改`);
+if (killBlastDamage(3, 26) !== 19) errors.push(`炸壳 3 层 @攻26 单炸 = ${killBlastDamage(3, 26)}（应 19）`);
+if (killBlastDamage(5, 26) !== 21) errors.push(`炸壳 5 层 @攻26 单炸 = ${killBlastDamage(5, 26)}（应 21）`);
+if (killBlastRadius(1) !== 58) errors.push(`炸壳 1 层半径 = ${killBlastRadius(1)}（应 58）：改 R_MIN/R_MAX/K 要连这条期望一起改`);
+if (killBlastRadius(3) !== 72) errors.push(`炸壳 3 层半径 = ${killBlastRadius(3)}（应 72 = 44 与 100 的中点，半程点落在 K=3 层）`);
+if (killBlastRadius(5) !== 79) errors.push(`炸壳 5 层半径 = ${killBlastRadius(5)}（应 79）`);
+if (killBlastRadius(0) !== 44) errors.push(`炸壳 0 层半径 = ${killBlastRadius(0)}（应 44 = 零投入基线 R_MIN）`);
+if (killBlastRadius(999) !== 100) errors.push(`炸壳 999 层半径 = ${killBlastRadius(999)}（应渐近封顶 100）：曲线没封顶，层数会无限放大爆风`);
+if (killBlastDamage(3, 0) !== 1) errors.push(`炸壳 @攻0 单炸 = ${killBlastDamage(3, 0)}（应 1）：保底没兜住，纯检这条路会打出 0 伤害`);
+// 饱和形状：逐 1 级单调不减 + 封顶 + 粗跨度边际递减（首跨度 > 末跨度，线性公式会首=末、凸公式会首<末）
+{
+  let prevR = -1; let prevD = -1;
+  for (let l = 0; l <= 30; l++) {
+    const r = killBlastRadius(l); const d = killBlastDamage(l, 26);
+    if (r < prevR) errors.push(`炸壳半径在 ${l} 层处回落（${prevR}→${r}）：不是单调递增`);
+    if (d < prevD) errors.push(`炸壳伤害在 ${l} 层处回落（${prevD}→${d}）：不是单调递增`);
+    if (r > 100) errors.push(`炸壳 ${l} 层半径 ${r} 超过封顶 100`);
+    if (d > 26) errors.push(`炸壳 ${l} 层 @攻26 伤害 ${d} 超过理论上限 26`);
+    prevR = r; prevD = d;
+  }
+  const span = [0, 3, 6, 9, 12];
+  const rGains = []; const dGains = [];
+  for (let i = 1; i < span.length; i++) {
+    rGains.push(killBlastRadius(span[i]) - killBlastRadius(span[i - 1]));
+    dGains.push(killBlastDamage(span[i], 26) - killBlastDamage(span[i - 1], 26));
+  }
+  for (let i = 1; i < rGains.length; i++) {
+    if (rGains[i] > rGains[i - 1]) errors.push(`炸壳半径边际在 ${span[i]} 层处变大（${rGains[i - 1]}→${rGains[i]}）：不是饱和形，层数会越堆越值`);
+    if (dGains[i] > dGains[i - 1]) errors.push(`炸壳伤害边际在 ${span[i]} 层处变大（${dGains[i - 1]}→${dGains[i]}）：不是饱和形`);
+  }
+  if (!(rGains[0] > rGains[rGains.length - 1])) errors.push('炸壳半径首跨度不大于末跨度：曲线没在饱和（线性或凸）');
+  if (!(dGains[0] > dGains[dGains.length - 1])) errors.push('炸壳伤害首跨度不大于末跨度：曲线没在饱和（线性或凸）');
+}
+
+// —— 炸壳纯检②：实体行为（new KillBlast + 最小世界 + 假怪，不经过主循环）——
+function killBlastEnemy(x, y, radius = 10, isDead = false) {
+  return {
+    x, y, radius, isDead, hits: 0, lastDmg: 0, lastCrit: null, lastSilent: null,
+    takeDamage(d, crit, db, color, silent) { this.hits++; this.lastDmg = d; this.lastCrit = crit; this.lastSilent = silent; },
+  };
+}
+function killBlastStub(enemys, player) {
+  return { player: player || { critRate: 0, critMult: 2, attack: 26 }, enemys };
+}
+{
+  // 池复用：init 必须重置全部可变字段，漏了 detonated 就是「复用的第二枚刚生成就跳过结算」
+  const kb = new KillBlast();
+  kb.init(100, 100, 3, 26);
+  kb.detonated = true; kb.isDestroyed = true; kb.blastT = 999;
+  kb.init(200, 200, 1, 26);
+  if (kb.x !== 200 || kb.y !== 200 || kb.blastR !== 58 || kb.damage !== 16 || kb.blastT !== 0 || kb.detonated !== false || kb.isDestroyed !== false) {
+    errors.push(`炸壳 init 没把可变字段重置干净（x${kb.x} y${kb.y} r${kb.blastR} dmg${kb.damage} t${kb.blastT} det${kb.detonated} des${kb.isDestroyed}）：池里复用的第二枚会带着上一枚的状态`);
+  }
+}
+{
+  // 命中判据：圈内打一次、圈外不打、死怪跳过、边界用 blastR+e.radius 且严格 <
+  const inside = killBlastEnemy(50, 0);
+  const outside = killBlastEnemy(200, 0);
+  const dead = killBlastEnemy(10, 0, 10, true);
+  const b67 = killBlastEnemy(67, 0);   // 67 < 58+10=68 → 命中
+  const b68 = killBlastEnemy(68, 0);   // 68 = 68，严格 < 不成立 → 不命中
+  const b69 = killBlastEnemy(69, 0);
+  const kb = new KillBlast();
+  kb.init(0, 0, 1, 26);
+  kb.detonate(killBlastStub([inside, outside, dead, b67, b68, b69]));
+  if (inside.hits !== 1 || b67.hits !== 1) errors.push(`炸壳圈内怪命中数 inside=${inside.hits} b67=${b67.hits}（都应 1）：距离判据或「每只一次」写歪`);
+  if (outside.hits !== 0 || b68.hits !== 0 || b69.hits !== 0) errors.push(`炸壳圈外/边界怪被打到了 outside=${outside.hits} b68=${b68.hits} b69=${b69.hits}（都应 0）：半径取大了或边界用了 <=`);
+  if (dead.hits !== 0) errors.push(`炸壳打到了已死的怪（hits=${dead.hits}）：detonate 没跳过 isDead`);
+  if (inside.lastSilent !== true) errors.push(`炸壳 takeDamage 第 5 个参数 = ${inside.lastSilent}（应 true）：没静默，会灌飘字池`);
+  if (inside.lastDmg !== 16 || inside.lastCrit !== false) errors.push(`炸壳 critRate=0 时单炸 = ${inside.lastDmg}/crit${inside.lastCrit}（应 16/false）`);
+}
+{
+  // 暴击每炸掷一次：critRate=1 时这一锅全暴、伤害 ×critMult；不是每只怪各掷一次
+  const a = killBlastEnemy(30, 0); const b = killBlastEnemy(40, 0);
+  const kb = new KillBlast();
+  kb.init(0, 0, 1, 26);
+  kb.detonate(killBlastStub([a, b], { critRate: 1, critMult: 2, attack: 26 }));
+  if (a.lastCrit !== true || b.lastCrit !== true || a.lastDmg !== 32 || b.lastDmg !== 32) {
+    errors.push(`炸壳 critRate=1 时 a=${a.lastDmg}/${a.lastCrit} b=${b.lastDmg}/${b.lastCrit}（都应 32/true）：暴击没掷或没 ×critMult，或逐只掷导致不一致`);
+  }
+}
+{
+  // 伤害在 init 快照：在飞的爆炸不许中途随攻击力变强（同子弹开火快照 burnDamage）
+  const e = killBlastEnemy(30, 0);
+  const db = killBlastStub([e], { critRate: 0, critMult: 2, attack: 26 });
+  const kb = new KillBlast();
+  kb.init(0, 0, 1, 26);
+  db.player.attack = 100;             // init 之后攻击力暴涨
+  kb.detonate(db);
+  if (e.lastDmg !== 16) errors.push(`炸壳 init 后攻击力涨到 100，单炸却变成 ${e.lastDmg}（应仍 16）：detonate 重算了伤害而不是用 init 快照`);
+}
+{
+  // detonate 恰好一次：首帧结算，之后只放爆风，不再重复结算
+  const e = killBlastEnemy(30, 0);
+  const db = killBlastStub([e]);
+  const kb = new KillBlast();
+  kb.init(0, 0, 1, 26);
+  kb.update(0.016, db);
+  kb.update(0.016, db);
+  kb.update(0.016, db);
+  if (e.hits !== 1) errors.push(`炸壳连更三帧命中 ${e.hits} 次（应 1）：detonated 门没拦住，每帧都在重复结算`);
+}
+{
+  // 寿命：blastT 攒到 KILL_BLAST_MS 才回收，差一毫秒都不许提前死
+  const kb = new KillBlast();
+  kb.init(0, 0, 1, 26);
+  kb.update(KILL_BLAST_MS / 1000 - 0.001, killBlastStub([]));
+  if (kb.isDestroyed) errors.push(`炸壳差 1ms 到寿命就回收了（blastT=${kb.blastT}）：寿命判据用了 > 而不是 >=，或基准取错`);
+  const kb2 = new KillBlast();
+  kb2.init(0, 0, 1, 26);
+  kb2.update(KILL_BLAST_MS / 1000, killBlastStub([]));
+  if (!kb2.isDestroyed) errors.push(`炸壳到寿命 ${KILL_BLAST_MS}ms 还没回收（blastT=${kb2.blastT}）：isDestroyed 门没接，爆风会永久留在场上`);
+}
+
 // —— 金匣概率刷新：先查纯函数，再查实场 ——
 // 曲线形状是确定性的，必须逐项对上；出场间隔是随机的，只用来验证「真的在跑」和「保底兜得住」
 const CURVE_POINTS = [0, 1, 2, 3, 4, 6, 10];
@@ -3164,7 +3394,7 @@ let bossXpTotal = 0;
   const probe = Object.assign(Object.create(Object.getPrototypeOf(real)), real);
   // 一刀切写 3 不行：count 是各格自己的口径（子弹数从 1 起算、拾取范围存的是像素），
   // 全写 3 会让 pickupRange 算出负层数、被 ownedItems 当"没拾取过"滤掉，那一行就永远扫不到
-  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, turrets: 3, burnBullets: 3, pickupRange: 170, leech: 3, vial: 3 };
+  const OWNED = { bulletCount: 4, pierce: 3, shield: 3, companions: 3, bomber: 3, turrets: 3, burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, killBlast: 3 };
   for (const k in OWNED) probe[k] = OWNED[k];
   probe.shieldBroken = 0;
   databus.player = probe;
@@ -3176,7 +3406,24 @@ let bossXpTotal = 0;
   ctx.measureText = () => ({ width: 0 });
   const before = drawnTexts.size;
   databus.pauseScreen.visible = true;
-  databus.pauseScreen.draw(ctx);
+  // ★行数早已超过 12.5 行的视口：scroll=0 那一帧会把队尾几行裁掉（第 11 种金匣落地后，
+  //   最后一件 Boss 掉落「双子核心」正好落在被裁的第 15 行）。顶到底逐档画一遍并 union drawnTexts，
+  //   才是「每一行都真的渲染过」的完整取证 —— 只画一帧会让队尾那几行的文案检查静默空跑
+  {
+    const psTok = databus.pauseScreen;
+    const itemsTok = ownedItems(databus);
+    const LTok = psTok.layout(itemsTok);
+    const rowH = itemsTok.length ? LTok.contentH / itemsTok.length : 50;
+    const maxScrollTok = Math.max(0, LTok.contentH - LTok.bodyH);
+    // 步长取「视口能整放的行数 - 1」：相邻两帧必有一行重叠，中间任何一行都不会被两帧同时跳过
+    const stepTok = Math.max(rowH, (Math.floor(LTok.bodyH / rowH) - 1) * rowH);
+    for (let s = 0; ; s += stepTok) {
+      psTok.scroll = Math.min(s, maxScrollTok);
+      psTok.draw(ctx);
+      if (s >= maxScrollTok) break;
+    }
+    psTok.scroll = 0;
+  }
   databus.pauseScreen.visible = false;
   delete ctx.measureText;
   databus.player = real;
@@ -3276,7 +3523,7 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   // 行数值和上面那段文案探针共用同一张配方：两处口径不一样，就会出现一个测到 13 行、另一个测到 12 行
   Object.assign(probe, {
     bulletCount: 4, pierce: 3, shield: 3, shieldBroken: 0, companions: 3, bomber: 3, turrets: 3,
-    burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, laserCross: 1, membrane: 1, twinBattery: 1,
+    burnBullets: 3, pickupRange: 170, leech: 3, vial: 3, killBlast: 3, laserCross: 1, membrane: 1, twinBattery: 1,
   });
   const chestsBak = databus.bossChests;
   const screenBak = databus.screen;
@@ -3365,8 +3612,10 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     else if (d0.bars.length === 2 && Math.round(d1.bars[1][1]) === Math.round(d0.bars[1][1])) {
       errors.push(`滑块在滚动前后都停在 y=${Math.round(d0.bars[1][1])}：这根条不跟着位移走就不是进度指示器，只是装饰`);
     }
-    // 12 行以内不该出现滚动条：内容本来就整张放得下，那两根灰条是纯噪音
-    databus.bossChests = { core_cmv: 1, core_seafire: 1 };
+    // 12 行以内不该出现滚动条：内容本来就整张放得下，那两根灰条是纯噪音。
+    // ★探针手里 11 种金匣全占行，所以这里只能再凑 1 件 Boss 掉落 = 12 行（≤12.5 视口）；
+    //   多凑一件就是 13 行、本来就该滚，那条断言会假红（第 11 种金匣落地当天踩过）
+    databus.bossChests = { core_cmv: 1 };
     ps.scroll = 0;
     const d12 = drawOnce();
     if (d12.bars.length !== 0) errors.push(`12 行（滚不动）时内容区右侧画了 ${d12.bars.length} 条窄矩形：溢出没夹住，滚动条在不需要的时候也出现了`);
@@ -3486,7 +3735,7 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
   }
   // ★turret.js 进的是这一组（连 Date.now( 都不许出现），不是下面那组纯显示体：它会开火，
   //   读墙上时钟的后果是三选一面板一关就补出积压的那几发，而这条链上的每一发都是真伤害
-  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js'), path.join('player', 'turret.js'), path.join('player', 'twinBattery.js')]) {
+  for (const rel of [path.join('player', 'bomb.js'), path.join('player', 'bomber.js'), path.join('player', 'turret.js'), path.join('player', 'twinBattery.js'), path.join('player', 'killBlast.js')]) {
     const s = src(rel);
     // 读墙上时钟会在三选一面板期间偷跑（main.js 那时跳过 databus.update），面板一关就连发
     if (s.includes('Date.now(')) errors.push(`${rel} 里出现 Date.now(：计时必须按 dt 累加`);
@@ -3641,6 +3890,16 @@ console.log('turret (' + (TURRET === 0 ? 'TURRET=0 → off' : `stacks=${TURRET},
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`
   + ` / 首只 Boss 死于 ${firstBossDeathAt < 0 ? '未出现' : `${firstBossDeathAt.toFixed(0)}s`}`,
   '| ★台子把几座全落在同一格（bot 走到角落就停，那里正是怪流的中心）→ 这条读的是 DPS 上界；真局里匣子摊在跑过的那条路上，老座子多半在空转');
+// ★报表行必须读出 KILLBLAST 开关：off 那趟把「生成与命中都该是 0」直接印出来，
+//   否则未来会话看到一行 0 分不清是回归还是这台子压根没开这个道具（同炮台那条坑）
+console.log('killBlast (炸壳 ' + (KILLBLAST === 0 ? 'KILLBLAST=0 → off' : `stacks=${KILLBLAST}, 寿命 ${KILL_BLAST_MS}ms`) + '):',
+  KILLBLAST === 0 ? `生成 ${fieldKillBlastsSpawned} 枚 / 命中 ${killBlastHits} 次（这条要两个都是 0）`
+    : `生成 ${fieldKillBlastsSpawned} / 引爆 ${fieldKillBlastBooms} / 同屏峰值 ${maxKillBlasts} / 命中 ${killBlastHits} 次 共 ${killBlastDmg} 点（暴击 ${killBlastCrits} 次）`,
+  `| 单炸@攻26 1层${killBlastDamage(1, 26)}/${killBlastRadius(1)}px 3层${killBlastDamage(3, 26)}/${killBlastRadius(3)}px 5层${killBlastDamage(5, 26)}/${killBlastRadius(5)}px 满${killBlastDamage(999, 26)}/${killBlastRadius(999)}px`,
+  `| 飘字 ${killBlastTexts} 条（已静默，这条要 0）`,
+  `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`
+  + ` / 首只 Boss 死于 ${firstBossDeathAt < 0 ? '未出现' : `${firstBossDeathAt.toFixed(0)}s`}`,
+  '| ★爆炸按击杀触发、bot 站怪流中心 → 这条读的是连锁清场上界；真局里怪散在跑过的路上，连环炸没这么密');
 console.log('companion volleys:', volleyRounds, '| per volley:', volleySizes.size ? [...volleySizes].join('/') : '-',
   '(pinned stacks=' + COMPANIONS + ')');
 console.log('damage texts: peak', maxTexts, 'of cap', DAMAGE_TEXT_MAX, '| suppressed', suppressedTexts, 'of', totalTexts,

@@ -13,6 +13,7 @@ import Spawner from './npc/monster/spawner';
 import XpGem from './npc/xpgem';
 import BloodClot from './npc/bloodclot';
 import Chest from './npc/chest';
+import KillBlast from './player/killBlast';
 import {
   BOSS_CHESTS, BOSS_CHESTS_ENABLED, BOSS_DROPS, BOSS_DROPS_ENABLED, BOSS_XP_GEMS, BLOOD_CLOT_HEAL,
 } from './npc/monster/config';
@@ -160,6 +161,14 @@ export default class Main {
             clot.init(e.x, e.y, BLOOD_CLOT_HEAL);
             databus.clots.push(clot);
           }
+          // 炸壳：普通小怪被击杀就在原地炸一次 AoE。★只在这个 else 分支生成 —— 上面的 Boss / 宝箱怪 / absorbed
+          //   三条都不炸（理由见 consts.js 炸壳块）。层数与攻击力此刻快照进 init，连锁的下一环按它生成那一刻的层数算。
+          //   炸死的那只下一帧再走这条死亡 loop 落下一环，所以连锁每帧只往外推一环（databus.update 里 killBlasts 排在 enemys 前）
+          if (player.killBlast > 0) {
+            const blast = databus.pool.getItemByClass('killBlast', KillBlast);
+            blast.init(e.x, e.y, player.killBlast, player.attack);
+            databus.killBlasts.push(blast);
+          }
         }
         player.kills++;
         // 嗜血：击杀回血只在这里掷。★这是全项目唯一「一次算一杀」的落点 —— 跟班子弹、炸弹爆风、
@@ -194,6 +203,13 @@ export default class Main {
     for (let i = databus.vesicles.length - 1; i >= 0; i--) {
       if (databus.vesicles[i].isDestroyed) {
         databus.removeVesicle(i);
+      }
+    }
+
+    // 炸壳：同上一条，伤害在 detonate 那一帧一次结清，这里只回收星芒爆风放完的那一枚
+    for (let i = databus.killBlasts.length - 1; i >= 0; i--) {
+      if (databus.killBlasts[i].isDestroyed) {
+        databus.removeKillBlast(i);
       }
     }
 
@@ -332,6 +348,9 @@ export default class Main {
     // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
     for (const v of databus.vesicles) v.draw(ctx); // 同层同理由：囊泡也是抛体，落点环和爆风都要压在怪之上
+    // 炸壳星芒和炸弹/囊泡同一档：爆风那一闪要盖住整片怪才读得出「这一群炸了」，压在怪群之下等于没炸。
+    // 仍排在友方十字与角色之前 —— 它是怪身上炸开的，不该盖住玩家自己的武器和本体
+    for (const kb of databus.killBlasts) kb.draw(ctx);
     // 友方十字光束不跟上面那根敌方的 lasers 同层（那条排在地面：满 5 道光会把 Boss 埋掉，且玩家该画在光之上）。
     // ★这根是玩家自己的武器，压在怪群之下就等于"放了却看不见"，所以和炸弹/囊泡同一档；
     //   但仍排在跟随体与角色之前 —— 它的原点就在角色身上，四根 22 宽的束盖住本体等于把自己涂掉了

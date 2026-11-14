@@ -1,6 +1,6 @@
 import {
   canvasW, canvasH, HUD_TILE, PIERCE_DAMAGE_FALLOFF, PLAYER_INVINCIBLE,
-  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage,
+  COMPANION_ATK_SPEED, COMPANION_DAMAGE_RATIO, BOMB_CD, BOMB_BLAST_R, bombDamage, killBlastDamage, killBlastRadius,
   TURRET_CD, TURRET_RANGE, turretDamage,
   BURN_TICK, BURN_HOLD, BURN_DMG, LEECH_CHANCE, VIAL_GAIN_CD, VIAL_OUT_CD, VIAL_OUT, XP_PICKUP_RANGE,
   LASER_CROSS_CD, laserCrossDamage,
@@ -41,6 +41,8 @@ function describe(item, player) {
     // ★座数直接报 player.turrets：这一种层数买的就是「场上几座」，不像两条跟班那样要换算成「一轮几发」
     case 'turrets': return `脚下留着 ${player.turrets} 座固定炮台，每 ${TURRET_CD / 1000} 秒向 ${TURRET_RANGE} 像素内最近的一怪开一炮，单发 ${turretDamage(player.attack)} 点，不跟着你走也不会被打掉`;
     case 'burnBullets': return `命中点燃 ${BURN_HOLD / 1000} 秒，每 ${BURN_TICK / 1000} 秒跳一次血，每跳 ${item.n * BURN_DMG} 点，再命中只刷新时长`;
+    // 炸壳：报「此刻这一炸是多少血、多大圈」（同炸弹/炮台那几行吃当前攻击力），层数买的就是这两个数
+    case 'killBlast': return `击杀小怪原地爆炸，每炸 ${killBlastDamage(item.n, player.attack)} 点、爆风半径 ${killBlastRadius(item.n)} 像素，层数越高范围与伤害越大`;
     case 'pickupRange': return `经验宝石在 ${player.pickupRange} 像素内自动飞向你（初始 ${XP_PICKUP_RANGE}）`;
     // 海火核心（Boss 掉落道具）：ownedItems 把它那行的 glyph 设成 config 里的 icon 'laserCross'，所以分支挂在这。
     // ★只报三个数：两件 Boss 掉落里巨细胞核没有分支、走下面 default 读 brief，因为它涨的是左栏那七行、

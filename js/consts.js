@@ -272,6 +272,33 @@ export const BOMB_CLUSTER_N = 12;     // 密集度索敌的候选数上限：先
 // ★一个公式写两处迟早算成两个数，而详情页那句「单枚 N 点」一旦被拿来对实测，对不上就算界面的锅
 export const bombDamage = (attack) => Math.max(1, Math.floor(attack * BOMB_DAMAGE_RATIO));
 
+// ===== 炸壳（金匣第 11 种加成）=====
+// 击杀一只小怪，它就在原地炸开，对周围一圈怪造成一次 AoE 伤害；层数越高，爆炸越大、越疼。
+// 它和炸弹跟班是同一族（都是一次结清的 AoE），但触发口相反：炸弹是「每 5 秒主动扔一枚」，
+// 炸壳是「每杀一只被动炸一次」—— 所以单发必须比炸弹（2.0×攻）弱，否则清群效率会把第 7 种挤成废项。
+// ★只在普通小怪的击杀口生成（main.js 的 else 分支）：Boss / 宝箱怪 / 被膜王吃回的菌群都不炸 ——
+//   Boss 血厚炸不动、宝箱怪不是战斗目标、absorbed 那条本来就不算击杀（不掉经验不涨击杀数），炸它等于奖励「让它回去」
+// ★连锁是这件道具的乐趣也是它的自限：炸死的那只下一帧再炸，一圈一圈往外推（每帧一环，见 main.js 击杀口）。
+//   但伤害低于满血小怪的血量时炸不死整只，所以连锁只在「已经被打残的一群」里蔓延，不会凭空清屏
+export const KILL_BLAST_DMG_RATIO = 0.5; // 伤害基数 = 角色攻击 × 此系数，再乘下面的饱和增益。★夹在射击跟班 0.5 与炸弹 2.0 的下沿：
+                                         //   它是「补刀清群」不是主输出，1 层 0.625×攻、满层趋近 1.0×攻（见 killBlastDamage）
+export const KILL_BLAST_K = 3;           // 两条曲线共用的半程点（层数）：LoL 冷却缩减那种 layers/(layers+K) 饱和形状，
+                                         //   3 层正好拿到「增益的一半」。★落在真实 build 区间（一局金匣随机分到这件约 1~3 层、欧皇 5~6），
+                                         //   不写成线性：线性会让欧皇的 6 层把把清屏，而饱和让 3 层以后每层只多一点点
+export const KILL_BLAST_R_MIN = 44;      // 爆炸半径下限（像素，1 层时的起点）：比海火赤潮最小的池（58）小一圈 —— 一只小怪炸开不该比 Boss 的毒池还大
+export const KILL_BLAST_R_MAX = 100;     // 爆炸半径上限（像素，层数→∞ 趋近）：比炸弹爆风（70）大一圈，满层炸壳铺得比一枚炸弹宽，换来的是单发更弱、且要先把怪打残才连锁
+export const KILL_BLAST_MS = 240;        // 爆风可见时长（毫秒）。★纯表现，伤害在生成后第一帧一次结清（同 BOMB_BLAST_MS 那条）；比炸弹 260 略短，因为它触发频繁、拖太长满屏都是盘子
+
+// 爆炸伤害的唯一口径：实体 js/player/killBlast.js 与详情页 js/ui/pause.js 都从这里取（同 bombDamage / turretDamage）。
+// ★饱和增益 (1 + layers/(layers+K))：1 层 = 1.25、3 层 = 1.5、5 层 = 1.625、∞ = 2，乘上 0.5 基数 → 0.625×攻 ~ 1.0×攻。
+//   中位 build 攻 26：1 层 16、3 层 19、5 层 21。先 floor 收成整数才报得出「每炸 N 点」这种整数读数
+export const killBlastDamage = (layers, attack) =>
+  Math.max(1, Math.floor(attack * KILL_BLAST_DMG_RATIO * (1 + layers / (layers + KILL_BLAST_K))));
+
+// 爆炸半径的唯一口径：同上，实体与详情页共用。1 层 58、3 层 72、5 层 79、∞ 100（中位 build 下 3 层正好追平炸弹爆风 70）
+export const killBlastRadius = (layers) =>
+  Math.round(KILL_BLAST_R_MIN + (KILL_BLAST_R_MAX - KILL_BLAST_R_MIN) * layers / (layers + KILL_BLAST_K));
+
 // icon 取 js/ui/theme.js 的图标名，tint 取 UI 的色键（在 upgrade.js 里查表，consts 不依赖 UI 层）
 export const UPGRADES = [
   { key: 'maxHp',    label: '生命上限', desc: '+10',  value: 10, icon: 'heart', tint: 'red' },
@@ -306,6 +333,8 @@ export const ITEM_BAR = [
   { glyph: 'turrets', name: '炮台', color: 'gold', count: (p) => p.turrets },
   { glyph: 'burnBullets', name: '燃烧子弹', color: 'gold', count: (p) => p.burnBullets },
   { glyph: 'pickupRange', name: '经验拾取范围', color: 'gold', count: (p) => (p.pickupRange - XP_PICKUP_RANGE) / XP_PICKUP_STEP },
+  // 炸壳：击杀小怪原地爆炸。角标读裸层数（从 0 起，无需偏移）—— 它不是场上实体也不是消耗品，层数买的是「每炸多大、多疼」
+  { glyph: 'killBlast', name: '炸壳', color: 'gold', count: (p) => p.killBlast },
 ];
 
 // 道具格几何：一排最多 5 格，超出向下续排，整块右对齐（2026-10-04 定的口径）

@@ -59,6 +59,8 @@ export default class Player extends Sprite {
                                         //   由 databus.twinBatteries 驱动、节拍住在 consts.js 的 TWIN_CD，所以本类里没有它的 dt 行
     this.pickupRange = XP_PICKUP_RANGE; // 经验磁吸半径（像素），宝石在这个距离内往角色飞（宝箱：经验拾取范围，每次 +XP_PICKUP_STEP）
     this.burnBullets = 0;               // 燃烧子弹层数（宝箱：燃烧子弹+1）：子弹命中挂 5 秒燃烧，每跳跳的血 = 这个层数；节拍与单跳基数在 consts.js 的 BURN_TICK/BURN_DMG
+    this.killBlast = 0;                 // 炸壳层数（宝箱：炸壳+1）：每杀一只普通小怪就在原地炸一次 AoE。★层数买的是「每炸多大、多疼」，
+                                        //   范围/伤害按 consts.js 的 killBlastRadius/killBlastDamage 饱和曲线取；爆炸实体在 main.js 击杀口生成，本类不持有计时器
     this.leech = 0;                     // 嗜血层数（宝箱：嗜血+1）：每次击杀有 LEECH_CHANCE 概率回这么多血。★层数加的是「一口回几血」，概率恒为 0.5%、不随层数变
     this.vial = 0;                      // 血瓶层数（宝箱：血瓶+1）：场上恒为一只瓶子，层数 = 每 VIAL_GAIN_CD 攒几滴。★节拍恒定，同燃烧/嗜血的口径
     this.vialDrops = 0;                 // 瓶内存量（滴）。★无上限，是定过的口径：夹住它等于让满血时的溢出重新变成白扔，那正是这件道具要治的病
