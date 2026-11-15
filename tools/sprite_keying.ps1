@@ -7,6 +7,7 @@ param(
   [string]$Src = 'vibe_images',
   [string]$Dst = 'images/entity',
   [int]$Zoom = 2,
+  [string]$Only = '',
   [switch]$Sheet
 )
 
@@ -249,6 +250,14 @@ $jobs = @(
   @{ prefix = 'boss_endospore'; logical = 88 },
   @{ prefix = 'boss_botulinum'; logical = 76 },
   @{ prefix = 'boss_biofilm';   logical = 96 },  # Mowang: real in-game spriteSize; radius 38 plus a 10px slime skirt
+  # Phage boss5 (Shijun / T4 myovirus): portrait silhouette -- elongated icosahedral head on top, cream
+  # neck collar, 4-ring contractile tail sheath, hexagonal baseplate, cream tail needle, six tail fibers
+  # splaying out at the base (approved appearance A "textbook T4"). logical 88 = config.js boss5 spriteSize;
+  # canvas is 16px larger than the 72px hit diameter (radius 36) so the fibers reach past the hit box,
+  # same convention as boss_giantcell. Palette is a deep-red capsid #B03A2E (lum ~92) with cream accents
+  # and a navy ink outline -- it pulls apart from the teal floor (lum ~61) in both luminance and hue, so
+  # it is NOT the invisible-navy failure the turret hit. bbox taller than wide (aspect < 1), fit=min binds on height.
+  @{ prefix = 'boss_phage';     logical = 88 },
   # Twins boss4: both states MUST come from one drawing. Two separate renders of "the same"
   # character always disagree on body scale, and because Process fits the content bbox to a
   # square, that disagreement survives as a visible size/position jump on the state swap.
@@ -260,6 +269,7 @@ if (-not (Test-Path $Dst)) { New-Item -ItemType Directory -Path $Dst -Force | Ou
 $done = @()
 
 foreach ($j in $jobs) {
+  if ($Only -and $j.prefix -ne $Only) { continue }
   $srcPrefix = if ($j.src) { $j.src } else { $j.prefix }
   $srcFile = Get-ChildItem -Path (Join-Path $Src ($srcPrefix + '_*.png')) -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1

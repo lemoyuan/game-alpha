@@ -3,6 +3,7 @@ import Boss from './boss';
 import BossSeaFire from './bossSeaFire';
 import BossFilm from './bossFilm';
 import BossTwins from './bossTwins';
+import BossPhage from './bossPhage';
 import {
   MONSTER_TYPES, FAST_UNLOCK_TIME, TANK_UNLOCK_TIME, RANGED_UNLOCK_TIME,
   hpScaleAt, MUTANT_CHANCE,
@@ -19,7 +20,7 @@ import { markEncountered } from '../../storage';
 // ★下面那句 `|| Boss` 兜底是这套结构里最贵的一处静默失效：漏登记不会报错，
 //   只会「用新 Boss 的数值跑毒王的冲锋」——血条、掉落、图鉴、刷怪降速全部正常。
 //   所以加一只 Boss 必须同时在这里加一行，config 名册（BOSS_SCHEDULE）里那一行才算接上
-const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm, boss4: BossTwins };
+const BOSS_CLASS = { boss1: Boss, boss2: BossSeaFire, boss3: BossFilm, boss4: BossTwins, boss5: BossPhage };
 
 // 刷怪控制器：普通怪随时间加密，宝箱怪按幸运值的概率刷新，Boss 定时出场
 export default class Spawner {

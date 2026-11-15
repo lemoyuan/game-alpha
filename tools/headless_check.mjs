@@ -255,6 +255,32 @@ if (TWIN !== undefined && TWIN !== '1') {
   else fs.writeFileSync(f, `${code.slice(0, at)}${tail.replace(re, '$1boss4: [], $1boss4Parked: [')}`);
 }
 
+// 噬君三机制的负向旋钮：PHNEG=<臂名> 只改 .hcheck 副本里的一处代码，把某一条机制改坏，
+// 用来证明下面那组纯检真的判得动它（而不是恒绿的摆设）。expect 是「这一臂必须打出的红」的子串，
+// 纯检跑完会回头核对：没打出 = 这条断言没有区分度，负向臂自己报红。★改副本不改 js/ 源码，跑完下一组自动还原
+const PHNEG_ARMS = {
+  trailpoison: { file: ['npc', 'monster', 'zone.js'], re: /if \(this\.grabbing\) player\.applyPoison\(this\.damage, this\.hold\);/, to: 'if (this.grabbing) player.takeDamage(this.damage, Date.now(), databus);', expect: '却没挂毒' },
+  trailwarn: { file: ['npc', 'monster', 'bossPhage.js'], re: /this\.trailLife, 0, this\.trailDamage/, to: 'this.trailLife, 600, this.trailDamage', expect: '燃烧路径 warnTime=' },
+  turncap: { file: ['npc', 'monster', 'phageMissile.js'], re: /this\.heading \+= Math\.max\(-cap, Math\.min\(cap, dA\)\);/, to: 'this.heading += dA;', expect: '转向帽没生效' },
+  life: { file: ['npc', 'monster', 'phageMissile.js'], re: /if \(this\.life >= this\.maxLife\) \{/, to: 'if (this.life >= this.maxLife * 1e9) {', expect: '自毁' },
+  telegraph: { file: ['npc', 'monster', 'bossPhage.js'], re: /this\.telegraphLeft = this\.teleportWarn;/, to: 'this.telegraphLeft = 100;', expect: '落点环只读了' },
+  blink: { file: ['npc', 'monster', 'bossPhage.js'], re: /this\.x = this\.destX;/, to: 'this.x = this.destX + 40;', expect: '不等于预警环心' },
+  slasharc: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(Math\.abs\(dA\) <= this\.slashArc \/ 2\) player\.takeDamage/, to: 'if (true) player.takeDamage', expect: '半径内但弧外也挨刀' },
+  slashradius: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(dx \* dx \+ dy \* dy > r \* r\) return;/, to: 'if (false) return;', expect: '弧内但半径外也挨刀' },
+};
+const PHNEG = process.env.PHNEG;
+if (PHNEG !== undefined) {
+  const arm = PHNEG_ARMS[PHNEG];
+  if (!arm) errors.push(`PHNEG=${PHNEG} 不是已知负向臂（可选 ${Object.keys(PHNEG_ARMS).join('/')}）`);
+  else {
+    const f = path.join(COPY, ...arm.file);
+    const code = fs.readFileSync(f, 'utf8');
+    // ★用 re.test() 判命中：源码改过形状时这一组等于没跑，必须报出来而不是静默绿
+    if (!arm.re.test(code)) errors.push(`副本 ${arm.file.join('/')} 里没找到负向臂 ${PHNEG} 要改的那行，这一组等于没跑`);
+    else fs.writeFileSync(f, code.replace(arm.re, arm.to));
+  }
+}
+
 // 双子的出场钉值：TWINS=1 要把双子稳定叫进这一局。
 // ★2026-10-24 顺序随机之后的写法变了：旧版把 BOSS_FOURTH_SPAWN_TIME 压到 150、再在循环里把 bossIndex
 //   按到 boss4 那一行 —— 那两条现在都失效了，因为 FOURTH 说的是【第 4 槽】的时刻，
@@ -551,6 +577,9 @@ let poisonFrames = 0; // 中毒状态覆盖的帧数：赤潮池的 applyPoison 
 let poisonTicks = 0;  // 中毒结算次数：poisonTickLeft 在两帧之间变大就说明这一帧跳了一次血
 let prevPoisonTick = 0;
 let bossDrops = 0;   // Boss 死亡掉落结算次数
+let boss5Drops = 0;  // 噬君（终极通关 Boss）死了几只：恒 0 或 1（一局只出场一次），通关那一局必须 = 1
+let phageSeen = false; // 噬君是否真的出场过：0 时下面通关断言的零是「没轮到末槽」的抽样零，不是断链
+let victoryWithoutPhage = false; // isVictory 置位那一帧 dyingBosses 里没有 boss5 = 通关被别的 Boss 之死误触发
 let sawPet = false;  // 专属匣是否真的授出过跟班（bot 不拾取就一直是 false）
 let maxPets = 0;
 // ★原先这里有一个 sawBossChest（「场上出现过带 kindDef 的匣」）。它已经拆成上面那对 sawPetChest / sawStatChest：
@@ -564,6 +593,14 @@ let totalTexts = 0;     // 飘字请求总量：suppressed 只有对着这个分
 let suppressedTexts = 0; // 被上限吃掉的飘字数
 let gameOverAt = -1;    // 第一次 game over 的游戏时刻（秒），-1 = 活到了最后：
                         //   玩家一死 main.js 就不再驱动 databus.update，这一秒之后的每一条实场读数都是冻结帧上的旧值
+let victoryAt = -1;     // 第一次通关（杀死噬君）的游戏时刻（秒），-1 = 这一局没通关。
+                        //   通关与死亡互斥，但两者都让 main.js 停摆 databus.update，所以「世界冻住」的时刻取两者较早的那个
+// 世界冻住时刻：死亡或通关 whichever 先到。所有「活了多少秒」的读数都该用它，而不是只看 gameOverAt
+const frozenAt = () => {
+  if (gameOverAt < 0) return victoryAt;
+  if (victoryAt < 0) return gameOverAt;
+  return Math.min(gameOverAt, victoryAt);
+};
 
 // 站桩的 bot 会不会真死：默认 1 = 每帧把血回满（其余每一件道具的账都建立在这根钉子上，因为世界一冻
 // 就再也读不到数）。HPPIN=0 关掉它，只给主动键那两臂读「死亡时刻 / 整局长度」用
@@ -666,6 +703,11 @@ const twinsThrowArmed = new WeakMap(); // 上一帧是否已在到点状态：�
 let twinsBursts = 0;         // 自溶爆起爆次数（包实例的 detonateSelf）
 const twinsAlive = new Set();   // 还在场的 boss4（按对象身份登记，召唤那一帧就记）
 let twinsDeaths = 0;         // 死掉并被回收的双子只数：激怒断言的门控 —— 要"真死过一只"才谈得上丧兄
+const phageAlive = new Set();   // 还在场的 boss5（按对象身份登记）：通关探针靠它判「噬君死没死」，不靠削血快照
+let phageDead = false;          // 噬君已死（被回收或 isDead）：isVictory 置位那一帧它必须已 true，否则通关被误触发
+let phageDeaths = 0;            // 噬君死亡只数（强引用账，任何死因都记）：boss5Drops 读的是 step 前的削血快照，
+                                //   子弹在 step 内补刀那一帧它看不见 → 通关链会假红「一只都没倒下」。★不加 isVictory 门：
+                                //   噬君之死正是通关那一帧，门一加就把要数的这只挡掉了（与 twinsDeaths 的守卫相反）
 let twinsGrieving = 0;       // 「兄弟已死、同屏还站着另一只」的帧数：激怒断言的真门控。
                              // ★只数 twinsDeaths 会假红：测台每 60 帧削一次 Boss 血，两只经常在同一帧一起倒，
                              //   那时「活着的那只」从没存在过，bossTwins.update 里 `if (this.isDead) return` 挡掉激怒是正确行为
@@ -709,6 +751,10 @@ const bossLog = [];
 // 「这一局有没有轮到某只 Boss 出场」——顺序随机之后，某一只整局没来是旋钮/时刻表的后果，不是断链。
 // 下面那三处「没死过某只 Boss」的门都改读它：没出场就打日志跳过，出场了却没死才报红
 const bossAppeared = (type) => bossLog.some((r) => r.type === type);
+// 「这一局某只 Boss 真死过几只」的强引用账：deadAt 由 step 后通用补钉按对象身份记（任何死因都抓得到），
+//   比 step 前的削血快照 bossNDrops 全。下面 boss2/boss3 的「没死过它」门用 Math.max(快照, 这本) 取大，
+//   免得子弹在 step 内补刀那一帧被快照漏掉、整组断言假红（与双子 twinDeathsSeen、噬君 phageDeathsSeen 同一套）
+const bossDeathsSeen = (type) => bossLog.filter((r) => r.type === type && r.deadAt >= 0).length;
 {
   const spawner = databus.spawner;
   const origBoss = Object.getPrototypeOf(spawner).spawnBoss;
@@ -722,6 +768,7 @@ const bossAppeared = (type) => bossLog.some((r) => r.type === type);
       twinsGroups.push(group);
       for (const b of group) twinsAlive.add(b);
     }
+    if (entry && entry.type === 'boss5') { phageSeen = true; for (const b of group) phageAlive.add(b); }
     const slotIdx = BOSS_SLOTS.indexOf(slot || BOSS_SLOTS[0]);
     for (const b of group) {
       bossLog.push({
@@ -1165,7 +1212,7 @@ for (let i = 0; i < frames; i++) {
   // ★坐标一律从 skillButtonRect() 取，不自己按常量重算：绘制 / 命中 / 摇杆让位三处共用的就是这一个函数，
   //   重算出来的那块和真机上按到的那块可以差一整格，而读数照样「看着合理」
   if (!memTapProbed && p && p.membrane > 0 && p.membraneT === 0 && p.membraneCdT === 0
-    && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+    && !databus.isGameOver && !databus.isVictory && !databus.isPaused && !databus.upgradeScreen.visible) {
     memTapProbed = true;
     const b = skillButtonRect();
     // 先点场外：这是整局唯一一次「场外那一下必须什么都不干」还判得动的时刻 —— 按成一次以后膜就起来了，
@@ -1182,7 +1229,7 @@ for (let i = 0; i < frames; i++) {
   //   2) MEMBRANE=0 那一臂要的恰好是「按 0 次、膜 0 帧」，两臂共用同一个入口，差别只在道具可达不可达
   // ★走 activateMembrane() 而不是直接写 membraneT：这条臂量的是那三道门本身，
   //   负向测试把「放火那一刻顶满冷却」删掉时，下面的按压间隔会立刻露出来
-  if (p && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+  if (p && !databus.isGameOver && !databus.isVictory && !databus.isPaused && !databus.upgradeScreen.visible) {
     memCaller = 'harness';
     p.activateMembrane();
     memCaller = 'game';
@@ -1196,7 +1243,7 @@ for (let i = 0; i < frames; i++) {
   // ★游戏结束了就别削了：这段在台子外层，而 main.js 在玩家死后整段跳过 databus.update，
   //   于是每次 takeDamage 产生的那条飘字再也没有帧去让它过期 —— 削一万下就攒一万条永久飘字，
   //   「飘字上限太紧」量的其实是冻住的世界，不是游戏
-  const bosses = databus.isGameOver ? [] : databus.enemys.filter((e) => e.isBoss);
+  const bosses = (databus.isGameOver || databus.isVictory) ? [] : databus.enemys.filter((e) => e.isBoss);
   for (let bi = 0; bi < bosses.length; bi++) {
     if (i % 60 !== 0) break;
     // 第二只起隔秒削：两只同 hp、同倍率会死在同一帧，而 bossTwins.update 第一行就是 isDead return，
@@ -1300,7 +1347,7 @@ for (let i = 0; i < frames; i++) {
     prevPoisonTick = p.poisonTickLeft;
     // 膜生效帧数：世界冻住（玩家已死）之后 membraneOn() 读的是最后一次的真值，别再往上涨，
     //   否则「按 0 次却有 N 帧膜」那条零断言会被冻帧顶红
-    if (!databus.isGameOver && p.membraneOn()) membraneFrames++;
+    if (!databus.isGameOver && !databus.isVictory && p.membraneOn()) membraneFrames++;
   }
   const up = databus.upgradeScreen;
   if (up && up.visible && !up.selectAnim) {
@@ -1310,6 +1357,23 @@ for (let i = 0; i < frames; i++) {
   // 逐帧文案账本要在 step() 之前清：step() 内部一路 update + render，清晚了就把上一帧的字也算进这一帧
   frameTexts.clear();
   step();
+  // 噬君死亡探针：必须在 step() 之后、通关置位读数之前跑 —— main.js 在死亡口同一帧里既置 isVictory
+  //   又把尸体回收出 enemys，靠削血快照（dyingBosses）会漏掉「子弹在 step 内补刀」那一帧。
+  //   按对象身份判「离开 enemys 或 isDead」，任何死因都抓得到
+  for (const b of phageAlive) {
+    if (databus.enemys.includes(b) && !b.isDead) continue;
+    phageAlive.delete(b);
+    phageDead = true;
+    phageDeaths++;
+  }
+  // 死亡时刻通用补钉（所有 Boss）：bossLog 持强引用，任何死因——含子弹在 step 内补刀那一帧——都在这里记 deadAt。
+  //   step 前的削血快照（dyingBosses）会漏掉补刀帧，逐 Boss 报表会印成「死没死」、boss2/boss3 的「没死过它」门会假红。
+  //   同一把世界钟（spawner.elapsed，与出场 at 一致），deadAt<0 守卫保证不覆盖快照已记的那一只
+  for (const r of bossLog) {
+    if (r.deadAt >= 0) continue;
+    if (databus.enemys.includes(r.ent) && !r.ent.isDead) continue;
+    r.deadAt = databus.spawner.elapsed;
+  }
   // —— 「巨细胞核」那七行 +x 的按帧账本 ——
   // ★只在核心拾取发生之后才开始记：三选一卡片与升级成长现在也弹 +x，拾取前的字不该算进飘字的账
   //   （本例挑的三句和八张卡的 desc、四级成长的文案都不撞，POP_TEXTS 声明处那条静态检查把这件事钉住了）
@@ -1330,18 +1394,24 @@ for (let i = 0; i < frames; i++) {
   //   而 twins 那行的 deaths 0 / enraged no 也会被读成「双子什么都没干」，
   //   实际是「玩家 3 秒就死了，之后的账没人跑」。有这一行才分得开回归和空跑
   if (gameOverAt < 0 && databus.isGameOver) gameOverAt = i * DT;
+  if (victoryAt < 0 && databus.isVictory) {
+    victoryAt = i * DT;
+    // 通关只准由噬君之死触发：置位这一帧噬君必须已死。boss1~4 槽位在前、先死，
+    //   若胜利在它们那一帧就置位，phageDead 还是 false → 下面断言报红（这就是「平行胜利态」的判别式）
+    if (!phageDead) victoryWithoutPhage = true;
+  }
   // 突变体从 enemys 里消失 = 本帧它的死亡结算跑完了，血块要是有掉也就在这一帧掉
   for (const m of mutantAlive) {
     if (databus.enemys.includes(m)) continue;
     mutantAlive.delete(m);
-    if (!databus.isGameOver) mutantDeaths++;
+    if (!databus.isGameOver && !databus.isVictory) mutantDeaths++;
   }
   if (databus.clots.length > clotPeak) clotPeak = databus.clots.length;
   // 双子从 enemys 里消失 = 本帧它的死亡结算跑完了。激怒那条边要有「真死过一只」才判得下去
   for (const t of twinsAlive) {
     if (databus.enemys.includes(t)) continue;
     twinsAlive.delete(t);
-    if (!databus.isGameOver) twinsDeaths++;
+    if (!databus.isGameOver && !databus.isVictory) twinsDeaths++;
   }
   // 「兄弟已死、自己还在场」的窗口：twins 是上面那次逐帧扫描到的在场 boss4 只数，
   //   两只同一帧倒下时它当场归零 → 这一格不涨，激怒那条断言自动让开（不是放水，是那种局面下没人可激怒）
@@ -1354,6 +1424,7 @@ for (let i = 0; i < frames; i++) {
     if (dyingBoss.type === 'boss2') boss2Drops++;
     if (dyingBoss.type === 'boss3') boss3Drops++;
     if (dyingBoss.type === 'boss4') boss4Drops++;
+    if (dyingBoss.type === 'boss5') boss5Drops++;
     if (firstBossDeathAt < 0) firstBossDeathAt = i * DT;
     if (databus.xpGems.length < BOSS_XP_GEMS) {
       errors.push(`boss ${dyingBoss.type} 死亡只撒了 ${databus.xpGems.length} 颗宝石（应 ≥ ${BOSS_XP_GEMS}）`);
@@ -1519,7 +1590,7 @@ for (let i = 0; i < frames; i++) {
   //   （只有「恰好在这一刻血皮被补死」才碰得到，且只会让 boss drops 那行偏小，不会假红）
   // ★同一串泵里 frameMs 一点没走：这期间记下的时刻全是同一个数，任何「相邻间隔」类断言都得把这些条目挑出来（见 probePumpOn）
   if (!memClockProbed && p && p.membraneT > 0 && p.membraneCdT > 0
-    && !databus.isGameOver && !databus.isPaused && !databus.upgradeScreen.visible) {
+    && !databus.isGameOver && !databus.isVictory && !databus.isPaused && !databus.upgradeScreen.visible) {
     memClockProbed = true;
     const t0 = p.membraneT;
     const c0 = p.membraneCdT;
@@ -1649,18 +1720,19 @@ if (!BOSS_DROPS_ENABLED) {
 //   道具仍然登记着（注册面扫描照旧覆盖它），所以「表里这一号空不空」就是游戏内可达性的唯一真相
 const SEAFIRE_ON = BOSS_DROPS.boss2.length > 0;
 const CROSS_SWEEP_MS = LASER_CROSS_TELEGRAPH + LASER_CROSS_FIRE + LASER_CROSS_FADE;
+const crossDeathsSeen = Math.max(boss2Drops, bossDeathsSeen('boss2'));
 if (!SEAFIRE_ON) {
   if (sawCrossChest) errors.push('海火核心已不可达却还掉出过匣：LASER=0 的旋钮没把 BOSS_DROPS.boss2 那一行掐住');
   if (crossGrants) errors.push(`海火核心已不可达却授予过 ${crossGrants} 次层数：CHEST_GRANTS.core_seafire 被掉落以外的地方调用了`);
   if (databus.player && databus.player.laserCross) errors.push(`海火核心已不可达玩家却有 ${databus.player.laserCross} 层：层数还有别的写入口`);
   if (crossFires) errors.push(`海火核心已不可达却放出过 ${crossFires} 根十字：fireLaserCross 没看层数`);
-} else if (boss2Drops === 0) {
+} else if (crossDeathsSeen === 0) {
   // ★顺序随机之后「这一局没轮到海火」是正常结果（钉排表、或后面的槽被战斗时长推出测试窗），
   //   报红只会让那一臂永远不绿 —— 但也不能一声不吭，否则下一位会把这行绿读成「这件验过了」
   if (!bossAppeared('boss2')) console.log('海火核心：本局没轮到海火出场（第 1 槽 = boss1 之外的排表，或时刻表没走到它那一槽），这一件的断言整节跳过');
-  else errors.push('海火核心开着、本局海火也出场了，却整局没死过它（boss2Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+  else errors.push(`海火核心开着、本局海火也出场了，却整局没死过它（boss2Drops=${boss2Drops} / 强引用账 ${bossDeathsSeen('boss2')}）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
 } else {
-  if (!sawCrossChest) errors.push(`死了 ${boss2Drops} 只海火，场上却没出现海火核心那件匣：main.js 的掉落口没按 Boss 号对上表`);
+  if (!sawCrossChest) errors.push(`死了 ${crossDeathsSeen} 只海火，场上却没出现海火核心那件匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!crossGrants) errors.push('匣掉过却没授予一次层数：拾取→CHEST_GRANTS.core_seafire 断了一环（chest.js 那句 CHEST_GRANTS[kind] 没跑到？）');
   if (crossHpLosses === 0) errors.push(`带着 ${crossGrants} 层却整局没真正掉过血：触发分母是零，下面每条读数都是空跑（测台每帧回血？还是无敌帧太长？）`);
   // 一根十字只可能由一次掉血换来：多出来的那几根说明触发点写重了（或冷却门没生效）
@@ -1829,6 +1901,7 @@ let memGapMin = Infinity;
 for (let k = 1; k < membranePressAt.length; k++) {
   memGapMin = Math.min(memGapMin, membranePressAt[k] - membranePressAt[k - 1]);
 }
+const memDeathsSeen = Math.max(boss3Drops, bossDeathsSeen('boss3'));
 if (!BIOFILM_ON) {
   if (sawMembraneChest) errors.push('薄膜核心已不可达却掉出过匣：MEMBRANE=0 的旋钮没把 BOSS_DROPS.boss3 那一行掐住');
   if (membraneGrants) errors.push(`薄膜核心已不可达却授予过 ${membraneGrants} 次：CHEST_GRANTS.core_biofilm 被掉落以外的地方调用了`);
@@ -1842,12 +1915,12 @@ if (!BIOFILM_ON) {
   }
 } else if (!BOSS_DROPS_ENABLED) {
   if (membranePresses || membraneFrames) errors.push(`整张 BOSS_DROPS 被 BOSSDROP 关掉却按成 ${membranePresses} 次、膜 ${membraneFrames} 帧：掉落以外的地方把道具发出去了`);
-} else if (boss3Drops === 0) {
+} else if (memDeathsSeen === 0) {
   // ★同海火那一条：没轮到膜王出场是排表/时刻表的后果，不是断链，但也不能一声不吭
   if (!bossAppeared('boss3')) console.log('薄膜核心：本局没轮到膜王出场（第 1 槽 = boss1 之外的排表，或时刻表没走到它那一槽），这一件的断言整节跳过');
-  else errors.push('薄膜核心开着、本局膜王也出场了，却整局没死过它（boss3Drops=0）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑');
+  else errors.push(`薄膜核心开着、本局膜王也出场了，却整局没死过它（boss3Drops=${boss3Drops} / 强引用账 ${bossDeathsSeen('boss3')}）：这一组读到的全是抽样零，不是代码零。把测试时长拉长再跑`);
 } else {
-  if (!sawMembraneChest) errors.push(`死了 ${boss3Drops} 只膜王，场上却没出现薄膜核心那只匣：main.js 的掉落口没按 Boss 号对上表`);
+  if (!sawMembraneChest) errors.push(`死了 ${memDeathsSeen} 只膜王，场上却没出现薄膜核心那只匣：main.js 的掉落口没按 Boss 号对上表`);
   if (!membraneGrants) errors.push('匣掉过却没授予一次：拾取→CHEST_GRANTS.core_biofilm 断了一环（这件不叠层，授予那行写的是 = 1）');
   if (databus.bossChests.core_biofilm !== membraneGrants) {
     errors.push(`HUD 计数 core_biofilm ×${databus.bossChests.core_biofilm} 与授予次数 ${membraneGrants} 对不上：右栏那格与详情页那行会少报/多报`);
@@ -1970,8 +2043,9 @@ if (!DIPLO_ON) {
   if (twinPeak > 1) errors.push(`场上同时有过 ${twinPeak} 座炮座：授予不叠层、生成门判的是「台上一座都没有」，两条里有一条被改成了每帧落座`);
   // 「不跟着你走」的行为学凭据：这座道具的全部意义就是不动，任何跟随逻辑都把它写成第五只跟班
   if (twinDrift) errors.push(`炮座离开过落地那一刻的坐标 ${twinDrift} 帧：这件道具买的就是「只守身边那一小块地」，加了跟随就等于金匣炮台白做了一遍`);
-  // 世界跑到的时刻：玩家一死 main.js 就不再驱动 databus.update，此后 cdT 停在原地
-  const twinAliveSec = gameOverAt < 0 ? frames * DT : gameOverAt;
+  // 世界跑到的时刻：玩家一死或一通关 main.js 就不再驱动 databus.update，此后 cdT 停在原地
+  const twinFrozen = frozenAt();
+  const twinAliveSec = twinFrozen < 0 ? frames * DT : twinFrozen;
   twinActiveMs = twinOnAt < 0 ? 0 : (twinAliveSec * 1000 - twinOnAt) / (DT * 1000) * MEM_STEP;
   // ★上界同样折 frameMs 那把钟：cdT 按 stub 的 17ms/帧 走，twinOnAt 却是 16.667ms/帧 的时刻，
   //   不折算的话长局会攒出好几帧的差额，把正确行为判成超频（炮台那条 2181 行同一笔账）
@@ -2172,6 +2246,113 @@ const twinHits = (shell, e) => twinRayMiss(shell, e.x, e.y) < 1e-6;
 if (twinDamage(0) !== 1) errors.push(`攻 0 时单发 = ${twinDamage(0)}（应 1）：保底没兜住，这件道具会在纯值局里打出 0 伤害的弹`);
 if (twinDamage(26) !== 52) errors.push(`攻 26 时单发 = ${twinDamage(26)}（应 52 = floor(26 × ${TWIN_DAMAGE_RATIO})）：改 TWIN_DAMAGE_RATIO 要连这条期望一起改，它是「一轮两发 ≈ 重炮」那笔算术的凭据`);
 if (TWIN_CD <= 0 || TWIN_SALVO < 2) errors.push(`TWIN_CD=${TWIN_CD} / TWIN_SALVO=${TWIN_SALVO} 不成立：这一件的定义是「一拍两轮各两发」，常量被改歪时上面的期望会跟着一起变形，只有这条硬门能拦住`);
+
+// —— 噬君（boss5）三机制纯检：实场里 bot 走位随机、末槽窗口又短，这几档只有摆出来才判得准 ——
+// ★燃烧路径必须走 applyPoison（不吃无敌帧）而不是 takeDamage；导弹必须有转向帽+有限寿命；
+//   瞬移必须等满 teleportWarn 才落、且落在预警环心；刀砍必须半径+弧双门。任何一条被改回「普通弹/普通受击」这里报红
+const BossPhage = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'bossPhage.js')))).default;
+const PhageMissile = (await import(fileUrl(path.join(COPY, 'npc', 'monster', 'phageMissile.js')))).default;
+const { ARENA_W: PH_AW, ARENA_H: PH_AH } = await import(fileUrl(path.join(COPY, 'consts.js')));
+const PHC = MONSTER_TYPES.boss5;
+const PHX = PH_AW / 2, PHY = PH_AH / 2;
+function phageFixture() { const b = new BossPhage('boss5', PHC); b.init(PHX, PHY); return b; }
+function phageStub(px, py) {
+  const hits = []; const poison = [];
+  return {
+    player: { x: px, y: py, radius: 13, invincibleUntil: 0, takeDamage: (d) => hits.push(d), applyPoison: (d, h) => poison.push([d, h]) },
+    zones: [], missiles: [], hits, poison,
+    pool: { getItemByClass: (n, C) => new C() },
+  };
+}
+{
+  // 被动燃烧路径：移动即在脚下落 warn=0 的橙盘，参数全来自 config；踩上去走 applyPoison 不走 takeDamage
+  const b = phageFixture();
+  const db = phageStub(PHX + 120, PHY);
+  for (let k = 0; k < 4; k++) b.update(0.5, db);
+  if (!db.zones.length) errors.push('噬君移动 2 秒一片燃烧路径都没落：trailT/trailCd 那条铺路链断了');
+  else {
+    const z = db.zones[0];
+    if (z.warnTime !== 0) errors.push(`燃烧路径 warnTime=${z.warnTime}（应 0 立即生效）：铺路被加上了预警，踩上去不再立刻挂毒`);
+    if (z.tint !== PHC.trailTint) errors.push(`燃烧路径 tint=${z.tint}（应 ${PHC.trailTint}）：和赤潮/毒渍/黏液撞色，玩家分辨不出踩下去会怎样`);
+    if (z.r0 !== PHC.trailRadius || z.damage !== PHC.trailDamage || z.hold !== PHC.trailHold) errors.push(`燃烧路径 r/damage/hold=${z.r0}/${z.damage}/${z.hold}（应 ${PHC.trailRadius}/${PHC.trailDamage}/${PHC.trailHold}）：config 的铺路参数没传进 Zone`);
+    // 站在盘心 + 无敌帧拉满：仍须挂毒（applyPoison）且一次 takeDamage 都不许有
+    db.player.x = z.x; db.player.y = z.y; db.player.invincibleUntil = Number.MAX_SAFE_INTEGER;
+    z.update(0.1, db);
+    if (!db.poison.length) errors.push('站在燃烧路径上、无敌帧拉满却没挂毒：铺路走了 takeDamage 被无敌帧限流，等于没铺');
+    else if (db.poison[0][0] !== PHC.trailDamage || db.poison[0][1] !== PHC.trailHold) errors.push(`挂毒 damage/hold=${db.poison[0]}（应 ${PHC.trailDamage}/${PHC.trailHold}）`);
+    if (db.hits.length) errors.push(`燃烧路径结算了 ${db.hits.length} 次 takeDamage：这条通道必须绕开无敌帧，走 takeDamage 会被限流到个位数`);
+  }
+}
+{
+  // 攻击一：boss 开火必须按 config 造出 missileCount 枚温和追踪弹
+  const b = phageFixture();
+  const db = phageStub(PHX + 120, PHY);
+  // 首波导弹会被第一轮瞬移挤到 ~3.8s 之后（两个冷却同偏移、teleport 分支先 return），窗口要给够
+  for (let k = 0; k < 40 && !db.missiles.length; k++) b.update(0.5, db);
+  if (db.missiles.length !== PHC.missileCount) errors.push(`首波导弹 ${db.missiles.length} 枚（应 ${PHC.missileCount}）：fireMissiles 的入列或 missileCd 写歪`);
+  for (const m of db.missiles) {
+    if (m.speed !== PHC.missileSpeed || m.turnRate !== PHC.missileTurn || m.maxLife !== PHC.missileLife || m.damage !== PHC.missileDamage || m.radius !== PHC.missileRadius) {
+      errors.push(`导弹 speed/turn/life/damage/r=${m.speed}/${m.turnRate}/${m.maxLife}/${m.damage}/${m.radius} 与 config 不符：温和追踪的三个旋钮没传进实体`);
+      break;
+    }
+  }
+}
+{
+  // 转向帽：玩家摆在正侧方（want 与 heading 差 90°），每帧转角必须≤turnRate×dt；摘掉帽第一帧就会转满 90°
+  const m = new PhageMissile();
+  m.init(PHX, PHY, 0, PHC.missileSpeed, PHC.missileTurn, PHC.missileLife, PHC.missileDamage, PHC.missileRadius, PHC.color);
+  const db = phageStub(PHX, PHY + 100);
+  const dt = 1 / 60; const cap = PHC.missileTurn * dt;
+  let maxD = 0; let firstD = 0;
+  for (let k = 0; k < 30; k++) { const h0 = m.heading; m.update(dt, db); const d = Math.abs(m.heading - h0); if (k === 0) firstD = d; if (d > maxD) maxD = d; }
+  if (firstD > cap + 1e-9) errors.push(`导弹第一帧转了 ${firstD.toFixed(3)}rad（帽 ${cap.toFixed(3)}）：转向帽没生效，变成 instant-homing，玩家绕圈甩不掉`);
+  if (maxD > cap + 1e-9) errors.push(`导弹单帧最大转角 ${maxD.toFixed(3)}rad 超过帽 ${cap.toFixed(3)}：温和追踪被改成了硬追踪`);
+  // 有限寿命：没有玩家时也必须到点自毁；末段 20% 淡出
+  const m2 = new PhageMissile();
+  m2.init(PHX, PHY, 0, PHC.missileSpeed, PHC.missileTurn, PHC.missileLife, PHC.missileDamage, PHC.missileRadius, PHC.color);
+  const db2 = phageStub(PHX, PHY); db2.player = null;
+  let lifeAtDestroy = -1;
+  for (let k = 0; k < 200 && !m2.isDestroyed; k++) { m2.update(0.1, db2); if (m2.isDestroyed) lifeAtDestroy = m2.life; }
+  if (lifeAtDestroy < 0) errors.push('导弹没有玩家也不自毁：maxLife 那道门没了，飞镖会无限累积');
+  else if (lifeAtDestroy < PHC.missileLife || lifeAtDestroy > PHC.missileLife + 100) errors.push(`导弹自毁于 ${lifeAtDestroy}ms（应 ${PHC.missileLife}~+100）：寿命门写歪`);
+  m2.life = PHC.missileLife * 0.5; if (m2.alpha() !== 1) errors.push('寿命前半段 alpha 就该是 1，淡出提前了');
+  m2.life = PHC.missileLife * 0.9; if (!(m2.alpha() < 1)) errors.push('寿命末段 20% 没淡出：「它会消失」在画面上读不出来');
+}
+{
+  // 攻击二：telegraph 必须等满 teleportWarn 才瞬移、且落在预警环心；windup 等满 slashWarn 才结算刀砍
+  const b = phageFixture();
+  const db = phageStub(PHX + 80, PHY);
+  const dt = 0.1;
+  let guard = 0;
+  while (b.state !== 'telegraph' && guard++ < 200) b.update(dt, db);
+  if (b.state !== 'telegraph') errors.push('泵了 20 秒噬君都没进 telegraph：teleportT/teleportCd 那条起念链断了');
+  else {
+    const dx = b.destX, dy = b.destY;
+    let ms = 0;
+    while (b.state === 'telegraph' && ms < 5000) { b.update(dt, db); ms += dt * 1000; }
+    if (Math.abs(ms - PHC.teleportWarn) > dt * 1000 + 1e-6) errors.push(`落点环只读了 ${ms}ms 就瞬移（应 ${PHC.teleportWarn}）：预警窗口被缩短，玩家来不及走位`);
+    if (b.x !== dx || b.y !== dy) errors.push(`瞬移落点 (${b.x},${b.y}) 不等于预警环心 (${dx},${dy})：环画在一处、人落在另一处，预警失去意义`);
+    let wms = 0;
+    while (b.state === 'windup' && wms < 5000) { b.update(dt, db); wms += dt * 1000; }
+    if (wms < PHC.slashWarn || wms > PHC.slashWarn + dt * 1000 + 1e-6) errors.push(`挥刀前摇 ${wms}ms（应 ${PHC.slashWarn}~+100）：前摇窗口写歪`);
+    if (!db.hits.includes(PHC.slashDamage)) errors.push(`玩家站在落点侧方 60px（半径内+弧内）却没挨刀 ${PHC.slashDamage}：doSlash 的命中判定或 slashAngle 快照写歪`);
+  }
+}
+{
+  // 刀砍双门：半径内+弧内才挨；半径内但弧外、弧内但半径外都不挨（各判一次，摘掉任一门这里报红）
+  const mk = (px, py) => { const b = phageFixture(); b.slashAngle = 0; const db = phageStub(px, py); b.doSlash(db); return db.hits.length; };
+  if (mk(PHX + 40, PHY) !== 1) errors.push('半径内+弧内（正前方 40px）却没挨刀：doSlash 的命中门把该中的也挡了');
+  const aOut = PHC.slashArc / 2 + 0.3;
+  if (mk(PHX + 40 * Math.cos(aOut), PHY + 40 * Math.sin(aOut)) !== 0) errors.push('半径内但弧外也挨刀：slashArc 那道角度门没了，刀砍变成整圆 AoE');
+  if (mk(PHX + PHC.slashRadius + 40, PHY) !== 0) errors.push('弧内但半径外也挨刀：slashRadius 那道距离门没了，站多远都挨');
+}
+console.log(`phage mechanism (pure): 铺路 warn0/tint${PHC.trailTint}/走 applyPoison 不吃无敌帧 | 导弹 ${PHC.missileCount} 枚 转向帽 ${PHC.missileTurn}rad/s 寿命 ${PHC.missileLife}ms 末段淡出 | 落点环 ${PHC.teleportWarn}ms 瞬移落环心 | 前摇 ${PHC.slashWarn}ms 刀砍 ${PHC.slashDamage} 半径+弧双门`);
+// 负向臂回头核对：改坏的那一处必须真的把对应的红打出来，否则这条纯检是恒绿摆设（区分度自检）
+if (PHNEG !== undefined && PHNEG_ARMS[PHNEG]) {
+  const want = PHNEG_ARMS[PHNEG].expect;
+  if (!errors.some((e) => e.includes(want))) errors.push(`负向臂 PHNEG=${PHNEG} 没打出预期红「${want}」：这条断言没有区分度，改坏它也不报`);
+  else console.log(`phage negative PHNEG=${PHNEG}: 预期红「${want}」已打出（区分度成立）`);
+}
 
 
 // —— 左栏 +x 的全源断言：升级成长与三选一选卡现在也走同一条飘字链 ——
@@ -2573,8 +2754,9 @@ if (maxVials > 1) {
 if (VIAL > 0 && maxVials === 0) {
   errors.push(`血瓶 ${VIAL} 层场上却一只都没生成：databus 的生成条件或 player.vial 属性名断了`);
 }
-// 期望进账按「这一局世界真跑了多久」推：玩家一死 main.js 就不再驱动 update，此后既不自增也不输送
-const vialAlive = gameOverAt < 0 ? frames * DT : gameOverAt;
+// 期望进账按「这一局世界真跑了多久」推：玩家一死或一通关 main.js 就不再驱动 update，此后既不自增也不输送
+const vialFrozen = frozenAt();
+const vialAlive = vialFrozen < 0 ? frames * DT : vialFrozen;
 const vialExpectGain = Math.floor(vialAlive / VIAL_SEC) * VIAL;
 if (VIAL > 0 && vialExpectGain > 0 && vialIn < vialExpectGain) {
   errors.push(`血瓶 ${VIAL} 层、存活 ${vialAlive.toFixed(0)} 秒，进账却只有 ${vialIn} 滴（自增就该 ≥ ${vialExpectGain}）：Player.update 里那句 pumpVial 没接上或早退`);
@@ -2584,8 +2766,9 @@ if (VIAL > 0 && vialExpectGain > 0 && vialOutTicks === 0) {
 }
 
 // —— 炮台实场断言 ——
-// 世界跑到的时刻：玩家一死 main.js 就不再驱动 databus.update，此后 cdT 停在原地
-const turretAlive = gameOverAt < 0 ? frames * DT : gameOverAt;
+// 世界跑到的时刻：玩家一死或一通关 main.js 就不再驱动 databus.update，此后 cdT 停在原地
+const turretFrozen = frozenAt();
+const turretAlive = turretFrozen < 0 ? frames * DT : turretFrozen;
 const turretActiveMs = turretOnAt < 0 ? 0 : (turretAlive - turretOnAt) / DT * Math.round(DT * 1000);
 // ★上界用 17 毫秒而不是 DT 的 16.667：main.js 的 dt 取自 stub 的 Date.now，而 step() 每帧把那只表拨 +Math.round(DT*1000)
 const turretShotBound = (Math.floor(turretActiveMs / TURRET_CD) + 1) * maxTurrets;
@@ -3216,6 +3399,7 @@ let bossXpTotal = 0;
       if (order.length !== BOSS_SCHEDULE.length) { bad = `第 ${i} 次给出 ${order.length} 条（名册只有 ${BOSS_SCHEDULE.length} 只）`; break; }
       if (order.some((e) => BOSS_SCHEDULE.indexOf(e) === -1)) { bad = '给出的行不是名册里的原对象：洗一遍就把 pair / toast 洗掉了'; break; }
       if (new Set(order).size !== order.length) { bad = `第 ${i} 次给出 ${order.map((e) => e.type).join('>')}，有重复：一只 Boss 会在一局里出场两次`; break; }
+      if (order[order.length - 1].type !== 'boss5') { bad = `第 ${i} 次末位是 ${order[order.length - 1].type} 而不是 boss5：噬君必须恒最后登场，否则「杀死它=通关」会在中途触发`; break; }
       const key = order.map((e) => e.type).join('>');
       perms.add(key);
       if (key !== identity) nonIdentity++;
@@ -3224,6 +3408,9 @@ let bossXpTotal = 0;
     else {
       if (nonIdentity === 0) errors.push('buildBossOrder 连发 2000 次全是名册原序：BOSS_ORDER_RANDOM 是 true 却一次也没洗，「每局随机」这条是假的');
       if (perms.size < 2) errors.push(`buildBossOrder 2000 次只洗出 ${perms.size} 种顺序：发牌近乎恒定`);
+      // 末位钉死 boss5 后，前四只 Fisher-Yates 恰好 4! = 24 种；2000 次抽样漏掉任一种的概率 ≈ 24×(23/24)^2000 ≈ 0。
+      // ★硬编 24 不拿名册长度算：那样会变成恒真断言。多了（如 120）= 末位没钉住，少了 = 洗牌不均匀
+      if (perms.size !== 24) errors.push(`buildBossOrder 2000 次洗出 ${perms.size} 种顺序，应为 24（前四只 4! × 噬君恒末位）：多了=末位没钉住 boss5，少了=洗牌漏了排列`);
     }
     bossPerms = perms.size;
   }
@@ -3275,15 +3462,16 @@ let bossXpTotal = 0;
     bossHpTotal = bossLog.reduce((n, r) => n + r.hp, 0);
     bossXpTotal = bossLog.reduce((n, r) => n + r.xp, 0);
     // ★下面两组数是写死的，不跟着 BOSS_PAIR_MULT 算：它们才是「0.7 这个倍率真的在生效」的证据。
-    //   血量 = 3000+5000+8000+13000 = 29000，双子那一站按 2×0.7 记账 → 只会多出 1200/2000/3200/5200；
-    //   经验 = 300+400+550+700 = 1950，同理多出 120/160/220/280。
-    //   倍率改成 1（每只拿整槽）会落到 32000/34000/37000/42000 那一族数上，这里当场红
+    //   前四槽血量 = 2000+5000+8000+13000 = 28000（首槽 2026-11-15 降 2000），双子那一站按 2×0.7 记账 → 多出 800/2000/3200/5200；
+    //   第 5 槽噬君恒末位、单只 18000（不成对），所以整局 = 前四槽 + 18000 = 46800/48000/49200/51200。
+    //   经验 = 300+400+550+700 = 1950 + 噬君 850 = 2800，双子那一槽多出 120/160/220/280 → 2920/2960/3020/3080。
+    //   倍率改成 1（每只拿整槽）会落到 48000/51000/54000/59000 那一族（首槽档 48000 与 0.7 族撞号，其余三档当场红）
     if (bySlot.size === BOSS_SLOTS.length) {
-      if (![30200, 31000, 32200, 34200].includes(bossHpTotal)) {
-        errors.push(`整局四槽合计血量 ${bossHpTotal}，而「单只 3000/5000/8000/13000 + 双子那一站按 2×0.7」只能给出 30200/31000/32200/34200`);
+      if (![46800, 48000, 49200, 51200].includes(bossHpTotal)) {
+        errors.push(`整局五槽合计血量 ${bossHpTotal}，而「前四槽单只 2000/5000/8000/13000 + 双子那一站按 2×0.7 + 噬君末槽 18000」只能给出 46800/48000/49200/51200`);
       }
-      if (![2070, 2110, 2170, 2230].includes(bossXpTotal)) {
-        errors.push(`整局四槽合计经验 ${bossXpTotal}，应为 2070/2110/2170/2230（1950 + 双子那一槽的 0.4 倍）`);
+      if (![2920, 2960, 3020, 3080].includes(bossXpTotal)) {
+        errors.push(`整局五槽合计经验 ${bossXpTotal}，应为 2920/2960/3020/3080（1950 + 噬君 850 + 双子那一槽的 0.4 倍）`);
       }
     } else {
       console.log(`boss 整局总量那两条跳过：只读到 ${bySlot.size} / ${BOSS_SLOTS.length} 槽（当前 ${bossHpTotal} 血 / ${bossXpTotal} 经验），后面几槽被 GAP 推到 ${seconds}s 之后了`);
@@ -3326,6 +3514,39 @@ let bossXpTotal = 0;
   const strayKeys = Object.keys(databus.bossLootDropped).filter((k) => rosterTypes.indexOf(k) === -1);
   if (strayKeys.length) {
     errors.push(`bossLootDropped 里有非身份的键 ${strayKeys.join(',')}：掉落口的记账口径从 type 漂走了，四件道具的「一局一只」会跟着失效`);
+  }
+}
+// —— 通关胜利态（噬君）：只由 boss5 之死触发，且与死亡态互斥平行 ——
+{
+  // 源码判别式：isVictory = true 在 main.js 里只准出现一次，且钉在 boss5 那一支。
+  //   这条不依赖跑没跑到末槽：哪怕这一局太短噬君没出场，也能证明「别的 Boss 之死不会误触发通关」
+  const mainSrc = fs.readFileSync(path.join(COPY, 'main.js'), 'utf8');
+  const latchCount = (mainSrc.match(/isVictory\s*=\s*true/g) || []).length;
+  if (latchCount !== 1) {
+    errors.push(`main.js 里 isVictory = true 出现 ${latchCount} 次（应恰好 1 次，钉在 boss5 死亡那一支）：多了=别的 Boss 也能通关，少了=通关态根本没接上`);
+  }
+  if (!/e\.type === 'boss5'\)\s*databus\.isVictory = true/.test(mainSrc)) {
+    errors.push('main.js 的 isVictory 置位口没钉在 e.type === boss5 那一支：通关可能被别的 Boss 之死触发');
+  }
+  const lastSlotTime = BOSS_SLOTS[BOSS_SLOTS.length - 1].time;
+  if (!phageSeen) {
+    console.log(`通关断言跳过：这一局噬君没出场（末槽不早于 ${lastSlotTime}s，本局 ${seconds}s 不够或调度门没放行），victoryAt=${victoryAt}；源码判别式仍判了「置位口只此一处」`);
+  } else {
+    // 两把账取 max（与双子 twinDeathsSeen 同一套）：boss5Drops 是 step 前的削血快照，
+    //   子弹在 step 内补刀那一帧它看不见；phageDeaths 是 step 后按对象身份的强引用账，任何死因都记
+    const phageDeathsSeen = Math.max(boss5Drops, phageDeaths);
+    if (victoryWithoutPhage) errors.push('isVictory 在噬君死亡之前就置位了：通关被 boss1~4 之死误触发，「平行胜利态」这条被改坏');
+    if (phageDeathsSeen < 1) errors.push(`噬君出场了却一只都没倒下（boss5Drops=${boss5Drops} / phageDeaths=${phageDeaths}）：削血节奏没覆盖到末槽，通关链整节是空跑`);
+    if (victoryAt < 0) errors.push('噬君倒下了却没通关（victoryAt=-1）：main.js 死亡口那句 isVictory 没跑到');
+    if (!databus.isVictory) errors.push('通关时刻记到了，终态 databus.isVictory 却是 false：胜利态被谁复位了');
+    if (databus.isGameOver) errors.push('通关局同时 isGameOver=true：胜利态和死亡态没保持互斥（通关那一刻玩家应停血、不再判死）');
+    // 结算账：读 main.js 用的同一个 storage.js 单例（ES Module 按 URL 缓存，await import 拿到的是同一份 records）
+    const { records } = await import(fileUrl(path.join(COPY, 'storage.js')));
+    if (records.clears < 1) errors.push(`通关了却 records.clears=${records.clears}（应 ≥1）：submitCurrentRun 没把 clear:true 传进 submitRun`);
+    if (!(records.bestClearTime > 0)) errors.push(`通关了却 bestClearTime=${records.bestClearTime}（应 >0）：最快通关没记上`);
+    const last = records.runs[0];
+    if (!last || last.cl !== 1) errors.push(`最近一局结算 cl=${last ? last.cl : '无'}（应 1）：通关标记没写进 run 记录`);
+    console.log(`通关链：噬君死 ${phageDeathsSeen} 只（快照账 ${boss5Drops} / 强引用账 ${phageDeaths}）→ victory t=${victoryAt < 0 ? '-' : `${victoryAt.toFixed(1)}s`} | clears=${records.clears} bestClearTime=${records.bestClearTime.toFixed(1)}s 最近局 cl=${last ? last.cl : '-'} | 互斥 isGameOver=${databus.isGameOver}`);
   }
 }
 // —— O6 图鉴：Boss 行不再报血量，普通怪一字不改 ——
@@ -3742,10 +3963,13 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     // 绕过 takeDamage 会跳过减伤、膜、飘字和掉落，Boss 战会被这行代码悄悄改写
     if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 e.hp：伤害必须走 Enemy.takeDamage`);
   }
-  // —— 新增的三个文件同一条规矩 ——
+  // —— 新增的五个文件同一条规矩 ——
   // bloodVial.js 有意放这一组而不是上面那组「连 Date.now( 都不许出现」：它是纯显示实体、
   //   两条节拍都不在它身上，瓶身那圈呼吸必须用墙上时钟，逻辑却照样受 isPaused 门管制
-  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'vesicle.js'), path.join('player', 'bloodVial.js')]) {
+  // bossPhage.js / phageMissile.js 也放这一组：计时器全按 dt 累加，只有命中那一刻把 Date.now()
+  //   当参数递给 player.takeDamage（离散弹的无敌帧时间戳，与 enemyBullet 同一条允许的例外），
+  //   不是 /= Date.now()/ 那种「存成计时基准」，所以过得了这一组、过不了上面那组
+  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'vesicle.js'), path.join('player', 'bloodVial.js'), path.join('npc', 'monster', 'bossPhage.js'), path.join('npc', 'monster', 'phageMissile.js')]) {
     const s = src(rel);
     // ★只拦「把墙上时钟存成计时基准」这种写法：外观呼吸（Math.sin(Date.now()/260)）不算违规，
     //   enemy.js、chest.js 里早有同类用法；但 T = Date.now() 会在三选一面板期间偷跑
@@ -3753,12 +3977,12 @@ if (badTexts.length) errors.push(`界面文字里出现非法数值 ${badTexts.l
     // 绕过 takeDamage / applyBlast 直接改血会跳过减伤、膜、飘字和掉落
     if (/\.hp\s*[-+*]?=/.test(s)) errors.push(`${rel} 直接写了 .hp：伤害必须走 Enemy.takeDamage 或 Player.applyBlast`);
   }
-  {
-    const s = src(path.join('npc', 'monster', 'bossTwins.js'));
+  for (const rel of [path.join('npc', 'monster', 'bossTwins.js'), path.join('npc', 'monster', 'bossPhage.js')]) {
+    const s = src(rel);
     const at = s.indexOf('draw(ctx) {');
-    if (at < 0) errors.push('bossTwins.js 里找不到 draw(ctx)：绘制那一段根本没实现');
+    if (at < 0) errors.push(`${rel} 里找不到 draw(ctx)：绘制那一段根本没实现`);
     else if (s.slice(at).includes('Math.random(')) {
-      errors.push('bossTwins 的绘制里出现 Math.random(：每帧换一个相位，截图不可复现，相位必须在构造期定一次');
+      errors.push(`${rel} 的绘制里出现 Math.random(：每帧换一个相位，截图不可复现，相位必须在构造期定一次`);
     }
   }
   // —— 出场表三处对齐：数值表、图鉴、行为类 ——
@@ -3800,11 +4024,11 @@ console.log('boss drops:', bossDrops, '| boss chest:', BOSS_CHESTS_ENABLED
 //   不是回归 —— 同 2026-10-06「报表恒印 off 被当回归查了半天」那条坑
 console.log(`cross laser (海火核心 ${SEAFIRE_ON ? 'on' : 'off（LASER 旋钮掐掉 boss2 那一行）'}):`,
   SEAFIRE_ON
-    ? `海火死 ${boss2Drops} 只 / 拾取 ${crossGrants} 次 / 层数最高 ${crossInits.length ? Math.max(...crossInits.map((c) => c.layers)) : 0}`
+    ? `海火死 ${crossDeathsSeen} 只（快照账 ${boss2Drops} / 强引用账 ${bossDeathsSeen('boss2')}）/ 拾取 ${crossGrants} 次 / 层数最高 ${crossInits.length ? Math.max(...crossInits.map((c) => c.layers)) : 0}`
       + ` | 掉血 ${crossHpLosses} 次（盾挡 ${crossBlockedShield}）→ 放出 ${crossFires} 根，同时在场峰值 ${crossPeak}`
       + ` | 结算帧 ${crossSettles} / 命中 ${crossHits} 次 共 ${crossDmg} 点（单下 ${LASER_CROSS_DMG_BASE}+${LASER_CROSS_DMG_ATK}×攻，整局最高 ${crossInits.length ? Math.max(...crossInits.map((c) => c.dmg)) : 0}·束宽 ${LASER_CROSS_WIDTH}·束长 ${LASER_CROSS_LEN}·同怪间隔 ${LASER_CROSS_HIT_GAP}ms）`
       + ` | 它的飘字 ${crossTexts} 条（光束已静默，这条要 0）`
-    : `海火死 ${boss2Drops} / 授予 ${crossGrants} / 放出 ${crossFires}（这一段要的全是 0）`,
+    : `海火死 ${crossDeathsSeen} / 授予 ${crossGrants} / 放出 ${crossFires}（这一段要的全是 0）`,
   `| 轨迹 kills ${fieldKills} / lvl ${databus.player && databus.player.level} / enemies ${databus.enemys.length}`);
 console.log('chest spawns (luck=' + LUCK + '):', chestStamps.length,
   '| avg gap:', avgGap.toFixed(1) + 's', '| worst gap:', worstGap.toFixed(1) + 's',
@@ -3816,16 +4040,18 @@ console.log('bomb (stacks=' + BOMBER + '):', fieldThrown, 'thrown /', fieldBooms
   '| entity peak: companion', companionPeak, 'bomber', maxBombers);
 // ★这一行要排在 twins / mutant / boss drops 之前读到：玩家中途死了就等于此后 main.js 不再驱动世界，
 //   那几行里的 0（deaths 0 / enraged no / stains 0）全是冻结帧上的旧值，不是"这条链没接上"
-console.log(gameOverAt < 0
+console.log(frozenAt() < 0
   ? 'game over: none —— 世界整局都在跑，下面所有实场读数全程有效'
-  : `game over: t=${gameOverAt.toFixed(1)}s —— 此后 databus.update 停摆，实场读数全部停在这一帧，任何"0"都要先按这条判`);
+  : (victoryAt >= 0 && (gameOverAt < 0 || victoryAt <= gameOverAt)
+    ? `victory: t=${victoryAt.toFixed(1)}s —— 噬君倒下通关，此后 databus.update 停摆，实场读数全部停在这一帧，任何"0"都要先按这条判`
+    : `game over: t=${gameOverAt.toFixed(1)}s —— 此后 databus.update 停摆，实场读数全部停在这一帧，任何"0"都要先按这条判`));
 // ★同理要读可达性本身 + HPPIN：HPPIN=1（默认）时每帧把 hp 钉回满，死亡时刻这条永远读不出对比，
 //   「按膜能不能活过最坏三秒」那一组必须换成 HPPIN=0 跑
 const memSavedTotal = memChannels.reduce((n, ch) => n + ch.rows.reduce((m, r) => m + memSaved(r, ch.sub), 0), 0);
 const memOnOf = (ch) => ch.rows.filter((r) => r.on).length;
 console.log(`membrane (薄膜核心 ${BIOFILM_ON ? 'on' : 'off（MEMBRANE 旋钮掐掉 boss3 那一行）'}, HPPIN=${HPPIN ? '1 每帧回满→死亡时刻不可读' : '0 让它死'}):`,
   BIOFILM_ON
-    ? `膜王死 ${boss3Drops} 只 / 授予 ${membraneGrants} / 按成 ${membranePresses}（其中触点 ${membraneGamePresses}）/ 空按 ${membraneRefused}`
+    ? `膜王死 ${memDeathsSeen} 只（快照账 ${boss3Drops} / 强引用账 ${bossDeathsSeen('boss3')}）/ 授予 ${membraneGrants} / 按成 ${membranePresses}（其中触点 ${membraneGamePresses}）/ 空按 ${membraneRefused}`
       + ` | 膜内 ${membraneFrames} 帧 ≈ ${(membraneFrames * DT).toFixed(1)}s`
       + ` | 三条通道记账 受击 ${memChannels[0].rows.length}/${memOnOf(memChannels[0])}`
       + ` 爆发 ${memChannels[1].rows.length}/${memOnOf(memChannels[1])}`
@@ -3844,7 +4070,7 @@ console.log(`boss order (random=${BOSS_ORDER_RANDOM} / pin=${JSON.stringify(BOSS
     ? `${databus.spawner.bossOrder.map((e) => e.type).join(' → ')} || `
       + bossLog.map((r) => `${r.type}@槽${r.slot + 1}${r.pair > 1 ? `×${r.pair}` : ''} ${r.hp}血·${r.xp}xp 出${r.at.toFixed(0)}s 死${r.deadAt < 0 ? '没死' : `${r.deadAt.toFixed(0)}s`}`).join(' | ')
     : '整局没叫出 Boss',
-  `|| 合计 ${bossHpTotal} 血 / ${bossXpTotal} 经验（设计 29000 / 1950，双子那一站按 2×0.7 各记一只）`,
+  `|| 合计 ${bossHpTotal} 血 / ${bossXpTotal} 经验（设计 46000 / 2800 = 前四槽 28000/1950 + 噬君末槽 18000/850，双子那一站按 2×0.7 各记一只）`,
   `| 洗出发到 ${bossPerms < 0 ? '本臂不洗，跳过' : `${bossPerms} 种顺序（上限 24）`}`);
 // ★同前两件：这一行必须把可达性本身（DIPLO_ON）与这一局 boss4 死了几只一起印出来，
 //   否则 TWIN=0 那一跑的零、或整局没打死双子的零，都会被下一位读成回归

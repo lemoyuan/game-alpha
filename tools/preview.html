@@ -112,7 +112,9 @@
   <button data-nav="boss2">召唤海火（血按本局槽位给）</button>
   <button data-nav="boss3">召唤膜王（血按本局槽位给）</button>
   <button data-nav="boss4">召唤双子（一次两只 · 血按本局槽位给）</button>
+  <button data-nav="boss5">召唤噬君（终极通关 Boss · 固定末位）</button>
   <button data-nav="twinslay">放倒一只双子（看激怒态）</button>
+  <button data-nav="victory">通关结算（放倒噬君 → 胜利态）</button>
   <button data-nav="bosschest">Boss 专属匣（融合匣，游戏内已下线）</button>
   <button data-nav="petstart">带融合匣开局（游戏内已下线）</button>
   <button data-nav="bomberstart">带炸弹跟班开局（一坨怪）</button>
@@ -719,7 +721,7 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       databus.isGameOver = true;
       return;
     }
-    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'boss4' || nav === 'bossorder' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
+    if (nav === 'game3' || nav === 'boss' || nav === 'boss2' || nav === 'boss3' || nav === 'boss4' || nav === 'boss5' || nav === 'victory' || nav === 'bossorder' || nav === 'bosschest' || nav === 'petstart' || nav === 'bomberstart' || nav === 'upgrade' || nav === 'gameover' || nav === 'shield' || nav === 'chestrain' || nav === 'mutant') {
       startRun();
       if (nav === 'game3') {
         setElapsed(180);
@@ -746,6 +748,16 @@ document.querySelectorAll('[data-nav]').forEach((btn) => {
       if (nav === 'boss3') await summonBoss('boss3', 370);
       // 双子是「一次两只」：pair 由 spawnBoss 里读，这里不需要也不能自己循环
       if (nav === 'boss4') await summonBoss('boss4', 470);
+      // 噬君固定末位（第 5 槽 600s）：这里把时钟拨到 590 提前叫出来看技能/燃烧路径/导弹/瞬移刀砍
+      if (nav === 'boss5') await summonBoss('boss5', 590);
+      // 通关验收：走真实死亡通路放倒噬君（main.js 死亡口置 isVictory + submitRun clear:true），
+      // 不是直接钉标志位——这样 clears+1 / 最快通关 / 胜利结算页全链路都被这一键跑到
+      if (nav === 'victory') {
+        await summonBoss('boss5', 590);
+        const v = databus.enemys.find((e) => e.type === 'boss5');
+        if (v) v.takeDamage(v.hp, false, databus);
+        say('已放倒噬君：下一帧起通关结算（clears+1 / 最快通关 / 金色「通关」面板）');
+      }
       // 顺序是每局洗的，光看真机不容易说清"这一局谁在第几场"，这里直接读 spawner 的实例
       if (nav === 'bossorder') {
         const { BOSS_SLOTS, BOSS_PAIR_MULT } = await import('./js/npc/monster/config.js');

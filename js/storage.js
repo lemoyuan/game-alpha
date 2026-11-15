@@ -38,8 +38,10 @@ const emptyRecords = () => ({
   bestLevel: 0,  // 最高等级
   bestKills: 0,  // 最多击杀
   totalChests: 0, // 累计开箱数
+  clears: 0,        // 通关次数（杀死噬君）：与死亡态平行新增，旧存档缺这两个键时由 emptyRecords 兜底
+  bestClearTime: 0, // 最快通关秒数（0 = 从未通关）
   encountered: [], // 图鉴已遭遇的怪物 type
-  runs: [],        // 最近战绩 [{ t, lv, k, c }]
+  runs: [],        // 最近战绩 [{ t, lv, k, c, cl }]
 });
 
 export const records = Object.assign(emptyRecords(), readKey(RECORDS_KEY));
@@ -60,7 +62,7 @@ export function markEncountered(type) {
   return false;
 }
 
-// 一局结束：刷新三项最佳 + 累计开箱 + 写入最近 5 局，返回本局破纪录标记
+// 一局结束：刷新三项最佳 + 累计开箱 + 通关计数/最快通关 + 写入最近 5 局，返回本局破纪录标记
 export function submitRun(run) {
   const time = Math.floor(run.time);
   const marks = {
@@ -72,7 +74,13 @@ export function submitRun(run) {
   records.bestLevel = Math.max(records.bestLevel, run.level);
   records.bestKills = Math.max(records.bestKills, run.kills);
   records.totalChests += run.chests || 0;
-  records.runs.unshift({ t: time, lv: run.level, k: run.kills, c: run.chests || 0 });
+  // 通关（杀死噬君）：与死亡态平行新增。clears 每通一次 +1；bestClearTime 取最小（0 = 从未通关）
+  records.clears += run.clear ? 1 : 0;
+  if (run.clear) {
+    records.bestClearTime = records.bestClearTime ? Math.min(records.bestClearTime, time) : time;
+  }
+  marks.clear = !!run.clear && records.bestClearTime === time;
+  records.runs.unshift({ t: time, lv: run.level, k: run.kills, c: run.chests || 0, cl: run.clear ? 1 : 0 });
   if (records.runs.length > 5) records.runs.length = 5;
   saveRecords();
   return marks;

@@ -319,6 +319,43 @@ export const MONSTER_TYPES = {
                           //   所以 burstDamage / vesicleDamage 一改，这行的读数就要跟着重算
     enrageSpeedMult: 1.15, // 移速倍率（62→71）。刻意只给一点点：激怒的读法必须是"它打得勤了"而不是"它跑得快了"
   },
+  boss5: {
+    // 五号Boss（终极通关）：T4 肌尾噬菌体。固定最后登场（buildBossOrder 把它钉在末位），杀死它 = 新增通关胜利态
+    // 三机制对应真实感染行为：裂解酶灼烧菌苔=移动留下燃烧路径，子代病毒体漂向新宿主=温和追踪导弹，
+    //                       尾针穿刺注入=贴脸刀砍，再吸附新宿主=瞬移本身
+    name: '噬君',
+    latin: 'Enterobacteria phage T4', group: '病毒 · 肌尾噬菌体科 Myoviridae · T4型',
+    intro: '固定最后登场的终极 Boss：走过留下燃烧路径，抛慢速追踪导弹，瞬移贴脸挥刀（有预警可走位躲）；杀死它即通关',
+    fact: 'T4 是教科书里那只「登月舱」：二十面体的头装着 DNA，下面一根能收缩的尾鞘像注射器，六根尾丝先抓住大肠杆菌表面，尾鞘一缩把尾针打进细胞壁、把头里的 DNA 整管注入。它不把细胞当食物，而是改造成病毒工厂，几十分钟后裂解酶把菌壁溶穿、上百个子代病毒体一次性放出——菌苔上那一圈透明的「噬菌斑」就是它烧出来的空场。',
+    // ★hp/xp 只是兜底基准，实战由出场槽位表 BOSS_SLOTS 第 5 槽给（spawner 覆盖到实例上）。
+    //   它恒落第 5 槽，所以兜底值与槽位值刻意写成同一个数，读代码时不用两处对账
+    hp: 18000, speed: 50, radius: 36, color: '#B03A2E', xp: 850, damage: 16,
+    sprite: 'images/entity/boss_phage.png',
+    boss: true,
+    spriteSize: 88,       // 贴图画布边长（碰撞半径 36×2=72 之外留一圈尾丝）；只影响显示，不影响判定
+    // —— 被动：燃烧路径（复用 Zone 地贴 + applyPoison，不吃无敌帧）——
+    trailRadius: 26,      // 单片燃烧盘半径
+    trailLife: 2600,      // 单片存活（毫秒），末段淡出
+    trailDamage: 2,       // 中毒每跳掉血（POISON_TICK 500ms → 站着约 4/秒）。★走 applyPoison 不吃无敌帧，别按 takeDamage 量级给
+    trailHold: 1200,      // 离开后中毒还持续（毫秒）：1200÷500≈2 跳，封落脚处的代价在这个尾巴上
+    trailCd: 140,         // 移动时每隔多久在脚下落一片（毫秒）
+    trailTint: '#FF6B35', // 燃烧橙。★与赤潮青 / 毒渍酸黄 / 黏液草绿分家，玩家靠颜色分辨踩下去会怎样
+    // —— 攻击一：温和追踪导弹（Boss 专属例外，专用实体 phageMissile，绝不改 EnemyBullet/Bullet）——
+    missileCd: 3600,      // 抛导弹间隔（毫秒）
+    missileCount: 3,      // 每次抛几枚
+    missileSpeed: 90,     // 弹速（玩家 170，跑得过）
+    missileTurn: 1.6,     // 转向率上限（弧度/秒）→ 转弯半径 = speed/turn ≈ 56px，绕圈就甩掉
+    missileLife: 4200,    // 寿命（毫秒），末段 20% 淡出后销毁，不会无限累积
+    missileDamage: 10,    // 单发伤害（走 takeDamage 吃无敌帧，与 enemyBullet 同通道）
+    missileRadius: 7,     // 判定半径
+    // —— 攻击二：瞬移 + 刀砍（落点环 → 瞬移 → 前摇弧 → 命中，全程可走位躲）——
+    teleportCd: 6000,     // 两次瞬移刀砍的间隔（毫秒）
+    teleportWarn: 900,    // 落点预警环时长（毫秒），期间不瞬移不判定
+    slashWarn: 420,       // 瞬移后挥刀前摇弧时长（毫秒），再给一段走位
+    slashDamage: 22,      // 刀砍伤害（走 takeDamage 吃无敌帧）
+    slashRadius: 70,      // 刀砍半径
+    slashArc: 1.745,      // 刀砍弧宽（弧度，约 100°）：只有半径内且弧内才挨刀
+  },
 };
 
 // 刷怪节奏（前期偏慢，随时间逐渐加快）
@@ -338,13 +375,15 @@ export const TANK_UNLOCK_TIME = 45;   // 坦克怪出现时间
 export const RANGED_UNLOCK_TIME = 60; // 远程怪出现时间
 
 // Boss 出场（秒）：存活期间普通刷怪照常走，只是间隔乘 BOSS_SPAWN_INTERVAL_MULT（密度减半）
-// ★这四条现在都是【第 1~4 槽的最早出场时刻】而不是时刻表：真正的节奏由下面的 BOSS_RESPAWN_GAP（死亡后 120 秒）决定，
+// ★这五条现在都是【第 1~5 槽的最早出场时刻】而不是时刻表：真正的节奏由下面的 BOSS_RESPAWN_GAP（死亡后 120 秒）决定，
 //   战斗打得越久，后面几槽被推得越晚。只有第 1 槽仍然精确等于自己的 time —— 开局没有「上一只」要等
-// ★2026-10-24：顺序改成每局随机发之后，这四条描述的是【第几场】而不是【哪一只】，别再往旁边加 Boss 名字
+// ★2026-10-24：顺序改成每局随机发之后，这五条描述的是【第几场】而不是【哪一只】，别再往旁边加 Boss 名字
+//   （第 5 槽例外：噬君恒最后，见 buildBossOrder）
 export const BOSS_FIRST_SPAWN_TIME = 120;  // 第 1 槽：开局 120 秒整出场
 export const BOSS_SECOND_SPAWN_TIME = 240; // 第 2 槽：不早于 240 秒
 export const BOSS_THIRD_SPAWN_TIME = 360;  // 第 3 槽：不早于 360 秒
 export const BOSS_FOURTH_SPAWN_TIME = 480; // 第 4 槽：不早于 480 秒
+export const BOSS_FIFTH_SPAWN_TIME = 600;  // 第 5 槽：不早于 600 秒（终极通关 Boss 噬君恒落此槽）
 
 // 上一只 Boss 死亡后到下一只 Boss 出场的间隔（毫秒）。
 // 必须有：玩家提前秒杀 Boss 时 elapsed 已经越过下一个出场时间，没有冷却就会在尸体消失的同一帧贴脸刷出来
@@ -368,22 +407,24 @@ export const BOSS_SCHEDULE = [
   { type: 'boss2', toast: '海面亮起了蓝绿色的光' },
   { type: 'boss3', toast: '地面上那层膜鼓起来了' },
   { type: 'boss4', toast: '两只一起出现了', pair: 2 },
+  { type: 'boss5', toast: '终极宿主出现了' },
 ];
 
 // ===== Boss 出场槽位：第 i 条 = 本局第 i 场 Boss 战，血量与经验属于【第几场】而不是【哪一只】 =====
-// ★台阶 3000 / 5000 / 8000 / 13000 是 2026-10-24 用户选的缓台阶（约 ×1.6），四槽合计 29000。
+// ★台阶 2000 / 5000 / 8000 / 13000 / 18000（首槽 2026-11-15 由 3000 降 2000），前四槽合计 28000、加第 5 槽整局 46000。
 //   以前那四个数（毒王 3000、海火 4600、膜王 28000、双子 5600×2 = 46800）是四笔不同年代的反解残渣，
 //   中段那道 2.4 倍断层就是这么来的；而且顺序一随机，「第 3 场该有多硬」不可能再由某一只的旧血量回答。
-//   ★整局 Boss 总血量因此薄 ≈38%（29000 对 46800），这是选这条台阶的直接后果，不是漏调
-// 经验用 300 / 400 / 550 / 700，合计 1950 = 从前四只之和：今天各只的经验本来就几乎是平的（300~600），
+//   ★前四槽总血量因此薄 ≈40%（28000 对 46800），这是选这条台阶的直接后果，不是漏调；第 5 槽是终极通关战另加的一笔
+// 经验用 300 / 400 / 550 / 700 / 850，前四槽合计 1950 = 从前四只之和：今天各只的经验本来就几乎是平的（300~600），
 //   它买的是「又过了一场 Boss 战」而不是「这一场有多少血」，照搬血的台阶会把整局经验曲线抬高
-// ★这四行的形状别改成 bossN: { } —— 文件在后面（BOSS_CHESTS / BOSS_DROPS），headless 的 LASER /
+// ★这五行的形状别改成 bossN: { } —— 文件在后面（BOSS_CHESTS / BOSS_DROPS），headless 的 LASER /
 //   MEMBRANE / TWIN 三个旋钮是按 /^(\s*)bossN: \[/ 挪行的，前面多一处同形状会让它挪错地方而 re.test() 照样通过
 export const BOSS_SLOTS = [
-  { time: BOSS_FIRST_SPAWN_TIME, hp: 3000, xp: 300 },
+  { time: BOSS_FIRST_SPAWN_TIME, hp: 2000, xp: 300 }, // ★2026-11-15 用户「把第一场血量降到2000」：3000→2000，只压首战厚度，其余三槽与经验不动
   { time: BOSS_SECOND_SPAWN_TIME, hp: 5000, xp: 400 },
   { time: BOSS_THIRD_SPAWN_TIME, hp: 8000, xp: 550 },
   { time: BOSS_FOURTH_SPAWN_TIME, hp: 13000, xp: 700 },
+  { time: BOSS_FIFTH_SPAWN_TIME, hp: 18000, xp: 850 }, // 终极通关槽：噬君恒落这里（buildBossOrder 钉末位），杀死即通关
 ];
 
 // 成对出场时【每只】拿槽位量的这么多（2026-10-24 用户口径：一对 = 一只半，不是两只整槽也不是平分）。
@@ -392,42 +433,50 @@ export const BOSS_SLOTS = [
 //   所以「第 4 槽 13000」碰上双子是每只 9100、合计 18200，比它从前那版 5600×2 厚 62%
 export const BOSS_PAIR_MULT = 0.7;
 
-// 出场顺序随机总闸。★改成 false 就回到名册原序（毒王→海火→膜王→双子），一行回退，
+// 出场顺序随机总闸。★改成 false 就回到名册原序（毒王→海火→膜王→双子→噬君），一行回退，
 //   以后想拿旧节奏做对照不必 git revert
 export const BOSS_ORDER_RANDOM = true;
 
 // 验收钉值：非空数组时优先于随机，先按这里列的身份排、名册里剩下的按原序补在后面。
 // headless 的 TWINS=1 臂靠它把双子按进第 1 槽（顺序随机之后没有别的办法稳定叫出某一只），
 // 「膜王 / 双子落到第 1 槽」那两臂也走这里。★写不认识的 type 不会丢 Boss，只会当没钉到
+// ★钉 'boss5' 是 no-op：噬君本来就恒最后（见 buildBossOrder），钉不钉都一样
 export const BOSS_ORDER_PIN = null;   // 例：['boss4']
 
 /**
  * 本局 Boss 出场顺序：把身份名册洗成一条槽位序列，返回的每一行都是名册里的原对象。
+ * ★噬君（boss5，终极通关）恒最后：三个分支都只洗「其余四只」，末位单独拼回去。
+ *   前四只的相对随机 / PIN 行为与从前逐字一致。
  * ★血量和经验不在这里 —— 那是 BOSS_SLOTS 按【位置】给的东西，所以「谁穿哪一件」和「这一场多硬」
  *   是两件独立的事，各自能单独调。
  * ★也绝不把槽位数写回 MONSTER_TYPES：那张表是模块单例、没有任何 reset() 重建它，
  *   写进去会污染第二局（下一局读到的是上一局覆盖后的值），而图鉴读的就是它
- * @returns {Array} 长度等于 BOSS_SCHEDULE，每只 Boss 恰好出现一次
+ * @returns {Array} 长度等于 BOSS_SCHEDULE，每只 Boss 恰好出现一次，末位恒为 boss5
  */
 export function buildBossOrder() {
+  const phage = BOSS_SCHEDULE.find((r) => r.type === 'boss5');
+  const rest = BOSS_SCHEDULE.filter((r) => r !== phage);
+  let order;
   if (BOSS_ORDER_PIN && BOSS_ORDER_PIN.length) {
     const picked = [];
     for (const type of BOSS_ORDER_PIN) {
-      const row = BOSS_SCHEDULE.find((r) => r.type === type);
+      const row = rest.find((r) => r.type === type);
       if (row && picked.indexOf(row) === -1) picked.push(row);
     }
-    return picked.concat(BOSS_SCHEDULE.filter((row) => picked.indexOf(row) === -1));
+    order = picked.concat(rest.filter((row) => picked.indexOf(row) === -1));
+  } else if (!BOSS_ORDER_RANDOM) {
+    order = rest.slice();
+  } else {
+    // Fisher-Yates：从尾往上，每个位置和「它自己或前面某一个」等概率交换
+    order = rest.slice();
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = order[i];
+      order[i] = order[j];
+      order[j] = t;
+    }
   }
-  if (!BOSS_ORDER_RANDOM) return BOSS_SCHEDULE.slice();
-  // Fisher-Yates：从尾往上，每个位置和「它自己或前面某一个」等概率交换
-  const order = BOSS_SCHEDULE.slice();
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const t = order[i];
-    order[i] = order[j];
-    order[j] = t;
-  }
-  return order;
+  return phage ? order.concat([phage]) : order;
 }
 
 // Boss 专属宝箱：Boss 死亡时随机掉表里一种（main.js dropBossLoot），拾取效果走 chestGrant.js 注册表。
@@ -627,4 +676,6 @@ export const CODEX_ORDER = [
   // ★第 9 行：图鉴行高是按条数算的（home.js drawCodex 的 rh），加行会把每行压扁，
   //   压到 56 以下那三行文字就会互相啃，改这里要顺手看一眼首页图鉴页
   { type: 'boss4', appear: `${BOSS_FOURTH_SPAWN_TIME} 秒定时出场 · 一次两只` },
+  // ★第 10 行：rh 会被进一步压到 56 警戒线以下（667px 机型约 rh49），落地时必验首页图鉴不啃字
+  { type: 'boss5', appear: '击败四 Boss 后 · 终极通关' },
 ];

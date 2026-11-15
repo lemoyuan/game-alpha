@@ -315,6 +315,9 @@ export default class HomeScreen {
       { label: '最高等级', value: `Lv.${records.bestLevel}`, icon: 'medal', color: UI.gold },
       { label: '最多击杀', value: `${records.bestKills}`, icon: 'skull', color: UI.red },
       { label: '累计开箱', value: `${records.totalChests}`, icon: 'chest', color: UI.mint },
+      // 通关胜利态新增两格（追加在后，前四格位置不动）：杀死终极 Boss 噬君才计数
+      { label: '通关次数', value: `${records.clears}`, icon: 'trophy', color: UI.gold },
+      { label: '最快通关', value: formatTime(records.bestClearTime), icon: 'hourglass', color: UI.violet },
     ];
     const cellW = (w - 12) / 2;
     best.forEach((item, i) => {
@@ -329,7 +332,7 @@ export default class HomeScreen {
       label(ctx, item.value, tx, cy + 50, { size: FS.h1, bold: true, color: UI.textOnLight });
     });
 
-    let y = start + 66 * 2 + 12 + 30;
+    let y = start + 66 * 3 + 12 * 2 + 30;
     label(ctx, '最近战绩', x + 4, y, { size: FS.body, bold: true, color: UI.textOnDark });
     y += 14;
     if (records.runs.length === 0) {

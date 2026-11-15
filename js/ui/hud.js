@@ -202,7 +202,10 @@ export default class Hud {
         // 不用 type === 'boss4'：twinIndex 只有真双子有，别的 Boss 默认 0，靠 type 硬编会把三号也标成"兄"
         const tag = bosses.length > 1 && 'twin' in boss ? (boss.twinIndex === 1 ? ' 弟' : ' 兄') : '';
         const kind = MONSTER_TYPES[boss.type];
-        labelMid(ctx, `BOSS ${kind ? kind.name : ''}${tag}`, bx + bw / 2, by + 8, {
+        // 终极通关 Boss（噬君）钉末位、杀死即通关，血条标一字让它和前面四只读起来不同档。
+        // 这里按 type 硬编是对的：boss5 由设计唯一固定为最后一只，不像 twin 标记那样会误伤别的 Boss
+        const final = boss.type === 'boss5' ? ' · 终极' : '';
+        labelMid(ctx, `BOSS ${kind ? kind.name : ''}${tag}${final}`, bx + bw / 2, by + 8, {
           size: FS.tiny, bold: true, color: UI.textOnDark,
         });
         // 膜量子条（只有膜王带 filmMax）：膜最关键的时刻正是你扭头去看菌群的时候，

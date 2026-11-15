@@ -34,6 +34,9 @@ export default class DataBus {
     this.enemys = [];
     this.bullets = [];
     this.enemyBullets = [];
+    // 噬君的追踪导弹：★必须自己一条列表，不并进 enemyBullets —— 那条数组的口径是「直线怪物子弹」，
+    //   混进会追踪的弹会让 headless 的敌方弹断言和「子弹永不追踪」这条全局承诺一起读错（同 vesicles 分家的理由）
+    this.missiles = [];
     this.lasers = [];   // 海火的旋转光束：原点是活的 Boss，不进实体池以外的任何列表
     this.zones = [];    // 地面危害池（海火赤潮 / 膜王黏液）：坐标一次写定，只等寿命走完；两种实体都按 update/draw/isDestroyed 走，不再加列表
     this.xpGems = [];
@@ -74,6 +77,8 @@ export default class DataBus {
     this.frame = 0;
     this.chestsOpened = 0; // 本局开箱数（结算写入游戏记录）
     this.isGameOver = false;
+    // 通关胜利态：与 isGameOver 平行新增，只在 boss5（噬君）死亡那一帧置位。★不复用、不改写死亡态
+    this.isVictory = false;
     this.isPaused = false;
   }
 
@@ -82,6 +87,7 @@ export default class DataBus {
     for (const t of this.damageTexts) t.update(dt, this);
     for (const b of this.bullets) b.update(dt, this);
     for (const b of this.enemyBullets) b.update(dt, this);
+    for (const m of this.missiles) m.update(dt, this); // 次序同 bombs/vesicles：本帧抛出的那一枚下一帧才开始飞
     // 炸弹排在生成它的 bomber 循环之前：同上面两条子弹循环的次序，本帧扔出的那一枚下一帧才开始飞
     for (const b of this.bombs) b.update(dt, this);
     for (const v of this.vesicles) v.update(dt, this); // 次序同上面 bombs：本帧抛出的那一枚下一帧才开始飞
@@ -175,6 +181,10 @@ export default class DataBus {
 
   removeEnemyBullet(index) {
     this.enemyBullets.splice(index, 1);
+  }
+
+  removeMissile(index) {
+    this.missiles.splice(index, 1);
   }
 
   removeLaser(index) {

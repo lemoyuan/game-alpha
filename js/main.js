@@ -100,13 +100,13 @@ export default class Main {
     }
 
     if (databus.screen === 'game') {
-      if (!databus.isGameOver && !databus.isPaused) {
+      if (!databus.isGameOver && !databus.isVictory && !databus.isPaused) {
         databus.frame++;
         databus.spawner.update(dt, databus);
         databus.update(dt);
         this.checkCollisions();
       }
-      if (databus.isGameOver && !this.runSubmitted) {
+      if ((databus.isGameOver || databus.isVictory) && !this.runSubmitted) {
         this.runSubmitted = true;
         this.submitCurrentRun();
       }
@@ -127,6 +127,7 @@ export default class Main {
       level: player.level,
       kills: player.kills,
       chests: databus.chestsOpened,
+      clear: databus.isVictory,
     });
   }
 
@@ -150,6 +151,8 @@ export default class Main {
           databus.chests.push(chest);
         } else if (e.isBoss) {
           this.dropBossLoot(e);
+          // 通关胜利态的唯一置位口：只有终极 Boss 噬君死亡才通关（boss1~4 死亡不触发）
+          if (e.type === 'boss5') databus.isVictory = true;
         } else {
           const gem = databus.pool.getItemByClass('xpgem', XpGem);
           gem.init(e.x, e.y, e.xpValue);
@@ -180,7 +183,7 @@ export default class Main {
       }
       if (player.isCollideWith(e)) {
         player.takeDamage(e.damage, now, databus); // 第三个参数是海火核心的触发口，见 Player.fireLaserCross
-        if (player.hp <= 0) {
+        if (player.hp <= 0 && !databus.isVictory) {
           databus.isGameOver = true;
         }
       }
@@ -220,6 +223,13 @@ export default class Main {
       }
     }
 
+    // 噬君追踪导弹：命中/寿命/出界都在 missile.update 内结清，这里只回收（同上一条敌方弹）
+    for (let i = databus.missiles.length - 1; i >= 0; i--) {
+      if (databus.missiles[i].isDestroyed) {
+        databus.removeMissile(i);
+      }
+    }
+
     // 激光与赤潮：伤害都在各自 update 内结算完，这里只做寿命回收
     for (let i = databus.lasers.length - 1; i >= 0; i--) {
       if (databus.lasers[i].isDestroyed) {
@@ -247,8 +257,8 @@ export default class Main {
       }
     }
 
-    // 覆盖所有伤害来源（接触/子弹）的死亡判定
-    if (player.hp <= 0) {
+    // 覆盖所有伤害来源（接触/子弹）的死亡判定。★胜利帧不置死亡：通关与死亡互斥，同一局只走一条结算
+    if (player.hp <= 0 && !databus.isVictory) {
       databus.isGameOver = true;
     }
 
@@ -344,6 +354,8 @@ export default class Main {
     for (const e of databus.enemys) { e.draw(ctx); e.drawBurn(ctx); }
     for (const b of databus.bullets) b.draw(ctx);
     for (const b of databus.enemyBullets) b.draw(ctx);
+    // 噬君追踪导弹：和敌方弹同层（都是怪射出的飞行物，压在怪之上、玩家之下），单独一条列表见 databus.missiles
+    for (const m of databus.missiles) m.draw(ctx);
     // 炸弹压在怪之上：飞行那几帧里落点环要能被看见，引爆那一闪更要盖住整片怪，
     // 否则这么长一轮才砸一次的重击在画面上等于没发生（赤潮是地贴所以反着排，见上面那条）
     for (const b of databus.bombs) b.draw(ctx);
@@ -371,7 +383,7 @@ export default class Main {
     for (const t of databus.damageTexts) t.draw(ctx);
     databus.camera.end(ctx);
 
-    if (!databus.isGameOver) databus.hud.draw(ctx, databus); // 结算面板接管屏幕上半部，血条属性条不再叠在上面
+    if (!databus.isGameOver && !databus.isVictory) databus.hud.draw(ctx, databus); // 结算面板（死亡/通关）接管屏幕上半部，血条属性条不再叠在上面
     databus.joystick.draw(ctx);
 
     if (databus.upgradeScreen.visible) {
@@ -382,7 +394,9 @@ export default class Main {
       databus.pauseScreen.draw(ctx);
     }
 
-    if (databus.isGameOver) {
+    if (databus.isVictory) {
+      this.drawVictory();
+    } else if (databus.isGameOver) {
       this.drawGameOver();
     }
   }
@@ -401,7 +415,7 @@ export default class Main {
   }
 
   handleGameOverTap(e) {
-    if (databus.screen !== 'game' || !databus.isGameOver || databus.isPaused) return;
+    if (databus.screen !== 'game' || (!databus.isGameOver && !databus.isVictory) || databus.isPaused) return;
     const t = e.touches[0];
     for (const b of this.gameOverButtons()) {
       if (t.clientX >= b.x && t.clientX <= b.x + b.w &&
@@ -419,7 +433,7 @@ export default class Main {
   // ★没拿到道具时不响应：那一格整块没画，触点也不该存在
   // 不需要 startRequested 那种跨帧延迟：这里不改 screen、不重建局，不会把摇杆带进新一局
   handleSkillTap(e) {
-    if (databus.screen !== 'game' || databus.isGameOver || databus.isPaused) return;
+    if (databus.screen !== 'game' || databus.isGameOver || databus.isVictory || databus.isPaused) return;
     if (databus.upgradeScreen.visible) return;
     if (databus.player.membrane <= 0) return;
     const t = e.touches[0];
@@ -459,6 +473,51 @@ export default class Main {
       { label: '最长生存', value: formatTime(records.bestTime), isNew: marks.time },
       { label: '最高等级', value: `Lv.${records.bestLevel}`, isNew: marks.level },
       { label: '最多击杀', value: `${records.bestKills}`, isNew: marks.kills },
+    ];
+    bests.forEach((b, i) => {
+      const ry = y + 134 + i * 22;
+      label(ctx, b.label, x + 16, ry, { size: FS.small, color: UI.muted });
+      label(ctx, b.value, x + w - (b.isNew ? 62 : 16), ry, { size: FS.small, bold: true, color: UI.textOnLight, align: 'right' });
+      if (b.isNew) {
+        chip(ctx, x + w - 56, ry - 15, 40, 19, '新纪录', { color: UI.gold, size: FS.tiny });
+      }
+    });
+
+    for (const b of this.gameOverButtons()) button(ctx, [], { ...b, text: b.label });
+  }
+
+  // 通关结算面板：与 drawGameOver 平行的独立胜利态（杀死终极 Boss 噬君触发），不是把死亡面板改个标题。
+  // 几何逐字照抄 drawGameOver，只换标题（金色「通关」）与三行历史最佳（通关次数/最快通关/最长生存）；
+  // 两个按钮复用 gameOverButtons()，绘制与命中判定共用同一份布局
+  drawVictory() {
+    const player = databus.player;
+    ctx.fillStyle = UI.dim;
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    stickerLabel(ctx, '通关', canvasW / 2, canvasH * 0.22, { size: 30, color: UI.gold });
+
+    const w = Math.min(canvasW - 48, 320);
+    const x = (canvasW - w) / 2;
+    const y = Math.round(canvasH * 0.26);
+    const h = 196;
+    sticker(ctx, x, y, w, h, { fill: UI.cream, r: R_CARD });
+
+    // 本局：通关用时做主数字，等级/击杀/宝箱压成三枚药丸（同死亡面板）
+    labelMid(ctx, formatTime(databus.spawner.elapsed), x + w / 2, y + 44, {
+      size: FS.title, bold: true, color: UI.textOnLight,
+    });
+    const chips = [`Lv.${player.level}`, `击杀 ${player.kills}`, `宝箱 ${databus.chestsOpened}`];
+    const cw = (w - 32 - 16) / 3;
+    chips.forEach((text, i) => {
+      chip(ctx, x + 16 + (cw + 8) * i, y + 62, cw, 24, text, { color: UI.panelDeep, textColor: UI.textOnDark, size: FS.tiny });
+    });
+
+    label(ctx, '历史最佳', x + 16, y + 112, { size: FS.small, bold: true, color: UI.textOnLight });
+    const marks = this.lastMarks || {};
+    const bests = [
+      { label: '通关次数', value: `${records.clears}`, isNew: false },
+      { label: '最快通关', value: formatTime(records.bestClearTime), isNew: marks.clear },
+      { label: '最长生存', value: formatTime(records.bestTime), isNew: marks.time },
     ];
     bests.forEach((b, i) => {
       const ry = y + 134 + i * 22;
