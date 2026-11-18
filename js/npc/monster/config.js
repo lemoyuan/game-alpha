@@ -673,9 +673,9 @@ export const CODEX_ORDER = [
   { type: 'boss1', appear: `${BOSS_FIRST_SPAWN_TIME} 秒定时出场` },
   { type: 'boss2', appear: `${BOSS_SECOND_SPAWN_TIME} 秒定时出场` },
   { type: 'boss3', appear: `${BOSS_THIRD_SPAWN_TIME} 秒定时出场` },
-  // ★第 9 行：图鉴行高是按条数算的（home.js drawCodex 的 rh），加行会把每行压扁，
-  //   压到 56 以下那三行文字就会互相啃，改这里要顺手看一眼首页图鉴页
+  // ★加行不再把行压扁：home.js codexLayout 在自然行高跌破 56 时钉 rh=62 改拖动滚动，
+  //   所以这里继续加行只会让矮屏多滚一段，不会啃字；改行高口径去 home.js codexLayout
   { type: 'boss4', appear: `${BOSS_FOURTH_SPAWN_TIME} 秒定时出场 · 一次两只` },
-  // ★第 10 行：rh 会被进一步压到 56 警戒线以下（667px 机型约 rh49），落地时必验首页图鉴不啃字
+  // ★第 10 行：844 机型 rh62 恰好整张放下不滚；667 矮屏自然行高只剩 44 → 钉 62 + 滚动（codexLayout）
   { type: 'boss5', appear: '击败四 Boss 后 · 终极通关' },
 ];

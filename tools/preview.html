@@ -132,6 +132,9 @@
 // wx stub：用浏览器真实 Canvas 跑游戏代码，只为看 UI，不参与打包
 (() => {
   const screen = document.getElementById('game');
+  // ?vh= 模拟矮屏：在模块脚本之前改画布高度 + getWindowInfo，让 codexLayout 走到矮屏滚动分支（默认 844 不变）
+  const VH = Math.max(480, Number(new URLSearchParams(location.search).get('vh')) || 844);
+  screen.height = VH;
   let first = true;
   const handlers = { start: [], move: [], end: [], cancel: [] };
   const toLocal = (e) => {
@@ -151,7 +154,7 @@
   screen.addEventListener('pointerup', (e) => fire('end', e));
   screen.addEventListener('pointercancel', (e) => fire('cancel', e));
 
-  const info = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 47, bottom: 820 }, pixelRatio: 2 });
+  const info = () => ({ windowWidth: 390, windowHeight: VH, safeArea: { top: 47, bottom: VH - 24 }, pixelRatio: 2 });
   // 页面 hidden 时浏览器会冻结 rAF，循环会静默停摆（截图就一直停在上一帧）
   // 所以每帧同时挂 rAF 和 setTimeout，谁先到跑谁，另一个用 done 标记作废
   const realRaf = globalThis.requestAnimationFrame.bind(globalThis);

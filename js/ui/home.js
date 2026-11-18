@@ -10,6 +10,21 @@ import {
 
 const PAD = 14; // 页面左右安全边距，所有面板宽度都从这里推算
 
+// 图鉴列表行高/滚动的唯一出口：draw 与触摸判定都从这里取，两处的数字永远对得上（同 pause.js layout 的理由）。
+// ★矮屏不再把行压扁：自然行高跌破 56（三行文字开始互啃的警戒线）就钉回 62 并改为拖动滚动；
+//   自然行高 ≥56 的屏逐像素沿用旧公式、不滚，844 机型与从前完全一致。
+const CODEX_RH_MIN = 56;    // 行高警戒线：低于它三行基线（rh-44/-28/-12）会互相啃
+const CODEX_RH_SCROLL = 62; // 触发滚动后钉的行高：与 844 机型同一档，矮屏高屏读起来一样
+const CODEX_DRAG_SLOP = 8;  // 手指先走满这么多像素才算拖动（同 pause.js）：之内仍算「点一下」
+export function codexLayout(canvasH, start, n) {
+  const natural = Math.min(66, Math.floor((canvasH - start - 24) / n) - 8);
+  const scrollable = natural < CODEX_RH_MIN;
+  const rh = scrollable ? CODEX_RH_SCROLL : natural;
+  const contentH = n * (rh + 10) - 10;
+  const viewH = canvasH - 16 - start; // 底边留 16：844 上 710 的内容恰好放得下，不产生假滚动
+  return { rh, scrollable, contentH, viewH, scrollMax: Math.max(0, contentH - viewH) };
+}
+
 // 首页：标题 + 开始游戏 + 设置 / 怪物图鉴 / 游戏记录 四个页面（databus.screen === 'home' 时接管触摸）
 // 视觉一律走 ui/theme.js 的「厚描边卡通」图元，本文件不出现裸色值
 export default class HomeScreen {
@@ -18,6 +33,9 @@ export default class HomeScreen {
     this.codexType = null; // codexDetail 当前查看的怪物 type
     this.tapAreas = []; // 每帧绘制时重建的可点击区域
     this.tapFx = null; // 最近一次点中的按钮矩形 + 时间戳，画按压/回弹反馈用
+    this.codexScroll = 0; // 图鉴列表滚过多少像素（只在矮屏可滚时有意义，goto('codex') 归零）
+    this.codexDrag = null; // 正在拖图鉴的那根手指：{ touchId, y0, scroll0, moved }
+    this._codexTap = null; // 可滚图鉴上「按下但还没判定是拖还是点」的那一下坐标
     this._onStart = null;
   }
 
@@ -26,8 +44,56 @@ export default class HomeScreen {
     wx.onTouchStart((e) => {
       if (!databus || databus.screen !== 'home') return;
       const t = e.touches[0];
+      // 矮屏图鉴可滚：按下先不结算点击，登记「可能要拖」，松手没走满 SLOP 才当作点一下（同 pause.js）。
+      // 不可滚的屏走原来的立即点击，844 机型手感逐字不变
+      if (this.page === 'codex' && this.codexLayoutNow().scrollMax > 0) {
+        this.codexDrag = { touchId: t.identifier, y0: t.clientY, scroll0: this.codexScroll, moved: false };
+        this._codexTap = { x: t.clientX, y: t.clientY };
+        return;
+      }
       this.handleTap(t.clientX, t.clientY);
     });
+    wx.onTouchMove((e) => {
+      const d = this.codexDrag;
+      if (!d || this.page !== 'codex') return;
+      for (const t of e.touches) {
+        if (t.identifier !== d.touchId) continue;
+        const dy = t.clientY - d.y0;
+        if (!d.moved && Math.abs(dy) < CODEX_DRAG_SLOP) return;
+        d.moved = true;
+        // 绝对定位而不是累加增量：手指往上走 100 像素就是滚过 100 像素（同 pause.js 的理由）
+        this.codexScroll = this.clampCodexScroll(d.scroll0 - dy);
+        return;
+      }
+      this.codexDrag = null; // 这根手指已经从 touches 里消失：这次拖动作废
+    });
+    const end = (e) => {
+      const d = this.codexDrag;
+      if (!d) return;
+      for (const t of e.touches || []) {
+        if (t.identifier === d.touchId) return; // 这根还按着，抬起来的是另一根手指
+      }
+      this.codexDrag = null;
+      const tap = this._codexTap;
+      this._codexTap = null;
+      if (!d.moved && tap) this.handleTap(tap.x, tap.y); // 没走满 SLOP = 就是点一下
+    };
+    wx.onTouchEnd(end);
+    wx.onTouchCancel(end);
+  }
+
+  // 图鉴页内容起始 y：与 header() 的返回值同一条算式，触摸判定不用等绘制就能拿到布局
+  codexStart() {
+    return 16 + safeTop + 54;
+  }
+
+  codexLayoutNow() {
+    return codexLayout(canvasH, this.codexStart(), CODEX_ORDER.length);
+  }
+
+  // 滚动位置唯一的夹取口：draw 与 onTouchMove 都从这里过，两处的读数才对得上（同 pause.js clampScroll）
+  clampCodexScroll(v) {
+    return Math.max(0, Math.min(v, this.codexLayoutNow().scrollMax));
   }
 
   handleTap(x, y) {
@@ -47,6 +113,10 @@ export default class HomeScreen {
   goto(page) {
     this.page = page;
     this.tapFx = null; // 回弹环锚在旧页按钮矩形上，切页后留着会飘在空白处
+    this.codexDrag = null;
+    this._codexTap = null;
+    // 每次进图鉴都从第一条开始：留着上次的滚动位置，玩家会以为上面从来没有过东西（同 pause.js show()）
+    if (page === 'codex') this.codexScroll = 0;
   }
 
   openCodex(type) {
@@ -212,9 +282,18 @@ export default class HomeScreen {
     const w = Math.min(canvasW - PAD * 2, 360);
     const x = (canvasW - w) / 2;
     const n = CODEX_ORDER.length;
-    const rh = Math.min(66, Math.floor((canvasH - start - 24) / n) - 8);
+    const L = codexLayout(canvasH, start, n);
+    const rh = L.rh;
+    // 夹在这里：行数和屏高都会变（以后加行/旋转），不能只信 touchmove 那次夹取（同 pause.js）
+    this.codexScroll = this.clampCodexScroll(this.codexScroll);
+    // 只裁内容区：页头/返回钮留在裁剪外，滚动的行不会盖到标题上（同 pause.js 那道 clip）
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, start, canvasW, L.viewH);
+    ctx.clip();
     CODEX_ORDER.forEach((entry, i) => {
-      const y = start + i * (rh + 10);
+      const y = start + i * (rh + 10) - this.codexScroll;
+      if (y + rh < start || y > start + L.viewH) return; // 视口外整行不画也不登记命中
       const config = MONSTER_TYPES[entry.type];
       const unlocked = records.encountered.indexOf(entry.type) !== -1;
       const r = 17;
@@ -229,8 +308,7 @@ export default class HomeScreen {
         return;
       }
       const role = config.boss ? 'Boss' : entry.appear;
-      // ★三行基线按 rh 推而不是写死 22/38/54：rh = min(66, ...) 在小屏上会被行数压下去
-      //   （CODEX_ORDER 到第 9 条时 667 高的机型只剩 55），写死的话第三行正好顶在贴纸底边上。
+      // ★三行基线按 rh 推而不是写死 22/38/54：rh 在矮屏会被行数压下去（现在压到 56 就改滚动，见 codexLayout）。
       //   rh-44 / rh-28 / rh-12 在 rh=66 时逐像素等于原来那三个数，只是给矮行留了退路
       label(ctx, `${config.name}（${role}）`, tx, y + rh - 44, { size: FS.body, bold: true, color: UI.textOnLight });
       label(ctx, config.group, tx, y + rh - 28, { size: FS.tiny, color: UI.blue });
@@ -244,6 +322,23 @@ export default class HomeScreen {
       icon(ctx, 'arrowRight', x + w - 20, cy, 14, { color: UI.textOnLight });
       this.tapAreas.push({ x, y, w, h: rh, action: () => this.openCodex(entry.type) });
     });
+    ctx.restore();
+    // 滚动条画在 clip 之外（同 pause.js）：3px 细条，本文件不裸色值 → 走 UI.cream + globalAlpha。
+    // ★这里必须用奶白而不是 pause.js 那根墨条：pause 的条画在奶油卡片【内】，墨色才看得见；
+    //   图鉴这根条在行贴纸【外】的深色页底上，墨色（#1C2843）压上去等于没画，只有浅色才读得出
+    if (L.scrollMax > 0) {
+      const barX = x + w + 5;
+      const barH = L.viewH;
+      ctx.save();
+      ctx.fillStyle = UI.cream;
+      ctx.globalAlpha = 0.16;
+      ctx.fillRect(barX, start, 3, barH);
+      const thumbH = Math.max(30, barH * L.viewH / L.contentH);
+      const thumbY = start + (barH - thumbH) * (this.codexScroll / L.scrollMax);
+      ctx.globalAlpha = 0.6;
+      ctx.fillRect(barX, thumbY, 3, thumbH);
+      ctx.restore();
+    }
   }
 
   drawCodexDetail(ctx) {

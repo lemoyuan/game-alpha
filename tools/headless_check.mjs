@@ -267,6 +267,7 @@ const PHNEG_ARMS = {
   blink: { file: ['npc', 'monster', 'bossPhage.js'], re: /this\.x = this\.destX;/, to: 'this.x = this.destX + 40;', expect: '不等于预警环心' },
   slasharc: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(Math\.abs\(dA\) <= this\.slashArc \/ 2\) player\.takeDamage/, to: 'if (true) player.takeDamage', expect: '半径内但弧外也挨刀' },
   slashradius: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(dx \* dx \+ dy \* dy > r \* r\) return;/, to: 'if (false) return;', expect: '弧内但半径外也挨刀' },
+  codexrh: { file: ['ui', 'home.js'], re: /const scrollable = natural < CODEX_RH_MIN;/, to: 'const scrollable = false;', expect: '图鉴矮屏行高' },
 };
 const PHNEG = process.env.PHNEG;
 if (PHNEG !== undefined) {
@@ -2347,6 +2348,23 @@ function phageStub(px, py) {
   if (mk(PHX + PHC.slashRadius + 40, PHY) !== 0) errors.push('弧内但半径外也挨刀：slashRadius 那道距离门没了，站多远都挨');
 }
 console.log(`phage mechanism (pure): 铺路 warn0/tint${PHC.trailTint}/走 applyPoison 不吃无敌帧 | 导弹 ${PHC.missileCount} 枚 转向帽 ${PHC.missileTurn}rad/s 寿命 ${PHC.missileLife}ms 末段淡出 | 落点环 ${PHC.teleportWarn}ms 瞬移落环心 | 前摇 ${PHC.slashWarn}ms 刀砍 ${PHC.slashDamage} 半径+弧双门`);
+// —— 图鉴列表矮屏滚动纯检：行高/滚动上界只有一份算式（home.js codexLayout），这里钉两端 ——
+// ★高屏必须逐像素沿用旧公式且不滚（844 rh62 / 设备像素高屏 rh66）；矮屏自然行高跌破 56 就钉 62 改滚，
+//   否则第 10 行（噬君）在 667 机型上三行文字互啃。PHNEG=codexrh 摘掉钳制看这里报不报红
+const { codexLayout } = await import(fileUrl(path.join(COPY, 'ui', 'home.js')));
+// CODEX_ORDER 已在开跑前从 COPY 导入（见文件头 config 解构），这里直接复用，别重复 import 撞名
+const CN = CODEX_ORDER.length;
+const cxTall = codexLayout(844, 117, CN);
+if (cxTall.rh !== 62 || cxTall.scrollMax !== 0) errors.push(`844 高屏图鉴应沿用旧公式 rh62 且不滚，实得 rh${cxTall.rh}/scrollMax${cxTall.scrollMax}：高屏手感被改坏`);
+const cxShort = codexLayout(667, 117, CN);
+if (cxShort.rh < 56) errors.push(`图鉴矮屏行高 rh${cxShort.rh} 跌破 56 警戒线：三行文字互啃，矮屏必须钉行高改滚动`);
+if (cxShort.scrollMax <= 0) errors.push('667 矮屏图鉴内容超出视口却 scrollMax=0：滚不动，末行永远看不到');
+const cxTiny = codexLayout(600, 70, CN);
+if (cxTiny.rh < 56 || cxTiny.scrollMax <= 0) errors.push(`600 更矮屏图鉴 rh${cxTiny.rh}/scrollMax${cxTiny.scrollMax}：行高或滚动上界写歪`);
+const cxDev = codexLayout(2532, 117, CN);
+if (cxDev.rh !== 66 || cxDev.scrollMax !== 0) errors.push(`设备像素高屏(2532)图鉴应 rh66 不滚，实得 rh${cxDev.rh}/scrollMax${cxDev.scrollMax}`);
+if (!(codexLayout(600, 117, CN).scrollMax > cxShort.scrollMax)) errors.push('屏越矮 scrollMax 应越大：滚动上界没跟着视口走');
+console.log(`codex scroll (pure): 844 rh${cxTall.rh}/滚${cxTall.scrollMax} | 667 rh${cxShort.rh}/滚${cxShort.scrollMax} | 600 rh${cxTiny.rh}/滚${cxTiny.scrollMax} | 2532 rh${cxDev.rh}/滚${cxDev.scrollMax}（n=${CN}）`);
 // 负向臂回头核对：改坏的那一处必须真的把对应的红打出来，否则这条纯检是恒绿摆设（区分度自检）
 if (PHNEG !== undefined && PHNEG_ARMS[PHNEG]) {
   const want = PHNEG_ARMS[PHNEG].expect;
