@@ -1,4 +1,5 @@
 import Sprite from '../base/sprite';
+import { playSfx } from '../base/audio';
 import { CHEST_RADIUS, XP_PICKUP_STEP } from '../consts';
 import { UI, icon } from '../ui/theme';
 import { CHEST_KIND_BY_ID } from './monster/config';
@@ -59,6 +60,7 @@ export default class Chest extends Sprite {
     if (dist < player.radius + this.radius + 4) {
       this.collected = true;
       databus.chestsOpened++;
+      playSfx('chest');
       if (this.kindDef) {
         // Boss 专属匣：效果走注册表，以后加新匣只填 config 表 + 注册一行，不动这个文件
         CHEST_GRANTS[this.kind](databus);

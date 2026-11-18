@@ -14,6 +14,7 @@ import {
 } from './config';
 import { clampToCoast } from '../../arena/coast';
 import { markEncountered } from '../../storage';
+import { playSfx } from '../../base/audio';
 
 // 类型 → Boss 类。映射只能放这里，不能放进 config：boss.js 会 import config，
 // config 反过来 import 类就成环，ES Module 下会解析出 undefined class
@@ -154,6 +155,7 @@ export default class Spawner {
     }
     markEncountered(entry.type); // 遭遇即解锁图鉴，无需击杀；成对也只解锁这一条
     if (databus.hud) databus.hud.showToast(entry.toast, 2500);
+    playSfx('bossSpawn');
   }
 
   spawn(databus, forceType) {

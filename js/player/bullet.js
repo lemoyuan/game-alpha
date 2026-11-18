@@ -1,4 +1,5 @@
 import Sprite from '../base/sprite';
+import { playSfx } from '../base/audio';
 import { UI } from '../ui/theme';
 import { BULLET_SPEED, BULLET_RADIUS, BULLET_COLOR, BULLET_RANGE_BUFFER, PIERCE_DAMAGE_FALLOFF, BURN_HOLD } from '../consts';
 
@@ -64,6 +65,7 @@ export default class Bullet extends Sprite {
             isCrit = true;
           }
           e.takeDamage(dmg, isCrit, databus);
+          playSfx(isCrit ? 'crit' : 'hit'); // 暴击高优先不节流，普通命中节流见 audio.js
           // 燃烧排在直击之后：直击已经打死就不必再往尸体上挂状态（updateBurn 自己有 isDead 门，这里是保持状态干净）。
           // ★穿透弹会把它穿过的每个目标各挂一次燃烧——同一目标有 hitList 去重，这是白送的收益不是漏洞
           if (this.burnDamage > 0 && !e.isDead) {

@@ -104,6 +104,20 @@ const winInfo = () => ({ windowWidth: 390, windowHeight: 844, safeArea: { top: 4
 
 let firstCanvas = true;
 
+// 音频 no-op 桩：headless 不出声，但 audio.js 会真的建节点/调包络，桩必须把整套 WebAudio API 接住，
+// 否则一接音效验收台就崩。参数/节点全是空函数，currentTime 恒 0 仅供调度基准（并发计数走 Date.now）。
+const audioParam = () => ({ value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {}, linearRampToValueAtTime() {} });
+const audioNode = () => ({ connect() {}, disconnect() {}, start() {}, stop() {} });
+const makeFakeAudio = () => ({
+  state: 'running', currentTime: 0, sampleRate: 44100, destination: {},
+  resume() {}, suspend() {},
+  createGain: () => Object.assign(audioNode(), { gain: audioParam() }),
+  createOscillator: () => Object.assign(audioNode(), { type: 'sine', frequency: audioParam() }),
+  createBiquadFilter: () => Object.assign(audioNode(), { type: 'lowpass', frequency: audioParam(), Q: audioParam() }),
+  createBufferSource: () => Object.assign(audioNode(), { buffer: null }),
+  createBuffer: (ch, len) => ({ getChannelData: () => new Float32Array(len) }),
+});
+
 globalThis.wx = {
   // 与真机一致：首次 createCanvas 返回屏幕画布，之后返回离屏画布（地面贴图靠它）
   createCanvas: () => {
@@ -139,6 +153,7 @@ globalThis.wx = {
   setStorageSync: (k, v) => store.set(k, v),
   getStorageSync: (k) => (store.has(k) ? store.get(k) : ''),
   vibrateShort() {},
+  createWebAudioContext: () => makeFakeAudio(),
 };
 
 let rafQueue = [];
@@ -268,6 +283,7 @@ const PHNEG_ARMS = {
   slasharc: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(Math\.abs\(dA\) <= this\.slashArc \/ 2\) player\.takeDamage/, to: 'if (true) player.takeDamage', expect: '半径内但弧外也挨刀' },
   slashradius: { file: ['npc', 'monster', 'bossPhage.js'], re: /if \(dx \* dx \+ dy \* dy > r \* r\) return;/, to: 'if (false) return;', expect: '弧内但半径外也挨刀' },
   codexrh: { file: ['ui', 'home.js'], re: /const scrollable = natural < CODEX_RH_MIN;/, to: 'const scrollable = false;', expect: '图鉴矮屏行高' },
+  sfxgate: { file: ['base', 'audio.js'], re: /if \(!settings\.sound\) return false;/, to: '', expect: '音效开关' },
 };
 const PHNEG = process.env.PHNEG;
 if (PHNEG !== undefined) {
@@ -2365,6 +2381,31 @@ const cxDev = codexLayout(2532, 117, CN);
 if (cxDev.rh !== 66 || cxDev.scrollMax !== 0) errors.push(`设备像素高屏(2532)图鉴应 rh66 不滚，实得 rh${cxDev.rh}/scrollMax${cxDev.scrollMax}`);
 if (!(codexLayout(600, 117, CN).scrollMax > cxShort.scrollMax)) errors.push('屏越矮 scrollMax 应越大：滚动上界没跟着视口走');
 console.log(`codex scroll (pure): 844 rh${cxTall.rh}/滚${cxTall.scrollMax} | 667 rh${cxShort.rh}/滚${cxShort.scrollMax} | 600 rh${cxTiny.rh}/滚${cxTiny.scrollMax} | 2532 rh${cxDev.rh}/滚${cxDev.scrollMax}（n=${CN}）`);
+// —— 音效纯检：开关两端 + 命中节流 + 暴击高优先不节流。直接驱动 audio.js，不经过主循环 ——
+// ★settings 是 storage 的实时共享对象，这里临时改 sound 再还原，不影响实场那一遍
+const { playSfx } = await import(fileUrl(path.join(COPY, 'base', 'audio.js')));
+const { settings: sfxSettings } = await import(fileUrl(path.join(COPY, 'storage.js')));
+const soundBefore = sfxSettings.sound;
+// ★先把 stub 时钟拨过 sim 尾帧再探：节流表 last[] 和并发账 voices 记的都是 sim 最后一帧的 Date.now，
+//   不拨的话「同帧两次 hit」的第一次会被尾帧余温压掉，而余温新鲜与否随臂的 RNG 变（负向臂实测假红过）。
+//   探完还原：下游纯检的时钟基准一个像素不动；留在 last[] 里的未来时间戳只影响音效自己，后面没有音效断言
+const sfxNowBefore = now;
+now += 2000;
+sfxSettings.sound = false;
+const sfxOff = playSfx('ui');
+sfxSettings.sound = true;
+const sfxOn = playSfx('ui', { force: true });
+const sfxHit1 = playSfx('hit');
+const sfxHit2 = playSfx('hit'); // 同一 Date.now：应被 80ms 节流压掉
+const sfxCrit1 = playSfx('crit');
+const sfxCrit2 = playSfx('crit'); // 高优先：同帧也应都发声
+now = sfxNowBefore;
+sfxSettings.sound = soundBefore;
+if (sfxOff !== false) errors.push('音效开关 sound=false 仍发声：settings.sound 那道门没接上');
+if (sfxOn !== true) errors.push('音效开关 sound=true 却不发声：合成或 wx.createWebAudioContext 桩断了');
+if (!(sfxHit1 === true && sfxHit2 === false)) errors.push(`命中节流失效：同帧两次 hit 应一真一假，实得 ${sfxHit1}/${sfxHit2}`);
+if (!(sfxCrit1 === true && sfxCrit2 === true)) errors.push('暴击高优先被节流：同帧两次 crit 应都发声');
+console.log(`sfx (pure): 关=${sfxOff} 开=${sfxOn} | 命中同帧 ${sfxHit1}/${sfxHit2}（节流） | 暴击同帧 ${sfxCrit1}/${sfxCrit2}（高优先不节流）`);
 // 负向臂回头核对：改坏的那一处必须真的把对应的红打出来，否则这条纯检是恒绿摆设（区分度自检）
 if (PHNEG !== undefined && PHNEG_ARMS[PHNEG]) {
   const want = PHNEG_ARMS[PHNEG].expect;

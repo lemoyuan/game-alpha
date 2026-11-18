@@ -15,6 +15,7 @@ import {
   ARENA_W, ARENA_H,
 } from '../consts';
 import { settings } from '../storage';
+import { playSfx } from '../base/audio';
 import { UI } from '../ui/theme';
 import { clampToCoast } from '../arena/coast';
 
@@ -161,6 +162,7 @@ export default class Player extends Sprite {
 
   shoot(databus, dx, dy) {
     this.lastAttack = Date.now();
+    playSfx('shoot'); // 一次开火一声（多发子弹只算一次），节流见 audio.js
     const baseAngle = Math.atan2(dy, dx);
     const mx = this.x + Math.cos(baseAngle) * PLAYER_MUZZLE_LEN;
     const my = this.y + Math.sin(baseAngle) * PLAYER_MUZZLE_LEN;
@@ -212,6 +214,7 @@ export default class Player extends Sprite {
     // ★膜生效期间挨的每一下仍然掉血（membraneDamage 有 Math.max(1,…) 兜底），所以海火核心的十字照旧一根根放得出来；
     //   而上面那道护盾 return 在这行之前 —— 膜不消耗护盾层，被盾挡掉的那一下也照旧不送十字
     if (settings.vibrate) wx.vibrateShort({ type: 'light' });
+    playSfx('hurt');
     this.fireLaserCross(databus);
   }
 
@@ -274,6 +277,7 @@ export default class Player extends Sprite {
     const dmg = Math.max(1, amount - this.defence);
     this.hp -= this.membraneOn() ? membraneDamage(dmg) : dmg;
     if (settings.vibrate) wx.vibrateShort({ type: 'heavy' });
+    playSfx('blast');
   }
 
   // 回血：唯一的一处血包入口（血块，见 npc/bloodclot.js；嗜血，见下面 onKill），别让掉落方直接改 this.hp。
@@ -341,6 +345,7 @@ export default class Player extends Sprite {
     if (this.xp >= needed) {
       this.xp -= needed;
       this.level++;
+      playSfx('levelup');
       this.applyLevelBonus(databus); // held 由它自己声明为 true：这笔成长属于紧接着打开的那扇面板
       databus.isPaused = true;
       databus.upgradeScreen.show(databus);

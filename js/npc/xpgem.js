@@ -1,4 +1,5 @@
 import Sprite from '../base/sprite';
+import { playSfx } from '../base/audio';
 
 export default class XpGem extends Sprite {
   constructor() {
@@ -31,6 +32,7 @@ export default class XpGem extends Sprite {
     }
     if (dist < player.radius + this.radius) {
       this.collected = true;
+      playSfx('xp'); // 连拾升调由 audio.js 内部维护
       player.addXp(this.value, databus);
     }
   }

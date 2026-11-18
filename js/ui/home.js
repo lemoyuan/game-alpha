@@ -3,6 +3,7 @@ import { safeTop } from '../render';
 import { MONSTER_TYPES, CODEX_ORDER } from '../npc/monster/config';
 import { loadImage } from '../base/sprite';
 import { settings, saveSettings, records, formatTime } from '../storage';
+import { playSfx } from '../base/audio';
 import {
   UI, FS, R_CARD, R_BTN,
   sticker, button, iconButton, icon, label, stickerLabel, chip, badge, toggle, dish, wrapLines, roundRect,
@@ -101,6 +102,7 @@ export default class HomeScreen {
       const a = this.tapAreas[i];
       if (x >= a.x && x <= a.x + a.w && y >= a.y && y <= a.y + a.h) {
         if (settings.vibrate) wx.vibrateShort({ type: 'light' });
+        playSfx('ui');
         // 动作延 80ms 再跑：立即执行的话页面马上切走，手指看不到按压反馈
         this.tapFx = { x: a.x, y: a.y, w: a.w, h: a.h, t: Date.now() };
         const action = a.action;
@@ -234,7 +236,7 @@ export default class HomeScreen {
     const rows = [
       { label: '伤害飘字', desc: '命中时显示伤害数字', key: 'damageText', enabled: true, icon: 'bullet' },
       { label: '受击振动', desc: '受伤与按钮反馈时短振动', key: 'vibrate', enabled: true, icon: 'phone' },
-      { label: '音效', desc: '待接入音频系统', key: 'sound', enabled: false, icon: 'note' },
+      { label: '音效', desc: '命中/击杀/拾取等反馈音', key: 'sound', enabled: true, icon: 'note' },
       { label: '背景音乐', desc: '待接入音频系统', key: 'bgm', enabled: false, icon: 'headphones' },
     ];
     const rh = 62;

@@ -1,4 +1,5 @@
 import { canvasW, canvasH, UPGRADES } from '../consts';
+import { playSfx } from '../base/audio';
 import { UI, FS, R_CARD, sticker, badge, chip, label, labelMid, ribbon, stickerLabel } from './theme';
 
 const SELECT_ANIM_MS = 450;  // 选中卡片的放大强调动画时长（毫秒）
@@ -55,6 +56,7 @@ export default class UpgradeScreen {
   pick(index) {
     const opt = this.options[index];
     if (!opt) return;
+    playSfx('pick');
     const player = this._databus.player;
     // 乘算卡（移速 +15%）先算出目标值再折成增量交给 applyBoost：左栏 +x 飘字由它统一触发，
     // 报的是这一张卡真加了多少（170 基数上读作 +25.5），与面板那行的像素/秒同单位

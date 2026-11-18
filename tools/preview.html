@@ -180,6 +180,8 @@
     setStorageSync: (k, v) => localStorage.setItem('ga:' + k, JSON.stringify(v)),
     getStorageSync: (k) => { try { return JSON.parse(localStorage.getItem('ga:' + k)); } catch (e) { return ''; } },
     vibrateShort: () => {},
+    // 音频：预览台用浏览器原生 AudioContext，接进游戏后这里真能听见（首次触摸解锁）
+    createWebAudioContext: () => new (window.AudioContext || window.webkitAudioContext)(),
   };
 })();
 </script>

@@ -20,6 +20,7 @@ import {
 import { clampToCoast } from './arena/coast';
 import { canvasW, canvasH, ABYSS } from './consts';
 import { records, formatTime, submitRun } from './storage';
+import { playSfx, unlockAudio } from './base/audio';
 
 const databus = new DataBus();
 
@@ -48,6 +49,8 @@ export default class Main {
 
     wx.onTouchStart((e) => this.handleGameOverTap(e));
     wx.onTouchStart((e) => this.handleSkillTap(e));
+    // 首次手势解锁音频：浏览器/微信 autoplay 策略要求用户手势后才出声，全局触点兜底（首页/局内都覆盖）
+    wx.onTouchStart(() => unlockAudio());
 
     this.lastTime = Date.now();
     this.loop();
@@ -153,6 +156,8 @@ export default class Main {
           this.dropBossLoot(e);
           // 通关胜利态的唯一置位口：只有终极 Boss 噬君死亡才通关（boss1~4 死亡不触发）
           if (e.type === 'boss5') databus.isVictory = true;
+          // 噬君用通关铃作签名，其余 Boss 用破裂音，二者不叠以免糊
+          playSfx(e.type === 'boss5' ? 'victory' : 'bossDeath');
         } else {
           const gem = databus.pool.getItemByClass('xpgem', XpGem);
           gem.init(e.x, e.y, e.xpValue);
@@ -178,12 +183,14 @@ export default class Main {
         //   燃烧跳血、Boss、宝箱怪全汇到这一行；燃烧在 databus.update 里就把 isDead 置了，但移除仍由
         //   这条倒序循环完成，所以同一帧只触发一次。上面的 absorbed 已 continue，被膜王吃回的菌群不算击杀
         player.onKill(databus);
+        playSfx('kill'); // 密集击杀节流见 audio.js
         databus.removeEnemy(i);
         continue;
       }
       if (player.isCollideWith(e)) {
         player.takeDamage(e.damage, now, databus); // 第三个参数是海火核心的触发口，见 Player.fireLaserCross
         if (player.hp <= 0 && !databus.isVictory) {
+          if (!databus.isGameOver) playSfx('gameover');
           databus.isGameOver = true;
         }
       }
@@ -259,6 +266,7 @@ export default class Main {
 
     // 覆盖所有伤害来源（接触/子弹）的死亡判定。★胜利帧不置死亡：通关与死亡互斥，同一局只走一条结算
     if (player.hp <= 0 && !databus.isVictory) {
+      if (!databus.isGameOver) playSfx('gameover');
       databus.isGameOver = true;
     }
 
@@ -440,7 +448,7 @@ export default class Main {
     const b = skillButtonRect();
     if (t.clientX >= b.x && t.clientX <= b.x + b.w &&
         t.clientY >= b.y && t.clientY <= b.y + b.h) {
-      databus.player.activateMembrane();
+      if (databus.player.activateMembrane()) playSfx('membrane'); // 空按（返回 false）不发声
     }
   }
 
